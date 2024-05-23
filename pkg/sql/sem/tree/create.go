@@ -1465,6 +1465,18 @@ func (o *StorageParams) Format(ctx *FmtCtx) {
 	}
 }
 
+// HasDuplicateParam returns an error if the other parameter already exists in
+// StorageParams.  This is meant as a pre-check before adding a new parameter in.
+func (o *StorageParams) HasDuplicateParam(other StorageParam) error {
+	for _, param := range *o {
+		if param.Key == other.Key {
+			return pgerror.Newf(pgcode.InvalidSchemaDefinition,
+				"storage parameter %q specified more than once", param.Key)
+		}
+	}
+	return nil
+}
+
 // GetVal returns corresponding value if a key exists, otherwise nil is
 // returned.
 func (o *StorageParams) GetVal(key string) Expr {

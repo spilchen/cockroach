@@ -1068,3 +1068,14 @@ CREATE TABLE public.t_115352 (
 )
 
 subtest end
+
+# Validate that you cannot have duplicate storage parameters for the index
+subtest 90454
+
+statement error .*storage parameter "bucket_count" specified more than once
+CREATE TABLE t_bad_param (
+  a INT,
+  INDEX (a) USING HASH WITH (bucket_count=10, fillfactor=20, bucket_count=12)
+);
+
+subtest end

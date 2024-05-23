@@ -448,3 +448,12 @@ CREATE INDEX ON v (b);
 # schema changer.
 statement ok
 CREATE INDEX ON v ((b>0));
+
+# Validate that you cannot have duplicate storage parameters for the index
+subtest 90454
+
+statement ok
+CREATE TABLE t_90454 (a INT);
+
+statement error .*storage parameter "fillfactor" specified more than once
+CREATE INDEX ON t_90454 (a) WITH (fillfactor=20, fillfactor=30);

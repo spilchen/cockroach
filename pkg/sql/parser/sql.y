@@ -396,8 +396,8 @@ func (u *sqlSymUnion) colQuals() []tree.NamedColumnQualification {
 func (u *sqlSymUnion) storageParam() tree.StorageParam {
     return u.val.(tree.StorageParam)
 }
-func (u *sqlSymUnion) storageParams() []tree.StorageParam {
-    if params, ok := u.val.([]tree.StorageParam); ok {
+func (u *sqlSymUnion) storageParams() tree.StorageParams {
+    if params, ok := u.val.(tree.StorageParams); ok {
         return params
     }
     return nil
@@ -1367,7 +1367,7 @@ func (u *sqlSymUnion) showFingerprintOptions() *tree.ShowFingerprintOptions {
 %type <str> storage_parameter_key
 %type <tree.NameList> storage_parameter_key_list
 %type <tree.StorageParam> storage_parameter
-%type <[]tree.StorageParam> storage_parameter_list opt_table_with opt_with_storage_parameter_list
+%type <tree.StorageParams> storage_parameter_list opt_table_with opt_with_storage_parameter_list
 
 %type <*tree.Select> select_no_parens
 %type <tree.SelectStatement> select_clause select_with_parens simple_select values_clause table_clause simple_select_clause
@@ -9898,11 +9898,16 @@ storage_parameter:
 storage_parameter_list:
   storage_parameter
   {
-    $$.val = []tree.StorageParam{$1.storageParam()}
+    $$.val = tree.StorageParams{$1.storageParam()}
   }
 |  storage_parameter_list ',' storage_parameter
   {
-    $$.val = append($1.storageParams(), $3.storageParam())
+    a := $1.storageParams()
+    b := $3.storageParam()
+    if err := a.HasDuplicateParam(b); err != nil {
+      return setErr(sqllex, err)
+    }
+    $$.val = append(a, b)
   }
 
 create_table_as_stmt:
