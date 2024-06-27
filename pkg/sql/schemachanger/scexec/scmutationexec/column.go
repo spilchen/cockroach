@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/tabledesc"
+	"github.com/cockroachdb/cockroach/pkg/sql/schemachange"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scop"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
@@ -49,13 +50,18 @@ func (i *immediateVisitor) MakeAbsentColumnDeleteOnly(
 	return nil
 }
 
-func (i *immediateVisitor) SetAddedColumnType(
-	ctx context.Context, op scop.SetAddedColumnType,
-) error {
+func (i *immediateVisitor) UpsertColumnType(ctx context.Context, op scop.UpsertColumnType) error {
+	// If the sequence number is positive, it means we are modifying an existing
+	// column by changing its type.
+	if op.ColumnType.SeqNum > 0 {
+		return i.updatingExistingColumnType(ctx, op)
+	}
+
 	tbl, err := i.checkOutTable(ctx, op.ColumnType.TableID)
 	if err != nil {
 		return err
 	}
+
 	mut, err := FindMutation(tbl, MakeColumnIDMutationSelector(op.ColumnType.ColumnID))
 	if err != nil {
 		return err
@@ -356,4 +362,34 @@ func (i *immediateVisitor) RemoveColumnOnUpdateExpression(
 	d := col.ColumnDesc()
 	d.OnUpdateExpr = nil
 	return updateColumnExprSequenceUsage(d)
+}
+
+// updateExistingColumnType will queue a mutation to change the data type of an
+// existing column.
+func (i *immediateVisitor) updatingExistingColumnType(
+	ctx context.Context, op scop.UpsertColumnType,
+) error {
+	tbl, err := i.checkOutTable(ctx, op.ColumnType.TableID)
+	if err != nil {
+		return err
+	}
+
+	col, err := catalog.MustFindColumnByID(tbl, op.ColumnType.ColumnID)
+	if err != nil {
+		return errors.AssertionFailedf("column %d not found in table %q (%d)",
+			op.ColumnType.ColumnID, tbl.GetName(), tbl.GetID())
+	}
+	kind, err := schemachange.ClassifyConversion(ctx, col.GetType(), op.ColumnType.Type)
+	if err != nil {
+		return err
+	}
+	switch kind {
+	case schemachange.ColumnConversionTrivial:
+		// For trivial conversions, we can just update the column type. This is
+		// allowed because there is no backfill for this type conversion.
+		col.ColumnDesc().Type = op.ColumnType.Type
+		return nil
+	}
+	return errors.AssertionFailedf("unsupported column type change %v -> %v (%v)",
+		col.GetType(), op.ColumnType.Type, kind)
 }

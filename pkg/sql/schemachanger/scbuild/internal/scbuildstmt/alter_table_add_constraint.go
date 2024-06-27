@@ -768,6 +768,14 @@ func retrieveColumnDefaultExpressionElem(
 	return ret
 }
 
+// SPILLY - why in this file?
+func retrieveColumnTypeElem(
+	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
+) *scpb.ColumnType {
+	_, _, ret := scpb.FindColumnType(b.QueryByID(tableID).Filter(hasColumnIDAttrFilter(columnID)))
+	return ret
+}
+
 func retrieveColumnOnUpdateExpressionElem(
 	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
 ) (columnOnUpdateExpression *scpb.ColumnOnUpdateExpression) {
