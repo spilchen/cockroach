@@ -63,8 +63,6 @@ func AlterColumnType(
 	cmds tree.AlterTableCmds,
 	tn *tree.TableName,
 ) error {
-	// SPILLY BEGIN
-	// - we need to duplicate these checks for DSC using the elements states
 	for _, tableRef := range tableDesc.DependedOnBy {
 		found := false
 		for _, colID := range tableRef.ColumnIDs {
@@ -84,7 +82,6 @@ func AlterColumnType(
 	if err := schemaexpr.ValidateComputedColumnExpressionDoesNotDependOnColumn(tableDesc, col); err != nil {
 		return err
 	}
-	// SPILLY END
 
 	typ, err := tree.ResolveType(ctx, t.ToType, params.p.semaCtx.GetTypeResolver())
 	if err != nil {

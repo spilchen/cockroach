@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/cast"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 )
 
@@ -40,10 +41,31 @@ func alterTableAlterColumnType(
 	// column.
 	newColType.SeqNum++
 
-	// Check for dependent columns.
-	//depCols := retrieveDependentColumnElem(b, tbl.TableID, colID)
-	// SPILLY - need to go through View_Reference
-	// SPILLY - and FunctionBody_TableReference
+	// Check for elements depending on the column we are altering.
+	walkColumnDependencies(b, col, "alter", "column type", func(e scpb.Element) {
+		switch e := e.(type) {
+		case *scpb.Column:
+			if e.TableID == col.TableID && e.ColumnID == col.ColumnID {
+				return
+			}
+			elts := b.QueryByID(e.TableID).Filter(hasColumnIDAttrFilter(e.ColumnID))
+			_, _, computedColName := scpb.FindColumnName(elts.Filter(publicTargetFilter))
+			panic(sqlerrors.NewColumnReferencedByComputedColumnError(t.Column.String(), computedColName.Name))
+		case *scpb.View:
+			_, _, ns := scpb.FindNamespace(b.QueryByID(col.TableID))
+			_, _, nsDep := scpb.FindNamespace(b.QueryByID(e.ViewID))
+			if nsDep.DatabaseID != ns.DatabaseID || nsDep.SchemaID != ns.SchemaID {
+				panic(sqlerrors.NewDependentBlocksOpError("alter", "column type", t.Column.String(), "view", qualifiedName(b, e.ViewID)))
+			}
+			panic(sqlerrors.NewDependentBlocksOpError("alter", "column type", t.Column.String(), "view", nsDep.Name))
+		case *scpb.FunctionBody:
+			_, _, fnName := scpb.FindFunctionName(b.QueryByID(e.FunctionID))
+			panic(sqlerrors.NewDependentObjectErrorf(
+				"cannot alter data type of column %q because function %q depends on it",
+				t.Column.String(), fnName.Name),
+			)
+		}
+	})
 
 	err := schemachange.ValidateAlterColumnTypeChecks(
 		b, t, b.ClusterSettings().Version, newColType.Type,
@@ -54,7 +76,6 @@ func alterTableAlterColumnType(
 
 	validateAutomaticCastForNewType(b, tbl.TableID, colID, t.Column.String(),
 		oldColType.Type, newColType.Type)
-	// SPILLY - do we need to possible decrement seqNum for an undo or transition to delete?
 
 	// We currently only support trivial conversions. Fallback to legacy schema
 	// changer if not trivial.
