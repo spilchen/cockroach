@@ -326,6 +326,7 @@ func walkDropColumnDependencies(b BuildCtx, col *scpb.Column, fn func(e scpb.Ele
 	// TODO (xiang): Remove this restriction when #96924 is fixed.
 	panicIfColReferencedInPredicate(b, col, tblElts)
 
+	// SPILLY - here is good that walks all of the deps
 	tblElts.
 		Filter(referencesColumnIDFilter(col.ColumnID)).
 		ForEach(func(_ scpb.Status, _ scpb.TargetStatus, e scpb.Element) {

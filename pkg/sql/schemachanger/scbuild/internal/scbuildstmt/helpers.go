@@ -1629,3 +1629,20 @@ func MaybeCreateOrResolveTemporarySchema(b BuildCtx) ElementResultSet {
 	})
 	return b.QueryByID(descID)
 }
+
+func retrieveColumnTypeElem(
+	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
+) *scpb.ColumnType {
+	_, _, ret := scpb.FindColumnType(b.QueryByID(tableID).Filter(hasColumnIDAttrFilter(columnID)))
+	return ret
+}
+
+func retrieveElemsDependentOnColumn(
+	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
+) ElementResultSet {
+	tblElts := b.QueryByID(tableID).Filter(orFilter(publicTargetFilter, transientTargetFilter))
+	// SPILLY - see decomp.go to see how these get built up.
+	// SPILLY need to walk through the View_Reference
+	// SPILLY what other references do I need to walk? Function?
+	return b.QueryByID(tableID).Filter(hasColumnIDAttrFilter(columnID))
+}

@@ -43,6 +43,7 @@ func alterTableAlterColumnType(
 	// Check for dependent columns.
 	//depCols := retrieveDependentColumnElem(b, tbl.TableID, colID)
 	// SPILLY - need to go through View_Reference
+	// SPILLY - and FunctionBody_TableReference
 
 	err := schemachange.ValidateAlterColumnTypeChecks(
 		b, t, b.ClusterSettings().Version, newColType.Type,
