@@ -253,15 +253,16 @@ func ValidateAlterColumnTypeChecks(
 	ctx context.Context,
 	t *tree.AlterTableAlterColumnType,
 	version clusterversion.Handle,
-	typ *types.T,
+	origTyp *types.T,
 	isGeneratedAsIdentity bool,
-) error {
+) (*types.T, error) {
+	typ := origTyp
 	// Special handling for STRING COLLATE xy to verify that we recognize the language.
 	if t.Collation != "" {
 		if types.IsStringType(typ) {
 			typ = types.MakeCollatedString(typ, t.Collation)
 		} else {
-			return pgerror.New(pgcode.Syntax, "COLLATE can only be used with string types")
+			return typ, pgerror.New(pgcode.Syntax, "COLLATE can only be used with string types")
 		}
 	}
 
@@ -269,9 +270,9 @@ func ValidateAlterColumnTypeChecks(
 	// a non-integer type.
 	if isGeneratedAsIdentity {
 		if typ.InternalType.Family != types.IntFamily {
-			return sqlerrors.NewIdentityColumnTypeError()
+			return typ, sqlerrors.NewIdentityColumnTypeError()
 		}
 	}
 
-	return colinfo.ValidateColumnDefType(ctx, version, typ)
+	return typ, colinfo.ValidateColumnDefType(ctx, version, typ)
 }

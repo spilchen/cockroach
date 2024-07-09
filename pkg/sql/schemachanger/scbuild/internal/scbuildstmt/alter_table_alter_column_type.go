@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
+	"github.com/cockroachdb/errors"
 )
 
 func alterTableAlterColumnType(
@@ -42,7 +43,9 @@ func alterTableAlterColumnType(
 	newColType.SeqNum++
 
 	// Check for elements depending on the column we are altering.
-	walkColumnDependencies(b, col, "alter", "column type", func(e scpb.Element) {
+	op := "alter type of"
+	objType := "column"
+	walkColumnDependencies(b, col, op, objType, func(e scpb.Element) {
 		switch e := e.(type) {
 		case *scpb.Column:
 			if e.TableID == col.TableID && e.ColumnID == col.ColumnID {
@@ -50,24 +53,22 @@ func alterTableAlterColumnType(
 			}
 			elts := b.QueryByID(e.TableID).Filter(hasColumnIDAttrFilter(e.ColumnID))
 			_, _, computedColName := scpb.FindColumnName(elts.Filter(publicTargetFilter))
-			panic(sqlerrors.NewColumnReferencedByComputedColumnError(t.Column.String(), computedColName.Name))
+			panic(sqlerrors.NewDependentBlocksOpError(op, objType, t.Column.String(), "computed column", computedColName.Name))
 		case *scpb.View:
 			_, _, ns := scpb.FindNamespace(b.QueryByID(col.TableID))
 			_, _, nsDep := scpb.FindNamespace(b.QueryByID(e.ViewID))
 			if nsDep.DatabaseID != ns.DatabaseID || nsDep.SchemaID != ns.SchemaID {
-				panic(sqlerrors.NewDependentBlocksOpError("alter", "column type", t.Column.String(), "view", qualifiedName(b, e.ViewID)))
+				panic(sqlerrors.NewDependentBlocksOpError(op, objType, t.Column.String(), "view", qualifiedName(b, e.ViewID)))
 			}
-			panic(sqlerrors.NewDependentBlocksOpError("alter", "column type", t.Column.String(), "view", nsDep.Name))
+			panic(sqlerrors.NewDependentBlocksOpError(op, objType, t.Column.String(), "view", nsDep.Name))
 		case *scpb.FunctionBody:
 			_, _, fnName := scpb.FindFunctionName(b.QueryByID(e.FunctionID))
-			panic(sqlerrors.NewDependentObjectErrorf(
-				"cannot alter data type of column %q because function %q depends on it",
-				t.Column.String(), fnName.Name),
-			)
+			panic(sqlerrors.NewDependentBlocksOpError(op, objType, t.Column.String(), "function", fnName.Name))
 		}
 	})
 
-	err := schemachange.ValidateAlterColumnTypeChecks(
+	var err error
+	newColType.Type, err = schemachange.ValidateAlterColumnTypeChecks(
 		b, t, b.ClusterSettings().Version, newColType.Type,
 		col.GeneratedAsIdentityType != catpb.GeneratedAsIdentityType_NOT_IDENTITY_COLUMN)
 	if err != nil {
@@ -75,7 +76,7 @@ func alterTableAlterColumnType(
 	}
 
 	validateAutomaticCastForNewType(b, tbl.TableID, colID, t.Column.String(),
-		oldColType.Type, newColType.Type)
+		oldColType.Type, newColType.Type, t.Using != nil)
 
 	// We currently only support trivial conversions. Fallback to legacy schema
 	// changer if not trivial.
@@ -84,6 +85,7 @@ func alterTableAlterColumnType(
 		panic(err)
 	}
 	if kind != schemachange.ColumnConversionTrivial {
+		// TODO(spilchen): implement support for non-trivial type changes in issue #126143
 		panic(scerrors.NotImplementedErrorf(t,
 			"alter type conversion not supported in the declarative schema changer"))
 	}
@@ -95,7 +97,12 @@ func alterTableAlterColumnType(
 // ValidateColExprForNewType will ensure that the existing expressions for
 // DEFAULT and ON UPDATE will work for the new data type.
 func validateAutomaticCastForNewType(
-	b BuildCtx, tableID catid.DescID, colID catid.ColumnID, colName string, fromType, toType *types.T,
+	b BuildCtx,
+	tableID catid.DescID,
+	colID catid.ColumnID,
+	colName string,
+	fromType, toType *types.T,
+	hasUsingExpr bool,
 ) {
 	columnElements(b, tableID, colID).ForEach(func(
 		_ scpb.Status, _ scpb.TargetStatus, e scpb.Element,
@@ -109,6 +116,25 @@ func validateAutomaticCastForNewType(
 		}
 		if exprType != "" {
 			if validCast := cast.ValidCast(fromType, toType, cast.ContextAssignment); !validCast {
+				// If the USING expression is missing, we will report an error with a
+				// suggested hint to use one. This is mainly done for compatability
+				// with the legacy schema changer.
+				if !hasUsingExpr {
+					// Compute a suggested default computed expression for inclusion in the error hint.
+					hintExpr := tree.CastExpr{
+						Expr:       &tree.ColumnItem{ColumnName: tree.Name(colName)},
+						Type:       toType,
+						SyntaxMode: tree.CastShort,
+					}
+					panic(errors.WithHintf(
+						pgerror.Newf(
+							pgcode.DatatypeMismatch,
+							"column %q cannot be cast automatically to type %s",
+							colName,
+							toType.SQLString(),
+						), "You might need to specify \"USING %s\".", tree.Serialize(&hintExpr),
+					))
+				}
 				panic(pgerror.Newf(
 					pgcode.DatatypeMismatch,
 					"%s for column %q cannot be cast automatically to type %s",

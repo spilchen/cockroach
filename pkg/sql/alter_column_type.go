@@ -63,6 +63,8 @@ func AlterColumnType(
 	cmds tree.AlterTableCmds,
 	tn *tree.TableName,
 ) error {
+	objType := "column"
+	op := "alter type of"
 	for _, tableRef := range tableDesc.DependedOnBy {
 		found := false
 		for _, colID := range tableRef.ColumnIDs {
@@ -72,14 +74,14 @@ func AlterColumnType(
 		}
 		if found {
 			return params.p.dependentError(
-				ctx, "column", col.GetName(), tableDesc.ParentID, tableRef.ID, "alter type of",
+				ctx, objType, col.GetName(), tableDesc.ParentID, tableRef.ID, op,
 			)
 		}
 	}
 	if err := schemaexpr.ValidateTTLExpressionDoesNotDependOnColumn(tableDesc, tableDesc.GetRowLevelTTL(), col); err != nil {
 		return err
 	}
-	if err := schemaexpr.ValidateComputedColumnExpressionDoesNotDependOnColumn(tableDesc, col); err != nil {
+	if err := schemaexpr.ValidateComputedColumnExpressionDoesNotDependOnColumn(tableDesc, col, objType, op); err != nil {
 		return err
 	}
 
@@ -88,7 +90,7 @@ func AlterColumnType(
 		return err
 	}
 
-	err = schemachange.ValidateAlterColumnTypeChecks(ctx, t,
+	typ, err = schemachange.ValidateAlterColumnTypeChecks(ctx, t,
 		params.EvalContext().Settings.Version, typ, col.IsGeneratedAsIdentity())
 	if err != nil {
 		return err
