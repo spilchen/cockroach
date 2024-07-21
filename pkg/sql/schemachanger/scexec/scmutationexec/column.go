@@ -17,8 +17,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/tabledesc"
-	"github.com/cockroachdb/cockroach/pkg/sql/schemachange"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scop"
+	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
@@ -51,14 +51,23 @@ func (i *immediateVisitor) MakeAbsentColumnDeleteOnly(
 }
 
 func (i *immediateVisitor) UpsertColumnType(ctx context.Context, op scop.UpsertColumnType) error {
-	tbl, err := i.checkOutTable(ctx, op.ColumnType.TableID)
+	return i.handleColumnTypeOp(ctx, op.ColumnType, scpb.Status_PUBLIC)
+}
+
+func (i *immediateVisitor) handleColumnTypeOp(
+	ctx context.Context, newColType scpb.ColumnType, to scpb.Status,
+) error {
+	tbl, err := i.checkOutTable(ctx, newColType.TableID)
 	if err != nil {
 		return err
 	}
 
-	catCol, err := catalog.MustFindColumnByID(tbl, op.ColumnType.ColumnID)
-	if err != nil {
-		return err
+	catCol := catalog.FindColumnByID(tbl, newColType.ColumnID)
+	// If the column doesn't exist yet, then we assume this is called for add
+	// column. And add column only needs to do things when status moves to PUBLIC.
+	// So, we can no-op until the column exists.
+	if catCol == nil {
+		return nil
 	}
 	col := catCol.ColumnDesc()
 
@@ -66,18 +75,32 @@ func (i *immediateVisitor) UpsertColumnType(ctx context.Context, op scop.UpsertC
 	// column. If the column type is set, then this implies we are updating the
 	// type of an existing column.
 	if catCol.HasType() {
-		return i.updateExistingColumnType(ctx, op, col)
+		return i.updateExistingColumnType(newColType, catCol)
+	}
+	return i.createNewColumnType(ctx, newColType, to, tbl, col)
+}
+
+// createNewColumnType is called when adding a ColumnType for a new column.
+func (i *immediateVisitor) createNewColumnType(
+	ctx context.Context,
+	newColType scpb.ColumnType,
+	to scpb.Status,
+	tbl *tabledesc.Mutable,
+	col *descpb.ColumnDescriptor,
+) error {
+	// This operation is a no-op until we transition to public.
+	if to != scpb.Status_PUBLIC {
+		return nil
 	}
 
-	// Else, we are adding a new column.
-	col.Type = op.ColumnType.Type
-	if op.ColumnType.ElementCreationMetadata.In_23_1OrLater {
+	col.Type = newColType.Type
+	if newColType.ElementCreationMetadata.In_23_1OrLater {
 		col.Nullable = true
 	} else {
-		col.Nullable = op.ColumnType.IsNullable
+		col.Nullable = newColType.IsNullable
 	}
-	col.Virtual = op.ColumnType.IsVirtual
-	if ce := op.ColumnType.ComputeExpr; ce != nil {
+	col.Virtual = newColType.IsVirtual
+	if ce := newColType.ComputeExpr; ce != nil {
 		expr := string(ce.Expr)
 		col.ComputeExpr = &expr
 		col.UsesSequenceIds = ce.UsesSequenceIDs
@@ -85,7 +108,7 @@ func (i *immediateVisitor) UpsertColumnType(ctx context.Context, op scop.UpsertC
 	if col.ComputeExpr == nil || !col.Virtual {
 		for i := range tbl.Families {
 			fam := &tbl.Families[i]
-			if fam.ID == op.ColumnType.FamilyID {
+			if fam.ID == newColType.FamilyID {
 				fam.ColumnIDs = append(fam.ColumnIDs, col.ID)
 				fam.ColumnNames = append(fam.ColumnNames, col.Name)
 				break
@@ -369,20 +392,8 @@ func (i *immediateVisitor) RemoveColumnOnUpdateExpression(
 
 // updateExistingColumnType will handle data type changes to existing columns.
 func (i *immediateVisitor) updateExistingColumnType(
-	ctx context.Context, op scop.UpsertColumnType, desc *descpb.ColumnDescriptor,
+	newColType scpb.ColumnType, col catalog.Column,
 ) error {
-	kind, err := schemachange.ClassifyConversion(ctx, desc.Type, op.ColumnType.Type)
-	if err != nil {
-		return err
-	}
-	switch kind {
-	case schemachange.ColumnConversionTrivial:
-		// For trivial conversions, we can just update the column type. This is
-		// allowed because there is no backfill for this type conversion.
-		desc.Type = op.ColumnType.Type
-	default:
-		return errors.AssertionFailedf("unsupported column type change %v -> %v (%v)",
-			desc.Type, op.ColumnType.Type, kind)
-	}
+	col.ColumnDesc().Type = newColType.Type
 	return nil
 }
