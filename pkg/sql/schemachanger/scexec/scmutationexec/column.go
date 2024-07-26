@@ -56,12 +56,9 @@ func (i *immediateVisitor) UpsertColumnType(ctx context.Context, op scop.UpsertC
 		return err
 	}
 
-	catCol := catalog.FindColumnByID(tbl, op.ColumnType.ColumnID)
-	// If the column doesn't exist yet, then we assume this is called for add
-	// column. And add column only needs to do things when status moves to PUBLIC.
-	// So, we can no-op until the column exists.
-	if catCol == nil {
-		return nil
+	catCol, err := catalog.MustFindColumnByID(tbl, op.ColumnType.ColumnID)
+	if err != nil {
+		return err
 	}
 	col := catCol.ColumnDesc()
 
