@@ -176,12 +176,10 @@ func handleValidationOnlyColumnConversion(
 
 	updateColumnType(b, oldColType, newColType)
 
-	// In order to do validation, we will add a transient check constraint. The
-	// expression of the check constraint will cast the column to the new type and
-	// then cast it back to the old type. If the cast back to the old type is not
-	// equal to the original column value, then the check constraint will fail.
-	// This check constraint is only needed temporarily and doesn't need to
-	// survive past the alter. For this reason, it's added as a transient element.
+	// To validate, we add a transient check constraint. It casts the column to the
+	// new type and then back to the old type. If the cast back doesn't match the
+	// original value, the check fails. This constraint is temporary and doesn't
+	// need to persist beyond the ALTER operation.
 	expr, err := parser.ParseExpr(fmt.Sprintf("(CAST(CAST(%s AS %s) AS %s) = %s)",
 		t.Column.String(), newColType.Type.SQLString(), oldColType.Type.SQLString(), t.Column.String()))
 	if err != nil {
@@ -205,7 +203,7 @@ func handleValidationOnlyColumnConversion(
 		IndexIDForValidation: indexID,
 		ColumnIDs:            []catid.ColumnID{newColType.ColumnID},
 	}
-	b.AddTransient(&chk)
+	b.AddTransient(&chk) // Adding it as transient ensures it doesn't survive past the ALTER.
 }
 
 // handleGeneralColumnConversion is called when we need to rewrite the data in order
