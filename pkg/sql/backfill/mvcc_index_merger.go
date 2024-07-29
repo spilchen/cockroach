@@ -70,6 +70,15 @@ var indexBackfillMergeNumWorkers = settings.RegisterIntSetting(
 	settings.PositiveInt,
 )
 
+// batchLimit is limits we put in place for a single transaction of a backfill
+// merge.
+type batchLimit struct {
+	nextRows  int64 // Maximum number of rows to include in the next batch.
+	nextBytes int64 // Maximum number of bytes to include in the next batch.
+	minRows   int64 // Minimum number of rows to include in a batch
+	minBytes  int64 // Minimum number of bytes to include in a batch
+}
+
 // IndexBackfillMerger is a processor that merges entries from the corresponding
 // temporary index to a new index.
 type IndexBackfillMerger struct {
@@ -260,38 +269,48 @@ func (ibm *IndexBackfillMerger) scan(
 			}
 		}
 	}
-	chunkSize := indexBackfillMergeBatchSize.Get(&ibm.flowCtx.Cfg.Settings.SV)
-	chunkBytes := indexBackfillMergeBatchBytes.Get(&ibm.flowCtx.Cfg.Settings.SV)
+	limit := batchLimit{
+		nextRows:  indexBackfillMergeBatchSize.Get(&ibm.flowCtx.Cfg.Settings.SV),
+		minRows:   1,
+		nextBytes: indexBackfillMergeBatchBytes.Get(&ibm.flowCtx.Cfg.Settings.SV),
+		minBytes:  1 << 10,
+	}
 
 	var br *kvpb.BatchResponse
-	if err := ibm.flowCtx.Cfg.DB.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
-		if err := txn.KV().SetFixedTimestamp(ctx, readAsOf); err != nil {
-			return err
-		}
-		// For now just grab all of the destination KVs and merge the corresponding entries.
-		log.VInfof(ctx, 2, "scanning batch [%s, %s) at %v to merge", startKey, endKey, readAsOf)
-		ba := &kvpb.BatchRequest{}
-		ba.TargetBytes = chunkBytes
-		if err := ibm.growBoundAccount(ctx, chunkBytes); err != nil {
-			return errors.Wrap(err, "failed to fetch keys to merge from temp index")
-		}
-		defer ibm.shrinkBoundAccount(ctx, chunkBytes)
+	if err := retryWithReducedBatchWhenAutoRetryLimitExceeded(ctx, &limit,
+		func(ctx context.Context, limit *batchLimit) error {
+			if err := ibm.flowCtx.Cfg.DB.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
+				if err := txn.KV().SetFixedTimestamp(ctx, readAsOf); err != nil {
+					return err
+				}
+				// For now just grab all of the destination KVs and merge the corresponding entries.
+				log.VInfof(ctx, 2, "scanning batch [%s, %s) at %v to merge", startKey, endKey, readAsOf)
+				ba := &kvpb.BatchRequest{}
+				ba.TargetBytes = limit.nextBytes
+				if err := ibm.growBoundAccount(ctx, limit.nextBytes); err != nil {
+					return errors.Wrap(err, "failed to fetch keys to merge from temp index")
+				}
+				defer ibm.shrinkBoundAccount(ctx, limit.nextBytes)
 
-		ba.MaxSpanRequestKeys = chunkSize
-		ba.Add(&kvpb.ScanRequest{
-			RequestHeader: kvpb.RequestHeader{
-				Key:    startKey,
-				EndKey: endKey,
-			},
-			ScanFormat: kvpb.KEY_VALUES,
-		})
-		var pErr *kvpb.Error
-		br, pErr = txn.KV().Send(ctx, ba)
-		if pErr != nil {
-			return pErr.GoError()
-		}
-		return nil
-	}, isql.WithPriority(admissionpb.BulkNormalPri)); err != nil {
+				ba.MaxSpanRequestKeys = limit.nextRows
+				ba.Add(&kvpb.ScanRequest{
+					RequestHeader: kvpb.RequestHeader{
+						Key:    startKey,
+						EndKey: endKey,
+					},
+					ScanFormat: kvpb.KEY_VALUES,
+				})
+				var pErr *kvpb.Error
+				br, pErr = txn.KV().Send(ctx, ba)
+				if pErr != nil {
+					return pErr.GoError()
+				}
+				return nil
+			}, isql.WithPriority(admissionpb.BulkNormalPri)); err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
 		return mergeChunk{}, nil, err
 	}
 
@@ -542,3 +561,60 @@ var _ base.ModuleTestingKnobs = &IndexBackfillMergerTestingKnobs{}
 
 // ModuleTestingKnobs implements the base.ModuleTestingKnobs interface.
 func (*IndexBackfillMergerTestingKnobs) ModuleTestingKnobs() {}
+
+// retryWithReducedBatchWhenAutoRetryLimitExceeded is a helper that will
+// continually try to merge a batch. If the KV internal retry limit is reached,
+// it will keep retrying the batch but with a progressively smaller batch size
+// each time.
+func retryWithReducedBatchWhenAutoRetryLimitExceeded(
+	ctx context.Context, limit *batchLimit, f func(context.Context, *batchLimit) error,
+) error {
+	for {
+		err := f(ctx, limit)
+		if err == nil {
+			return nil
+		}
+		// We stop retrying if we still couldn't complete the batch at the minimum
+		// size. We will return the error and let a higher level handle it.
+		if limit.isBatchMin() {
+			return err
+		}
+		// If we reached the auto retry limit, we reduce the nextRows of the next chunk.
+		// We reduce the number of nextRows and number of bytes by half.
+		if kv.IsAutoRetryLimitExhaustedError(err) {
+			limit.reduceForRetry()
+			log.Infof(ctx,
+				"kv auto retry limit was reached, retrying with a reduced batch of %d nextRows and %d nextBytes. kv error: %v",
+				limit.nextRows, limit.nextBytes, err)
+			continue
+		}
+		return err
+	}
+}
+
+// copy makes a new copy of batchLimit, returning its new pointer.
+func (l *batchLimit) copy() *batchLimit {
+	newLimit := *l
+	return &newLimit
+}
+
+// reduceForRetry will reduce the size of the next batch due to a retry.
+func (l *batchLimit) reduceForRetry() *batchLimit {
+	if l.nextBytes > 0 {
+		l.nextBytes /= 2
+		if l.nextBytes < l.minBytes {
+			l.nextBytes = l.minBytes
+		}
+	}
+	if l.nextRows > 0 {
+		l.nextRows /= 2
+		if l.nextRows < l.minRows {
+			l.nextRows = l.minRows
+		}
+	}
+	return l
+}
+
+func (l *batchLimit) isBatchMin() bool {
+	return l.nextBytes <= l.minBytes && l.nextRows <= l.minRows
+}
