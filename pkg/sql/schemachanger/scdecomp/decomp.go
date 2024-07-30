@@ -540,6 +540,15 @@ func (w *walkCtx) walkColumn(tbl catalog.TableDescriptor, col catalog.Column) {
 			expr, err := w.newExpression(col.GetComputeExpr())
 			onErrPanic(err)
 			columnType.ComputeExpr = expr
+
+			// The inline computed expression is deprecated. We will duplicate the
+			// expression in a standalone element to make it easier to modify that in
+			// the DSC.
+			w.ev(scpb.Status_PUBLIC, &scpb.ColumnComputedExpression{
+				TableID:  tbl.GetID(),
+				ColumnID: col.GetID(),
+				Expr:     expr,
+			})
 		}
 		w.ev(scpb.Status_PUBLIC, columnType)
 	}

@@ -143,7 +143,10 @@ func AlterTable(b BuildCtx, n *tree.AlterTable) {
 		})
 		b.IncrementSubWorkID()
 	}
-	maybeDropRedundantPrimaryIndexes(b, tbl.TableID)
+	// SPILLY - disabling for now, but we will need to update deflate() and
+	// compare computed column expressions of each index to know if things are
+	// changing.
+	//maybeDropRedundantPrimaryIndexes(b, tbl.TableID)
 	maybeRewriteTempIDsInPrimaryIndexes(b, tbl.TableID)
 	disallowDroppingPrimaryIndexReferencedInUDFOrView(b, tbl.TableID, n.String())
 }

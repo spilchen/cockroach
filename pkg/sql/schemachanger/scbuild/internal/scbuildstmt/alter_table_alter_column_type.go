@@ -96,7 +96,7 @@ func alterTableAlterColumnType(
 	case schemachange.ColumnConversionValidate:
 		handleValidationOnlyColumnConversion(b, t, oldColType, &newColType)
 	case schemachange.ColumnConversionGeneral:
-		handleGeneralColumnConversion(b, t, col, oldColType, &newColType)
+		handleGeneralColumnConversion(b, tn, t, tbl, col, oldColType, &newColType)
 	default:
 		panic(scerrors.NotImplementedErrorf(t,
 			"alter type conversion %v not handled", kind))
@@ -208,11 +208,13 @@ func handleValidationOnlyColumnConversion(
 // to complete the data type conversion.
 func handleGeneralColumnConversion(
 	b BuildCtx,
+	tn *tree.TableName,
 	t *tree.AlterTableAlterColumnType,
+	tbl *scpb.Table,
 	col *scpb.Column,
 	oldColType, newColType *scpb.ColumnType,
 ) {
-	failIfExperimentalSettingNotSet(b, oldColType, newColType)
+	//failIfExperimentalSettingNotSet(b, oldColType, newColType) // SPILLY add back
 
 	// Because we need to rewrite data to change the data type, there are
 	// additional validation checks required that are incompatible with this
@@ -230,8 +232,12 @@ func handleGeneralColumnConversion(
 		}
 	})
 
-	// TODO(spilchen): Implement the general conversion logic in #127014
-	panic(scerrors.NotImplementedErrorf(t, "general alter type conversion not supported in the declarative schema changer"))
+	// SPILLY - we are going to do this in stages. We will do an add column to
+	// start. The new column will be a computed column that refers to the old one.
+	// We will keep the old column around.
+
+	// Add PrimaryIndex to force a backfill.
+	_ = getInflatedPrimaryIndexChain(b, oldColType.TableID)
 }
 
 func updateColumnType(b BuildCtx, oldColType, newColType *scpb.ColumnType) {

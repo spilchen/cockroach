@@ -168,6 +168,8 @@ func redactElement(element scpb.Element) error {
 		if e.ComputeExpr != nil {
 			return redactExpr(&e.ComputeExpr.Expr)
 		}
+	case *scpb.ColumnComputedExpression:
+		return redactExpr(&e.Expr)
 	case *scpb.FunctionBody:
 		return redactFunctionBodyStr(e.Lang.Lang, &e.Body)
 	}

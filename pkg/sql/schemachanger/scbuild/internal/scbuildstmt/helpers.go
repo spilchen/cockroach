@@ -1646,3 +1646,18 @@ func retrieveColumnTypeElem(
 	_, _, ret := scpb.FindColumnType(b.QueryByID(tableID).Filter(hasColumnIDAttrFilter(columnID)))
 	return ret
 }
+
+func retrieveColumnFamilyElem(b BuildCtx, tableID catid.DescID) *scpb.ColumnFamily {
+	// SPILLY - don't use the deprecated version
+	tblElts := b.QueryByID(tableID).Filter(orFilter(publicTargetFilter, transientTargetFilter))
+	var fam *scpb.ColumnFamily
+	tblElts.
+		ForEach(func(_ scpb.Status, _ scpb.TargetStatus, e scpb.Element) {
+			switch elt := e.(type) {
+			case *scpb.ColumnFamily:
+				fam = elt
+			}
+		})
+	// SPILLY - what if we can't find anything. This needs work
+	return fam
+}

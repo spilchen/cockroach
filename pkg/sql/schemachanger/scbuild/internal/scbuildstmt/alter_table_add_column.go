@@ -271,6 +271,7 @@ type addColumnSpec struct {
 	def      *scpb.ColumnDefaultExpression
 	onUpdate *scpb.ColumnOnUpdateExpression
 	comment  *scpb.ColumnComment
+	compute  *scpb.ColumnComputedExpression
 	unique   bool
 	notNull  bool
 }
@@ -301,6 +302,9 @@ func addColumn(b BuildCtx, spec addColumnSpec, n tree.NodeFormatter) (backing *s
 		if spec.comment != nil {
 			b.Add(spec.comment)
 		}
+		if spec.compute != nil {
+			b.Add(spec.compute)
+		}
 		// Don't need to modify primary indexes for virtual columns.
 		if spec.colType.IsVirtual {
 			chain := getPrimaryIndexChain(b, spec.tbl.TableID)
@@ -312,7 +316,7 @@ func addColumn(b BuildCtx, spec addColumnSpec, n tree.NodeFormatter) (backing *s
 		}
 
 		inflatedChain := getInflatedPrimaryIndexChain(b, spec.tbl.TableID)
-		if spec.def == nil && spec.colType.ComputeExpr == nil {
+		if spec.def == nil && spec.colType.ComputeExpr == nil && spec.compute == nil {
 			// Optimization opportunity: if we were to add a new column without default
 			// value nor computed expression, then we can just add the column to existing
 			// non-nil primary indexes without actually backfilling any data. This is
