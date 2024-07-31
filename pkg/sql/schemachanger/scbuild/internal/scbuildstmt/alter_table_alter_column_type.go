@@ -96,7 +96,7 @@ func alterTableAlterColumnType(
 	case schemachange.ColumnConversionValidate:
 		handleValidationOnlyColumnConversion(b, t, oldColType, &newColType)
 	case schemachange.ColumnConversionGeneral:
-		handleGeneralColumnConversion(b, t, col, oldColType, &newColType)
+		handleGeneralColumnConversion(b, tn, t, tbl, col, oldColType, &newColType)
 	default:
 		panic(scerrors.NotImplementedErrorf(t,
 			"alter type conversion %v not handled", kind))
@@ -208,11 +208,13 @@ func handleValidationOnlyColumnConversion(
 // to complete the data type conversion.
 func handleGeneralColumnConversion(
 	b BuildCtx,
+	tn *tree.TableName,
 	t *tree.AlterTableAlterColumnType,
+	tbl *scpb.Table,
 	col *scpb.Column,
 	oldColType, newColType *scpb.ColumnType,
 ) {
-	failIfExperimentalSettingNotSet(b, oldColType, newColType)
+	//failIfExperimentalSettingNotSet(b, oldColType, newColType) // SPILLY add back
 
 	// Because we need to rewrite data to change the data type, there are
 	// additional validation checks required that are incompatible with this
@@ -230,8 +232,60 @@ func handleGeneralColumnConversion(
 		}
 	})
 
-	// TODO(spilchen): Implement the general conversion logic in #127014
-	panic(scerrors.NotImplementedErrorf(t, "general alter type conversion not supported in the declarative schema changer"))
+	// SPILLY - we are going to do this in stages. We will do an add column to
+	// start. The new column will be a computed column that refers to the old one.
+	// We will keep the old column around.
+
+	// SPILLY - following code was added to add/remove column.
+	colID := b.NextTableColumnID(tbl)
+	newColType.ColumnID = colID
+
+	// Set a computed expression in the new column.
+	// SPILLY - make this generic and pull from legacy schema changer
+	expr, err := parser.ParseExpr(fmt.Sprintf("CAST(%s AS %s)", t.Column.String(), newColType.Type.SQLString()))
+	if err != nil {
+		panic(err)
+	}
+	newColType.ComputeExpr = b.WrapExpression(tbl.TableID, expr)
+
+	spec := addColumnSpec{
+		tbl: tbl,
+		col: &scpb.Column{
+			TableID:        tbl.TableID,
+			ColumnID:       colID,
+			IsHidden:       false, // SPILLY - fill in from base col
+			IsInaccessible: false, // SPILLY - fill in from base col
+		},
+		fam: retrieveColumnFamilyElem(b, tbl.TableID), // SPILLY - pick same column family as base col
+		name: &scpb.ColumnName{
+			TableID:  tbl.TableID,
+			ColumnID: colID,
+			Name:     "x", // SPILLY - pick a unique name
+		},
+		colType: newColType,
+	}
+	addColumn(b, spec, t)
+	//
+	//// Monkey around with the generated expression. We want to remove it from the ColumnType we just added.
+	//b.Drop(newColType)
+	//newColTypeWithoutComputed := *newColType
+	//newColTypeWithoutComputed.ComputeExpr = nil
+	//b.Add(&newColTypeWithoutComputed)
+	//
+	//b.Drop(oldColType)
+	//oldColTypeWithComputed := *oldColType
+	//expr, err = parser.ParseExpr(fmt.Sprintf("CAST(x AS %s)", oldColType.Type.SQLString()))
+	//if err != nil {
+	//	panic(err)
+	//}
+	//oldColTypeWithComputed.ComputeExpr = b.WrapExpression(tbl.TableID, expr)
+	//b.Add(&oldColTypeWithComputed)
+	//
+	//elts := b.QueryByID(tbl.TableID).Filter(hasColumnIDAttrFilter(oldColType.ColumnID))
+	//dropColumn(b, tn, tbl, t, col, elts, tree.DropRestrict)
+
+	// Add PrimaryIndex to force a backfill.
+	_ = getInflatedPrimaryIndexChain(b, oldColType.TableID)
 }
 
 func updateColumnType(b BuildCtx, oldColType, newColType *scpb.ColumnType) {
