@@ -225,6 +225,11 @@ message ColumnType {
   // It can be used in a similar way to version gates to ensure compatibility
   // in mixed version state.
   ElementCreationMetadata element_creation_metadata= 11;
+  // If this is set to some non-zero value, when this column type gets to
+  // public, we will swap its computed state with the given column ID. This is
+  // used to implement alter type via add column
+  uint32 swap_computed_with_column_id = 12;
+  string inverse_expr = 13;
 }
 
 message ColumnFamily {

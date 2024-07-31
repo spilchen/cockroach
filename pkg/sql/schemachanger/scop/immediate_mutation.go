@@ -516,6 +516,15 @@ type RemoveColumnOnUpdateExpression struct {
 	ColumnID descpb.ColumnID
 }
 
+// SPILLY - add this if its the right way to go
+//type ComputedColumnSwap struct {
+//	immediateMutationOp
+//	TableID     descpb.ID
+//	OldColumnID descpb.ColumnID
+//	NewColumnID descpb.ColumnID
+//	InverseExpr string
+//}
+
 // UpdateTableBackReferencesInTypes updates back references to a table
 // in the specified types.
 type UpdateTableBackReferencesInTypes struct {

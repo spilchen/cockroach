@@ -78,6 +78,7 @@ ColumnType :  IsNullable
 ColumnType :  ComputeExpr
 ColumnType :  IsVirtual
 ColumnType :  ElementCreationMetadata
+ColumnType :  SwapComputedWithColumnId
 
 object CompositeType
 
