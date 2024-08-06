@@ -531,6 +531,22 @@ func mustRetrieveColumnNameElem(
 	return columnName
 }
 
+func mustRetrieveColumnTypeElem(
+	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
+) (columnType *scpb.ColumnType) {
+	scpb.ForEachColumnType(b.QueryByID(tableID), func(
+		current scpb.Status, target scpb.TargetStatus, e *scpb.ColumnType,
+	) {
+		if e.ColumnID == columnID {
+			columnType = e
+		}
+	})
+	if columnType == nil {
+		panic(errors.AssertionFailedf("programming error: cannot find a ColumnType element for column ID %v", columnID))
+	}
+	return columnType
+}
+
 func mustRetrieveIndexElement(
 	b BuildCtx, tableID catid.DescID, indexID catid.IndexID,
 ) (indexElem *scpb.Index) {

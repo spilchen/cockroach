@@ -1448,6 +1448,10 @@ DROP TABLE defaultdb.shipments CASCADE;
   kind: Precedence
   rule: dependents removed before column
 - from: [ColumnComment:{DescID: 109, ColumnID: 1, Comment: tracking_number is a must}, ABSENT]
+  to:   [ColumnType:{DescID: 109, ColumnFamilyID: 0, ColumnID: 1, TypeName: UUID}, ABSENT]
+  kind: SameStagePrecedence
+  rule: column type dependents removed right before column type
+- from: [ColumnComment:{DescID: 109, ColumnID: 1, Comment: tracking_number is a must}, ABSENT]
   to:   [Table:{DescID: 109}, ABSENT]
   kind: Precedence
   rule: non-data dependents removed before descriptor
