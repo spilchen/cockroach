@@ -146,6 +146,7 @@ func alterTableAddColumn(
 		TableID:                 tbl.TableID,
 		ColumnID:                spec.col.ColumnID,
 		IsNullable:              desc.Nullable,
+		IsVirtual:               desc.Virtual,
 		ElementCreationMetadata: scdecomp.NewElementCreationMetadata(b.EvalCtx().Settings.Version.ActiveVersion(b)),
 	}
 
@@ -180,11 +181,9 @@ func alterTableAddColumn(
 				TableID:    tbl.TableID,
 				ColumnID:   spec.col.ColumnID,
 				Expression: *expr,
-				IsVirtual:  desc.Virtual,
 			}
 		} else {
 			spec.colType.ComputeExpr = expr
-			spec.colType.IsVirtual = desc.Virtual
 		}
 		if desc.Virtual {
 			b.IncrementSchemaChangeAddColumnQualificationCounter("virtual")
@@ -193,11 +192,6 @@ func alterTableAddColumn(
 		}
 	}
 	if d.HasColumnFamily() {
-		if desc.Virtual {
-			// SPILLY _ add test for this
-			panic(pgerror.Newf(pgcode.InvalidColumnDefinition,
-				"cannot define a column family for virtual column %q", d.Name))
-		}
 		elts := b.QueryByID(tbl.TableID)
 		var found bool
 		scpb.ForEachColumnFamily(elts, func(_ scpb.Status, target scpb.TargetStatus, cf *scpb.ColumnFamily) {
@@ -320,7 +314,7 @@ func addColumn(b BuildCtx, spec addColumnSpec, n tree.NodeFormatter) (backing *s
 			b.Add(spec.comment)
 		}
 		// Don't need to modify primary indexes for virtual columns.
-		if spec.colType.IsVirtual || (spec.compute != nil && spec.compute.IsVirtual) {
+		if spec.colType.IsVirtual {
 			return getLatestPrimaryIndex(b, spec.tbl.TableID)
 		}
 

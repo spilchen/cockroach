@@ -242,6 +242,7 @@ func dropCascadeDescriptor(b BuildCtx, id catid.DescID) {
 		case
 			*scpb.ColumnDefaultExpression,
 			*scpb.ColumnOnUpdateExpression,
+			*scpb.ColumnComputeExpression,
 			*scpb.CheckConstraint,
 			*scpb.CheckConstraintUnvalidated,
 			*scpb.ForeignKeyConstraint,

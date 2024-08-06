@@ -264,8 +264,7 @@ func dropColumn(
 				"cannot drop column %s because other objects depend on it", cn.Name))
 		}
 	})
-	_, _, colComputeExpr := scpb.FindColumnComputeExpression(colElts)
-	if _, _, ct := scpb.FindColumnType(colElts); !ct.IsVirtual && (colComputeExpr == nil || !colComputeExpr.IsVirtual) {
+	if _, _, ct := scpb.FindColumnType(colElts); !ct.IsVirtual {
 		handleDropColumnPrimaryIndexes(b, tbl, n, col)
 	}
 	assertAllColumnElementsAreDropped(colElts)
