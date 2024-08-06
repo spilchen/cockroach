@@ -39,7 +39,7 @@ func alterTableAlterColumnType(
 
 	// Setup for the new type ahead of any checking. As we need its resolved type
 	// for the checks.
-	oldColType := mustRetrieveColumnTypeElem(b, tbl.TableID, colID)
+	oldColType := retrieveColumnTypeElem(b, tbl.TableID, colID)
 	newColType := *oldColType
 	newColType.TypeT = b.ResolveTypeRef(t.ToType)
 
