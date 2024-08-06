@@ -523,7 +523,6 @@ func (w *walkCtx) walkColumn(tbl catalog.TableDescriptor, col catalog.Column) {
 			TableID:                 tbl.GetID(),
 			ColumnID:                col.GetID(),
 			IsNullable:              col.IsNullable(),
-			IsVirtual:               col.IsVirtual(),
 			ElementCreationMetadata: NewElementCreationMetadata(w.clusterVersion),
 		}
 		_ = tbl.ForeachFamily(func(family *descpb.ColumnFamilyDescriptor) error {
@@ -539,7 +538,18 @@ func (w *walkCtx) walkColumn(tbl catalog.TableDescriptor, col catalog.Column) {
 		if col.IsComputed() {
 			expr, err := w.newExpression(col.GetComputeExpr())
 			onErrPanic(err)
-			columnType.ComputeExpr = expr
+
+			if columnType.ElementCreationMetadata.In_24_3OrLater {
+				w.ev(scpb.Status_PUBLIC, &scpb.ColumnComputeExpression{
+					TableID:    tbl.GetID(),
+					ColumnID:   col.GetID(),
+					Expression: *expr,
+					IsVirtual:  col.IsVirtual(),
+				})
+			} else {
+				columnType.ComputeExpr = expr
+				columnType.IsVirtual = col.IsVirtual()
+			}
 		}
 		w.ev(scpb.Status_PUBLIC, columnType)
 	}

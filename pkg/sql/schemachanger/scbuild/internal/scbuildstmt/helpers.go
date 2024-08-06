@@ -1652,9 +1652,18 @@ func newTypeT(t *types.T) scpb.TypeT {
 	}
 }
 
-func retrieveColumnTypeElem(
+func mustRetrieveColumnTypeElem(
 	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
 ) *scpb.ColumnType {
-	_, _, ret := scpb.FindColumnType(b.QueryByID(tableID).Filter(hasColumnIDAttrFilter(columnID)))
-	return ret
+	return b.QueryByID(tableID).FilterColumnType().Filter(func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.ColumnType) bool {
+		return e.ColumnID == columnID
+	}).MustGetOneElement()
+}
+
+func retrieveColumnComputeExpression(
+	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
+) (column *scpb.ColumnComputeExpression) {
+	return b.QueryByID(tableID).FilterColumnComputeExpression().Filter(func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.ColumnComputeExpression) bool {
+		return e.ColumnID == columnID
+	}).MustGetZeroOrOneElement()
 }
