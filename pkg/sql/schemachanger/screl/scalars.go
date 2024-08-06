@@ -125,7 +125,10 @@ func VersionSupportsElementUse(el scpb.Element, version clusterversion.ClusterVe
 		return true
 	case *scpb.SequenceOption:
 		return true
-	case *scpb.TypeComment, *scpb.DatabaseZoneConfig, *scpb.ColumnComputeExpression:
+	case *scpb.TypeComment, *scpb.DatabaseZoneConfig:
+		return version.IsActive(clusterversion.V24_2)
+	case *scpb.ColumnComputeExpression:
+		// TODO(spilchen): Use V24_3 when it is available. This will get handled in #127014.
 		return version.IsActive(clusterversion.V24_2)
 	default:
 		panic(errors.AssertionFailedf("unknown element %T", el))

@@ -85,20 +85,17 @@ func (i *immediateVisitor) addNewColumnType(
 	} else {
 		col.Nullable = op.ColumnType.IsNullable
 	}
-	// The ComputeExpr and IsVirtual are deprecated in favor of a separate element
-	// (ColumnComputeExpression). Any changes in this if block should also be made
-	// in the AddColumnComputeExpression function.
+	col.Virtual = op.ColumnType.IsVirtual
+	// ComputeExpr is deprecated in favor of a separate element
+	// (ColumnComputeExpression). Any changes in this if block
+	// should also be made in the AddColumnComputeExpression function.
 	if !op.ColumnType.ElementCreationMetadata.In_24_3OrLater {
-		col.Virtual = op.ColumnType.IsVirtual
 		if ce := op.ColumnType.ComputeExpr; ce != nil {
 			expr := string(ce.Expr)
 			col.ComputeExpr = &expr
 			col.UsesSequenceIds = ce.UsesSequenceIDs
 		}
 	}
-	// We only set col.Virtual in older releases. This virtual check is needed for
-	// those old releases. Newer releases ensure that any attempt to add a virtual
-	// column cannot also specify the column family.
 	if !col.Virtual {
 		for i := range tbl.Families {
 			fam := &tbl.Families[i]
@@ -119,23 +116,19 @@ func (i *immediateVisitor) AddColumnComputeExpression(
 	ctx context.Context, op scop.AddColumnComputeExpression,
 ) error {
 	return i.updateColumnComputeExpression(ctx, op.ComputeExpression.TableID, op.ComputeExpression.ColumnID,
-		&op.ComputeExpression.Expr, op.ComputeExpression.IsVirtual)
+		&op.ComputeExpression.Expr)
 }
 
 // RemoveColumnComputeExpression will drop a compute expression from a column.
 func (i *immediateVisitor) RemoveColumnComputeExpression(
 	ctx context.Context, op scop.RemoveColumnComputeExpression,
 ) error {
-	return i.updateColumnComputeExpression(ctx, op.TableID, op.ColumnID, nil, false /* virtual */)
+	return i.updateColumnComputeExpression(ctx, op.TableID, op.ColumnID, nil)
 }
 
 // updateColumnComputeExpression will handle add or removal of a compute expression.
 func (i *immediateVisitor) updateColumnComputeExpression(
-	ctx context.Context,
-	tableID descpb.ID,
-	columnID descpb.ColumnID,
-	expr *catpb.Expression,
-	virtual bool,
+	ctx context.Context, tableID descpb.ID, columnID descpb.ColumnID, expr *catpb.Expression,
 ) error {
 	tbl, err := i.checkOutTable(ctx, tableID)
 	if err != nil {
@@ -148,7 +141,6 @@ func (i *immediateVisitor) updateColumnComputeExpression(
 	}
 
 	col := catCol.ColumnDesc()
-	col.Virtual = virtual
 	if expr == nil {
 		col.ComputeExpr = nil
 	} else {
@@ -260,6 +252,9 @@ func (i *immediateVisitor) RemoveDroppedColumnType(
 	}
 	col := mut.AsColumn().ColumnDesc()
 	col.Type = types.Any
+	// SPILLY - seems like it could interphere with my change. Also, note how they
+	// handled the case where we want to null the expression but don't want to set
+	// it to nil.
 	if col.IsComputed() {
 		// This operation needs to zero the computed column expression to remove
 		// any references to sequences and whatnot but it can't simply remove the

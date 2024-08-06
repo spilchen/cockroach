@@ -789,7 +789,6 @@ func ensureColCanBeUsedInOutboundFK(
 	colNameElem := mustRetrieveColumnNameElem(b, tableID, columnID)
 	colTypeElem := mustRetrieveColumnTypeElem(b, tableID, columnID)
 	colElem := mustRetrieveColumnElem(b, tableID, columnID)
-	colComputeElem := retrieveColumnComputeExpression(b, tableID, columnID)
 
 	if colElem.IsInaccessible {
 		panic(pgerror.Newf(
@@ -799,7 +798,7 @@ func ensureColCanBeUsedInOutboundFK(
 		))
 	}
 
-	if colTypeElem.IsVirtual || (colComputeElem != nil && colComputeElem.IsVirtual) {
+	if colTypeElem.IsVirtual {
 		panic(unimplemented.NewWithIssuef(
 			59671, "virtual column %q cannot reference a foreign key",
 			colNameElem.Name,
@@ -822,7 +821,6 @@ func ensureColCanBeUsedInInboundFK(b BuildCtx, tableID catid.DescID, columnID ca
 	colNameElem := mustRetrieveColumnNameElem(b, tableID, columnID)
 	colTypeElem := mustRetrieveColumnTypeElem(b, tableID, columnID)
 	colElem := mustRetrieveColumnElem(b, tableID, columnID)
-	colComputeElem := retrieveColumnComputeExpression(b, tableID, columnID)
 
 	if colElem.IsInaccessible {
 		panic(pgerror.Newf(
@@ -831,7 +829,7 @@ func ensureColCanBeUsedInInboundFK(b BuildCtx, tableID catid.DescID, columnID ca
 			colNameElem.Name,
 		))
 	}
-	if colTypeElem.IsVirtual || (colComputeElem != nil && colComputeElem.IsVirtual) {
+	if colTypeElem.IsVirtual {
 		panic(unimplemented.NewWithIssuef(
 			59671, "virtual column %q cannot be referenced by a foreign key",
 			colNameElem.Name,

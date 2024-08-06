@@ -220,10 +220,9 @@ message ColumnType {
   // column.
   bool is_nullable = 5 [deprecated = true];
   // Deprecated
-  // The compute expression and is_virtual are now handled as a separate element
-  // (see ColumnComputeExpression).
+  // compute expression is now handled as a separate element (see ColumnComputeExpression).
   Expression compute_expr = 6 [deprecated = true];
-  bool is_virtual = 7 [deprecated = true];
+  bool is_virtual = 7;
   reserved 8, 9, 10;
   // ElementCreationMetadata stores information about when this element is created.
   // It can be used in a similar way to version gates to ensure compatibility
@@ -235,7 +234,6 @@ message ColumnComputeExpression {
   uint32 table_id = 1 [(gogoproto.customname) = "TableID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.DescID"];
   uint32 column_id = 2 [(gogoproto.customname) = "ColumnID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.ColumnID"];
   Expression embedded_expr = 3 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
-  bool is_virtual = 4;
 }
 
 message ColumnFamily {

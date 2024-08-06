@@ -198,10 +198,8 @@ func alterPKInPrimaryIndexAndItsTemp(
 		// All other columns in this index will be STORED columns, excluding
 		// virtual columns and system columns.
 		for _, colID := range getSortedColumnIDsInIndex(b, tableID, indexID) {
-			computeElem := retrieveColumnComputeExpression(b, tableID, colID)
 			if _, isKeyCol := keyColIDsInIndex[colID]; isKeyCol ||
 				mustRetrieveColumnTypeElem(b, tableID, colID).IsVirtual ||
-				computeElem != nil && computeElem.IsVirtual ||
 				colinfo.IsColIDSystemColumn(colID) {
 				continue
 			}
@@ -264,8 +262,7 @@ func alterPKInPrimaryIndexAndItsTemp(
 		// For now, the only case this will happen is the shard column of the old PK.
 		for uncoveredExistingIndexColID := range uncoveredExistingIndexCols {
 			// sanity check: this index column must be the old shard column.
-			computeElem := retrieveColumnComputeExpression(b, tableID, uncoveredExistingIndexColID)
-			if !mustRetrieveColumnTypeElem(b, tableID, uncoveredExistingIndexColID).IsVirtual && (computeElem == nil || !computeElem.IsVirtual) {
+			if !mustRetrieveColumnTypeElem(b, tableID, uncoveredExistingIndexColID).IsVirtual {
 				panic(errors.AssertionFailedf("programming error: find a physical column %v"+
 					" that existed in the index but is no longer after the primary key change", uncoveredExistingIndexColID))
 			}
