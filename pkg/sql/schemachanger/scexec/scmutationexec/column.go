@@ -142,7 +142,7 @@ func (i *immediateVisitor) updateColumnComputeExpression(
 
 	col := catCol.ColumnDesc()
 	if expr == nil {
-		col.ComputeExpr = nil
+		clearComputedExpr(col)
 	} else {
 		expr := string(*expr)
 		col.ComputeExpr = &expr
@@ -252,17 +252,8 @@ func (i *immediateVisitor) RemoveDroppedColumnType(
 	}
 	col := mut.AsColumn().ColumnDesc()
 	col.Type = types.Any
-	// SPILLY - seems like it could interphere with my change. Also, note how they
-	// handled the case where we want to null the expression but don't want to set
-	// it to nil.
 	if col.IsComputed() {
-		// This operation needs to zero the computed column expression to remove
-		// any references to sequences and whatnot but it can't simply remove the
-		// expression entirely, otherwise in the case of virtual computed columns
-		// the column descriptor will then be interpreted as a virtual non-computed
-		// column, which doesn't make any sense.
-		null := tree.Serialize(tree.DNull)
-		col.ComputeExpr = &null
+		clearComputedExpr(col)
 	}
 	return nil
 }
@@ -444,4 +435,14 @@ func (i *immediateVisitor) updateExistingColumnType(
 			desc.Type, op.ColumnType.Type, kind)
 	}
 	return nil
+}
+
+func clearComputedExpr(col *descpb.ColumnDescriptor) {
+	// This operation needs to zero the computed column expression to remove
+	// any references to sequences and whatnot but it can't simply remove the
+	// expression entirely, otherwise in the case of virtual computed columns
+	// the column descriptor will then be interpreted as a virtual non-computed
+	// column, which doesn't make any sense.
+	null := tree.Serialize(tree.DNull)
+	col.ComputeExpr = &null
 }
