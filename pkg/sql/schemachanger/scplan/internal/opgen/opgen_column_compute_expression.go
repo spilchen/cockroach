@@ -57,17 +57,14 @@ func init() {
 				}),
 			),
 		),
-		// SPILLY - I think we need multiple states.
 		toAbsent(
 			scpb.Status_PUBLIC,
 			to(scpb.Status_ABSENT,
 				emit(func(this *scpb.ColumnComputeExpression) *scop.RemoveColumnComputeExpression {
-					return nil
-					// SPILLY - only do this if the column is NOT being dropped. How to do that quickly though?
-					//return &scop.RemoveColumnComputeExpression{
-					//	TableID:  this.TableID,
-					//	ColumnID: this.ColumnID,
-					//}
+					return &scop.RemoveColumnComputeExpression{
+						TableID:  this.TableID,
+						ColumnID: this.ColumnID,
+					}
 				}),
 				emit(func(this *scpb.ColumnComputeExpression) *scop.UpdateTableBackReferencesInTypes {
 					if len(this.UsesTypeIDs) == 0 {
