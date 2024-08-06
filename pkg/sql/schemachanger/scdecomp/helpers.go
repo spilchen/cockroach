@@ -144,5 +144,8 @@ func NewElementCreationMetadata(
 ) *scpb.ElementCreationMetadata {
 	return &scpb.ElementCreationMetadata{
 		In_23_1OrLater: true,
+		// TODO(spilchen): We need to check if V24_3 is active, but that const isn't
+		// available yet. This will get fixed in #127014.
+		In_24_3OrLater: clusterVersion.IsActive(clusterversion.V24_2),
 	}
 }

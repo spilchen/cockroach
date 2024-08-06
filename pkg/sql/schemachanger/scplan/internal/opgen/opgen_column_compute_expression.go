@@ -1,0 +1,104 @@
+// Copyright 2021 The Cockroach Authors.
+//
+// Use of this software is governed by the Business Source License
+// included in the file licenses/BSL.txt.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0, included in the file
+// licenses/APL.txt.
+
+package opgen
+
+import (
+	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scop"
+	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
+	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
+)
+
+func init() {
+	opRegistry.register((*scpb.ColumnComputeExpression)(nil),
+		toPublic(
+			scpb.Status_ABSENT,
+			to(scpb.Status_PUBLIC,
+				emit(func(this *scpb.ColumnComputeExpression) *scop.AddColumnComputeExpression {
+					return &scop.AddColumnComputeExpression{
+						ComputeExpression: *protoutil.Clone(this).(*scpb.ColumnComputeExpression),
+					}
+				}),
+				emit(func(this *scpb.ColumnComputeExpression) *scop.UpdateTableBackReferencesInTypes {
+					if len(this.UsesTypeIDs) == 0 {
+						return nil
+					}
+					return &scop.UpdateTableBackReferencesInTypes{
+						TypeIDs:               this.UsesTypeIDs,
+						BackReferencedTableID: this.TableID,
+					}
+				}),
+				emit(func(this *scpb.ColumnComputeExpression) *scop.UpdateTableBackReferencesInSequences {
+					if len(this.UsesSequenceIDs) == 0 {
+						return nil
+					}
+					return &scop.UpdateTableBackReferencesInSequences{
+						SequenceIDs:            this.UsesSequenceIDs,
+						BackReferencedTableID:  this.TableID,
+						BackReferencedColumnID: this.ColumnID,
+					}
+				}),
+				emit(func(this *scpb.ColumnComputeExpression) *scop.AddTableColumnBackReferencesInFunctions {
+					if len(this.UsesFunctionIDs) == 0 {
+						return nil
+					}
+					return &scop.AddTableColumnBackReferencesInFunctions{
+						FunctionIDs:            this.UsesFunctionIDs,
+						BackReferencedTableID:  this.TableID,
+						BackReferencedColumnID: this.ColumnID,
+					}
+				}),
+			),
+		),
+		// SPILLY - I think we need multiple states.
+		toAbsent(
+			scpb.Status_PUBLIC,
+			to(scpb.Status_ABSENT,
+				emit(func(this *scpb.ColumnComputeExpression) *scop.RemoveColumnComputeExpression {
+					return nil
+					// SPILLY - only do this if the column is NOT being dropped. How to do that quickly though?
+					//return &scop.RemoveColumnComputeExpression{
+					//	TableID:  this.TableID,
+					//	ColumnID: this.ColumnID,
+					//}
+				}),
+				emit(func(this *scpb.ColumnComputeExpression) *scop.UpdateTableBackReferencesInTypes {
+					if len(this.UsesTypeIDs) == 0 {
+						return nil
+					}
+					return &scop.UpdateTableBackReferencesInTypes{
+						TypeIDs:               this.UsesTypeIDs,
+						BackReferencedTableID: this.TableID,
+					}
+				}),
+				emit(func(this *scpb.ColumnComputeExpression) *scop.UpdateTableBackReferencesInSequences {
+					if len(this.UsesSequenceIDs) == 0 {
+						return nil
+					}
+					return &scop.UpdateTableBackReferencesInSequences{
+						SequenceIDs:            this.UsesSequenceIDs,
+						BackReferencedTableID:  this.TableID,
+						BackReferencedColumnID: this.ColumnID,
+					}
+				}),
+				emit(func(this *scpb.ColumnComputeExpression) *scop.RemoveTableColumnBackReferencesInFunctions {
+					if len(this.UsesFunctionIDs) == 0 {
+						return nil
+					}
+					return &scop.RemoveTableColumnBackReferencesInFunctions{
+						FunctionIDs:            this.UsesFunctionIDs,
+						BackReferencedTableID:  this.TableID,
+						BackReferencedColumnID: this.ColumnID,
+					}
+				}),
+			),
+		),
+	)
+}

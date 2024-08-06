@@ -263,7 +263,11 @@ func newUndefinedOpclassError(opclass tree.Name) error {
 // checkColumnAccessibilityForIndex validate that any columns that are explicitly referenced in a column for storage or
 // as a key are either accessible and not system columns.
 func checkColumnAccessibilityForIndex(
-	colName string, column *scpb.Column, columnType *scpb.ColumnType, store bool,
+	colName string,
+	column *scpb.Column,
+	columnType *scpb.ColumnType,
+	columnCompute *scpb.ColumnComputeExpression,
+	store bool,
 ) {
 	if column.IsInaccessible {
 		panic(pgerror.Newf(
@@ -272,7 +276,7 @@ func checkColumnAccessibilityForIndex(
 			colName))
 	}
 
-	if columnType.IsVirtual && store {
+	if store && (columnType.IsVirtual || (columnCompute != nil && columnCompute.IsVirtual)) {
 		panic(pgerror.Newf(
 			pgcode.FeatureNotSupported,
 			"index cannot store virtual column %v", colName,
@@ -583,9 +587,10 @@ func addColumnsForSecondaryIndex(
 		colID := getColumnIDFromColumnName(b, tableID, colName, true /* required */)
 		columnTypeElem := mustRetrieveColumnTypeElem(b, tableID, colID)
 		columnElem := mustRetrieveColumnElem(b, tableID, colID)
+		colComputeElem := retrieveColumnComputeExpression(b, tableID, colID)
 		// Column should be accessible.
 		if columnNode.Expr == nil {
-			checkColumnAccessibilityForIndex(string(colName), columnElem, columnTypeElem, false)
+			checkColumnAccessibilityForIndex(string(colName), columnElem, columnTypeElem, colComputeElem, false)
 		}
 		keyColNames[i] = string(colName)
 		idxSpec.columns = append(idxSpec.columns, &scpb.IndexColumn{
@@ -647,7 +652,8 @@ func addColumnsForSecondaryIndex(
 		})
 		_, _, column := scpb.FindColumn(colElts)
 		columnTypeElem := mustRetrieveColumnTypeElem(b, tableID, column.ColumnID)
-		checkColumnAccessibilityForIndex(storingNode.String(), column, columnTypeElem, true)
+		colComputeElem := retrieveColumnComputeExpression(b, tableID, column.ColumnID)
+		checkColumnAccessibilityForIndex(storingNode.String(), column, columnTypeElem, colComputeElem, true)
 		c := &scpb.IndexColumn{
 			TableID:       idxSpec.secondary.TableID,
 			IndexID:       idxSpec.secondary.IndexID,
@@ -736,13 +742,24 @@ func maybeCreateAndAddShardCol(
 			TableID:                 tbl.TableID,
 			ColumnID:                shardColID,
 			TypeT:                   newTypeT(types.Int),
-			ComputeExpr:             b.WrapExpression(tbl.TableID, parsedExpr),
-			IsVirtual:               true,
 			IsNullable:              false,
 			ElementCreationMetadata: scdecomp.NewElementCreationMetadata(b.EvalCtx().Settings.Version.ActiveVersion(b)),
 		},
 		notNull: true,
 	}
+	wexpr := b.WrapExpression(tbl.TableID, parsedExpr)
+	if spec.colType.ElementCreationMetadata.In_24_3OrLater {
+		spec.compute = &scpb.ColumnComputeExpression{
+			TableID:    tbl.TableID,
+			ColumnID:   shardColID,
+			Expression: *wexpr,
+			IsVirtual:  true,
+		}
+	} else {
+		spec.colType.ComputeExpr = wexpr
+		spec.colType.IsVirtual = true
+	}
+
 	backing := addColumn(b, spec, n)
 	// Create a new check constraint for the hash sharded index column.
 	checkConstraintBucketValues := strings.Builder{}
@@ -843,8 +860,16 @@ func maybeCreateVirtualColumnForIndex(
 	// if it's a virtual column created for an index expression.
 	scpb.ForEachColumnType(elts, func(current scpb.Status, target scpb.TargetStatus, e *scpb.ColumnType) {
 		column := mustRetrieveColumnElem(b, e.TableID, e.ColumnID)
-		if target == scpb.ToPublic && e.ComputeExpr != nil && e.IsVirtual && column.IsInaccessible {
-			otherExpr, err := parser.ParseExpr(string(e.ComputeExpr.Expr))
+		computeExpr := retrieveColumnComputeExpression(b, e.TableID, e.ColumnID)
+		if target == scpb.ToPublic && column.IsInaccessible && ((computeExpr != nil && computeExpr.IsVirtual) ||
+			(computeExpr == nil && e.ComputeExpr != nil && e.IsVirtual)) {
+			var cexpr string
+			if computeExpr != nil {
+				cexpr = string(computeExpr.Expr)
+			} else {
+				cexpr = string(e.ComputeExpr.Expr)
+			}
+			otherExpr, err := parser.ParseExpr(cexpr)
 			if err != nil {
 				panic(err)
 			}

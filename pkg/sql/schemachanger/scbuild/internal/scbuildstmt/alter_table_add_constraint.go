@@ -789,6 +789,7 @@ func ensureColCanBeUsedInOutboundFK(
 	colNameElem := mustRetrieveColumnNameElem(b, tableID, columnID)
 	colTypeElem := mustRetrieveColumnTypeElem(b, tableID, columnID)
 	colElem := mustRetrieveColumnElem(b, tableID, columnID)
+	colComputeElem := retrieveColumnComputeExpression(b, tableID, columnID)
 
 	if colElem.IsInaccessible {
 		panic(pgerror.Newf(
@@ -798,7 +799,7 @@ func ensureColCanBeUsedInOutboundFK(
 		))
 	}
 
-	if colTypeElem.IsVirtual {
+	if colTypeElem.IsVirtual || (colComputeElem != nil && colComputeElem.IsVirtual) {
 		panic(unimplemented.NewWithIssuef(
 			59671, "virtual column %q cannot reference a foreign key",
 			colNameElem.Name,
@@ -809,7 +810,8 @@ func ensureColCanBeUsedInOutboundFK(
 	// actions that would try to change the computed value. Computed values cannot
 	// be altered directly, so attempts to set them to NULL or a DEFAULT value are
 	// blocked.
-	if colTypeElem.ComputeExpr != nil && actions.HasDisallowedActionForComputedFKCol() {
+	computeExpr := retrieveColumnComputeExpression(b, tableID, columnID)
+	if (computeExpr != nil || colTypeElem.ComputeExpr != nil) && actions.HasDisallowedActionForComputedFKCol() {
 		panic(sqlerrors.NewInvalidActionOnComputedFKColumnError(actions.HasUpdateAction()))
 	}
 }
@@ -820,6 +822,7 @@ func ensureColCanBeUsedInInboundFK(b BuildCtx, tableID catid.DescID, columnID ca
 	colNameElem := mustRetrieveColumnNameElem(b, tableID, columnID)
 	colTypeElem := mustRetrieveColumnTypeElem(b, tableID, columnID)
 	colElem := mustRetrieveColumnElem(b, tableID, columnID)
+	colComputeElem := retrieveColumnComputeExpression(b, tableID, columnID)
 
 	if colElem.IsInaccessible {
 		panic(pgerror.Newf(
@@ -828,7 +831,7 @@ func ensureColCanBeUsedInInboundFK(b BuildCtx, tableID catid.DescID, columnID ca
 			colNameElem.Name,
 		))
 	}
-	if colTypeElem.IsVirtual {
+	if colTypeElem.IsVirtual || (colComputeElem != nil && colComputeElem.IsVirtual) {
 		panic(unimplemented.NewWithIssuef(
 			59671, "virtual column %q cannot be referenced by a foreign key",
 			colNameElem.Name,

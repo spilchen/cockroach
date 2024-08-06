@@ -146,7 +146,6 @@ func alterTableAddColumn(
 		TableID:                 tbl.TableID,
 		ColumnID:                spec.col.ColumnID,
 		IsNullable:              desc.Nullable,
-		IsVirtual:               desc.Virtual,
 		ElementCreationMetadata: scdecomp.NewElementCreationMetadata(b.EvalCtx().Settings.Version.ActiveVersion(b)),
 	}
 
@@ -175,8 +174,18 @@ func alterTableAddColumn(
 		))
 	}
 	if desc.IsComputed() {
-		expr := b.ComputedColumnExpression(tbl, d)
-		spec.colType.ComputeExpr = b.WrapExpression(tbl.TableID, expr)
+		expr := b.WrapExpression(tbl.TableID, b.ComputedColumnExpression(tbl, d))
+		if spec.colType.ElementCreationMetadata.In_24_3OrLater {
+			spec.compute = &scpb.ColumnComputeExpression{
+				TableID:    tbl.TableID,
+				ColumnID:   spec.col.ColumnID,
+				Expression: *expr,
+				IsVirtual:  desc.Virtual,
+			}
+		} else {
+			spec.colType.ComputeExpr = expr
+			spec.colType.IsVirtual = desc.Virtual
+		}
 		if desc.Virtual {
 			b.IncrementSchemaChangeAddColumnQualificationCounter("virtual")
 		} else {
@@ -184,6 +193,11 @@ func alterTableAddColumn(
 		}
 	}
 	if d.HasColumnFamily() {
+		if desc.Virtual {
+			// SPILLY _ add test for this
+			panic(pgerror.Newf(pgcode.InvalidColumnDefinition,
+				"cannot define a column family for virtual column %q", d.Name))
+		}
 		elts := b.QueryByID(tbl.TableID)
 		var found bool
 		scpb.ForEachColumnFamily(elts, func(_ scpb.Status, target scpb.TargetStatus, cf *scpb.ColumnFamily) {
@@ -270,6 +284,7 @@ type addColumnSpec struct {
 	colType  *scpb.ColumnType
 	def      *scpb.ColumnDefaultExpression
 	onUpdate *scpb.ColumnOnUpdateExpression
+	compute  *scpb.ColumnComputeExpression
 	comment  *scpb.ColumnComment
 	unique   bool
 	notNull  bool
@@ -298,16 +313,19 @@ func addColumn(b BuildCtx, spec addColumnSpec, n tree.NodeFormatter) (backing *s
 		if spec.onUpdate != nil {
 			b.Add(spec.onUpdate)
 		}
+		if spec.compute != nil {
+			b.Add(spec.compute)
+		}
 		if spec.comment != nil {
 			b.Add(spec.comment)
 		}
 		// Don't need to modify primary indexes for virtual columns.
-		if spec.colType.IsVirtual {
+		if spec.colType.IsVirtual || (spec.compute != nil && spec.compute.IsVirtual) {
 			return getLatestPrimaryIndex(b, spec.tbl.TableID)
 		}
 
 		inflatedChain := getInflatedPrimaryIndexChain(b, spec.tbl.TableID)
-		if spec.def == nil && spec.colType.ComputeExpr == nil {
+		if spec.def == nil && spec.colType.ComputeExpr == nil && spec.compute == nil {
 			// Optimization opportunity: if we were to add a new column without default
 			// value nor computed expression, then we can just add the column to existing
 			// non-nil primary indexes without actually backfilling any data. This is
