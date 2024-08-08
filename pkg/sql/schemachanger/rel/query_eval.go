@@ -12,6 +12,7 @@ package rel
 
 import (
 	"reflect"
+	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/cockroach/pkg/util/intsets"
@@ -30,15 +31,31 @@ type evalContext struct {
 	// depth and cur relate to the join depth in the entities list.
 	depth, cur queryDepth
 
+	stats QueryStats
+
 	slots             []slot
 	filterSliceCaches map[int][]reflect.Value
 	curSubQuery       int
+}
+
+type QueryStats struct {
+	// The time that the query started.
+	StartTime time.Time
+	// The number of results found by the query.
+	ResultsFound int
+	// When evaluating the clauses of a dep rule, this will be the index of the
+	// last clause evaluated. If ResultsFound is non-zero, this will match the
+	// number of clauses in the rule. If ResultsFound is zero, this will indicate
+	// the clause that did not evaluate to true. If you were expecting the rule to
+	// match, this can help as a debug aid to know what part is not matching.
+	LastClauseEvaluated int
 }
 
 func newEvalContext(q *Query) *evalContext {
 	return &evalContext{
 		q:     q,
 		depth: queryDepth(len(q.entities)),
+		stats: QueryStats{},
 		slots: cloneSlots(q.slots),
 		facts: q.facts,
 	}
@@ -112,6 +129,7 @@ func (ec *evalContext) iterateNext() error {
 		if ec.haveUnboundSlots() || ec.checkFilters() {
 			return nil
 		}
+		ec.stats.ResultsFound++
 		return ec.ri((*evalResult)(ec))
 	}
 
@@ -211,6 +229,9 @@ func (ec *evalContext) visit(e entity) error {
 	// Step down to the next variable, or, if at the bottom, ensure that
 	// all the required slots are filled and pass the result to the caller.
 	ec.cur++
+	// For debug purposes, we keep track of the highest depth. If a rule doesn't
+	// apply at all, this will tell us what clause was the last one to apply.
+	ec.stats.LastClauseEvaluated++
 	defer func() { ec.cur-- }()
 	return ec.iterateNext()
 }

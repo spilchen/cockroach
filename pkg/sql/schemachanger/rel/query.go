@@ -16,6 +16,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/cockroach/pkg/util/intsets"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
+	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 )
 
@@ -94,10 +95,21 @@ func NewQuery(sc *Schema, clauses ...Clause) (_ *Query, err error) {
 // Iterate will call the result iterator for every valid binding of each
 // distinct entity variable such that all the variables in the query are
 // bound and all filters passing.
-func (q *Query) Iterate(db *Database, ri ResultIterator) error {
+func (q *Query) Iterate(db *Database, stats *QueryStats, ri ResultIterator) error {
 	ec := q.getEvalContext()
 	defer q.putEvalContext(ec)
-	return ec.Iterate(db, ri)
+
+	// Early out if not returning stats.
+	if stats == nil {
+		return ec.Iterate(db, ri)
+	}
+
+	ec.stats.StartTime = timeutil.Now()
+	if err := ec.Iterate(db, ri); err != nil {
+		return err
+	}
+	*stats = ec.stats
+	return nil
 }
 
 // getEvalContext grabs a cached evalContext from the query
@@ -110,6 +122,7 @@ func (q *Query) getEvalContext() *evalContext {
 		return ec
 	}
 	if ec := getCachedEvalContext(); ec != nil {
+		ec.stats = QueryStats{}
 		return ec
 	}
 	return newEvalContext(q)
