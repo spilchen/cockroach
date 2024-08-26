@@ -6,6 +6,7 @@ go_library(
     importpath = "github.com/cockroachdb/cockroach/pkg/server/license",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/ccl/utilccl/licenseccl",
         "//pkg/keys",
         "//pkg/sql/catalog/descs",
         "//pkg/sql/isql",

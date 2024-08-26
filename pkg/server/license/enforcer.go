@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cockroachdb/cockroach/pkg/ccl/utilccl/licenseccl"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
@@ -41,6 +42,14 @@ type Enforcer struct {
 	// startTime is the time when the enforcer was created. This is used to seed
 	// the grace period init timestamp if it's not set in the KV.
 	startTime time.Time
+
+	// licenseRequiresTelemetry will be true if the license requires that we send
+	// periodic telemetry data.
+	licenseRequiresTelemetry atomic.Bool
+
+	// gracePeriodEndTS tracks when the grace period ends and throttling begins.
+	// For licenses without throttling, this value will be 0.
+	gracePeriodEndTS atomic.Int64
 }
 
 type TestingKnobs struct {
@@ -118,4 +127,77 @@ func (e *Enforcer) getStartTime() time.Time {
 		return *e.TestingKnobs.OverrideStartTime
 	}
 	return e.startTime
+}
+
+func (e *Enforcer) refreshForLicense(license *licenseccl.License) {
+	// SPILLY - call this function and add a callback for when the license changes
+	// No license is used.
+	if license == nil {
+		e.storeNewGracePeriodEndDate(e.GetClusterInitTS(), 7*24*time.Hour)
+		e.licenseRequiresTelemetry.Store(false)
+		return
+	}
+
+	switch license.Type {
+	case licenseccl.License_Trial:
+		e.storeNewGracePeriodEndDate(timeutil.Unix(license.ValidUntilUnixSec, 0), 7*24*time.Hour)
+		e.licenseRequiresTelemetry.Store(true)
+	case licenseccl.License_Free:
+		e.storeNewGracePeriodEndDate(timeutil.Unix(license.ValidUntilUnixSec, 0), 30*24*time.Hour)
+		e.licenseRequiresTelemetry.Store(true)
+	default:
+		e.storeNewGracePeriodEndDate(timeutil.UnixEpoch, 0)
+		e.licenseRequiresTelemetry.Store(false)
+	}
+}
+
+func (e *Enforcer) storeNewGracePeriodEndDate(start time.Time, duration time.Duration) {
+	ts := start.Add(duration)
+	e.gracePeriodEndTS.Store(ts.UnixMicro()) // SPILLY - is correct?
+}
+
+func (e *Enforcer) getMaxOpenTransactions() int64 {
+	// SPILLY - can add check for env var.
+	return 5
+}
+
+func (e *Enforcer) calculateGracePeriodEnd() *time.Time {
+	if e.gracePeriodEndTS.Load() == 0 {
+		return nil
+	}
+	ts := timeutil.FromUnixMicros(e.gracePeriodEndTS.Load())
+	return &ts
+}
+
+func (e *Enforcer) getTimestampWhenTelemetryDataIsNeeded() *time.Time {
+	if !e.licenseRequiresTelemetry.Load() {
+		return nil
+	}
+
+	// SPILLY - we need access to the diagnostics reporting to get the timestamp
+	// of when the last telemtry data was received.
+	lastTelemetryDataReceived := timeutil.Now()
+	throttleTS := lastTelemetryDataReceived.Add(7 * 24 * time.Hour)
+	return &throttleTS
+}
+
+// FailIfThrottled will check the current state of things and return an error if
+// throttling is active.
+func (e *Enforcer) FailIfThrottled(txnsOpened int64) error {
+	// Early out if the number of transactions is below the max allowed.
+	if txnsOpened < e.getMaxOpenTransactions() {
+		return nil
+	}
+
+	// SPILLY - add testing knob to control this timestamp. This can be used in unit tests.
+	now := timeutil.Now()
+	gracePeriodEnd := e.calculateGracePeriodEnd()
+	if gracePeriodEnd != nil && now.After(*gracePeriodEnd) {
+		return errors.New("throttle SPILLY error")
+	}
+
+	if ts := e.getTimestampWhenTelemetryDataIsNeeded(); ts != nil && now.After(*ts) {
+		return errors.New("throttle SPILLY because no telemetry")
+	}
+	return nil
 }
