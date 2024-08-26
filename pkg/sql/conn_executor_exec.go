@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/concurrency/isolation"
 	"github.com/cockroachdb/cockroach/pkg/multitenant/multitenantcpu"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/server/license"
 	"github.com/cockroachdb/cockroach/pkg/server/telemetry"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql/appstatspb"
@@ -500,6 +501,13 @@ func (ex *connExecutor) execStmtInOpenState(
 						"the maximum number of open transactions is %d", maxOpen,
 					))
 				}
+			}
+
+			// Enforce license policies. Throttling can occur if there is no valid
+			// license or if it has expired.
+			licenseEnforcer := license.GetEnforcerInstance()
+			if err := licenseEnforcer.MaybeFailIfThrottled(maxOpen); err != nil {
+				return makeErrEvent(err)
 			}
 		}
 	}

@@ -8,6 +8,7 @@ go_library(
     deps = [
         "//pkg/ccl/utilccl/licenseccl",
         "//pkg/keys",
+        "//pkg/server/diagnostics",
         "//pkg/sql/catalog/descs",
         "//pkg/sql/isql",
         "//pkg/util/log",
@@ -28,6 +29,7 @@ go_test(
         "//pkg/security/securitytest",
         "//pkg/server",
         "//pkg/sql",
+        "//pkg/server/diagnostics",
         "//pkg/sql/catalog/descs",
         "//pkg/testutils/serverutils",
         "//pkg/testutils/testcluster",

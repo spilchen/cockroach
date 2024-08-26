@@ -1059,7 +1059,7 @@ func newSQLServer(ctx context.Context, cfg sqlServerArgs) (*SQLServer, error) {
 		NodeDescs:                  cfg.nodeDescs,
 		TenantCapabilitiesReader:   cfg.tenantCapabilitiesReader,
 		CidrLookup:                 cfg.BaseConfig.CidrLookup,
-		LicenseEnforcer:            license.GetEnforcerInstance(),
+		//LicenseEnforcer:            license.GetEnforcerInstance(), // SPILLY
 	}
 
 	if codec.ForSystemTenant() {
@@ -1921,12 +1921,13 @@ func (s *SQLServer) startLicenseEnforcer(ctx context.Context, knobs base.Testing
 	// it requires access to the system keyspace. For secondary tenants, this struct
 	// is shared to provide access to the values cached from the KV read.
 	if s.execCfg.Codec.ForSystemTenant() {
+		licenseEnforcer := license.GetEnforcerInstance()
 		if knobs.Server != nil {
-			s.execCfg.LicenseEnforcer.TestingKnobs = &knobs.Server.(*TestingKnobs).LicenseTestingKnobs
+			licenseEnforcer.TestingKnobs = &knobs.Server.(*TestingKnobs).LicenseTestingKnobs
 		}
 		err := startup.RunIdempotentWithRetry(ctx, s.stopper.ShouldQuiesce(), "license enforcer start",
 			func(ctx context.Context) error {
-				return s.execCfg.LicenseEnforcer.Start(ctx, s.internalDB)
+				return licenseEnforcer.Start(ctx, s.internalDB, s.diagnosticsReporter)
 			})
 		// This is not a critical component. If it fails to start, we log a warning
 		// rather than prevent the entire server from starting.

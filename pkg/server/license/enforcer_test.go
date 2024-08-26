@@ -16,6 +16,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/server"
+	"github.com/cockroachdb/cockroach/pkg/server/diagnostics"
 	"github.com/cockroachdb/cockroach/pkg/server/license"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
@@ -57,7 +58,8 @@ func TestGracePeriodInitTSCache(t *testing.T) {
 	// time used when the enforcer was created.
 	require.Equal(t, ts2, enforcer.GetGracePeriodInitTS())
 	// Start the enforcer to read the timestamp from the KV.
-	err := enforcer.Start(ctx, srv.SystemLayer().InternalDB().(descs.DB))
+	mockDiagnostics := diagnostics.Reporter{}
+	err := enforcer.Start(ctx, srv.SystemLayer().InternalDB().(descs.DB), &mockDiagnostics)
 	require.NoError(t, err)
 	require.Equal(t, ts1, enforcer.GetGracePeriodInitTS())
 

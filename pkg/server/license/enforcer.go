@@ -12,12 +12,14 @@ package license
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/utilccl/licenseccl"
 	"github.com/cockroachdb/cockroach/pkg/keys"
+	"github.com/cockroachdb/cockroach/pkg/server/diagnostics"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -33,6 +35,11 @@ type Enforcer struct {
 
 	// TestingKnobs are used to control the behavior of the enforcer for testing.
 	TestingKnobs *TestingKnobs
+
+	// diagnosticsReporter is a pointer to the diagnostics.Reporter component.
+	// We need this to know if telemetry data is being sent, which is a
+	// requirement for some license types.
+	diagnosticsReporter *diagnostics.Reporter
 
 	// gracePeriodInitTS is the timestamp of when the cluster first ran on a
 	// version that requires a license. It is stored as the number of seconds
@@ -83,8 +90,12 @@ func newEnforcer() *Enforcer {
 // Start will load the necessary metadata for the enforcer. It reads from the
 // KV license metadata and will populate any missing data as needed. The DB
 // passed in must have access to the system tenant.
-func (e *Enforcer) Start(ctx context.Context, db descs.DB) error {
+func (e *Enforcer) Start(
+	ctx context.Context, db descs.DB, diagnosticsReporter *diagnostics.Reporter,
+) error {
 	e.db = db
+	e.diagnosticsReporter = diagnosticsReporter
+
 	return e.db.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
 		// We could use a conditional put for this logic. However, we want to read
 		// and cache the value, and the common case is that the value will be read.
@@ -133,7 +144,7 @@ func (e *Enforcer) refreshForLicense(license *licenseccl.License) {
 	// SPILLY - call this function and add a callback for when the license changes
 	// No license is used.
 	if license == nil {
-		e.storeNewGracePeriodEndDate(e.GetClusterInitTS(), 7*24*time.Hour)
+		e.storeNewGracePeriodEndDate(e.GetGracePeriodInitTS(), 7*24*time.Hour)
 		e.licenseRequiresTelemetry.Store(false)
 		return
 	}
@@ -174,16 +185,14 @@ func (e *Enforcer) getTimestampWhenTelemetryDataIsNeeded() *time.Time {
 		return nil
 	}
 
-	// SPILLY - we need access to the diagnostics reporting to get the timestamp
-	// of when the last telemtry data was received.
-	lastTelemetryDataReceived := timeutil.Now()
+	lastTelemetryDataReceived := time.Unix(e.diagnosticsReporter.LastSuccessfulTelemetryPing.Load(), 0)
 	throttleTS := lastTelemetryDataReceived.Add(7 * 24 * time.Hour)
 	return &throttleTS
 }
 
-// FailIfThrottled will check the current state of things and return an error if
+// MaybeFailIfThrottled will check the current state of things and return an error if
 // throttling is active.
-func (e *Enforcer) FailIfThrottled(txnsOpened int64) error {
+func (e *Enforcer) MaybeFailIfThrottled(txnsOpened int64) error {
 	// Early out if the number of transactions is below the max allowed.
 	if txnsOpened < e.getMaxOpenTransactions() {
 		return nil
