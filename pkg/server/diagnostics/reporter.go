@@ -288,6 +288,13 @@ func (r *Reporter) CreateReport(
 	return &info
 }
 
+// GetLastSuccessfulTelemetryPing returns the timestamp of the most recent
+// successful contact with the registration server.
+func (r *Reporter) GetLastSuccessfulTelemetryPing() time.Time {
+	ts := time.Unix(r.LastSuccessfulTelemetryPing.Load(), 0)
+	return ts
+}
+
 // populateEnvironment fills fields in the given environment, such as the
 // hardware, OS, binary, and location of the CRDB node or SQL instance.
 func (r *Reporter) populateEnvironment(

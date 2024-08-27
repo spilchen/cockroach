@@ -13,10 +13,10 @@ package license_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/server"
-	"github.com/cockroachdb/cockroach/pkg/server/diagnostics"
 	"github.com/cockroachdb/cockroach/pkg/server/license"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
@@ -26,6 +26,12 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/stretchr/testify/require"
 )
+
+type mockDiagnosticsReporter struct {
+	lastPingTime time.Time
+}
+
+func (m mockDiagnosticsReporter) GetLastSuccessfulTelemetryPing() time.Time { return m.lastPingTime }
 
 func TestGracePeriodInitTSCache(t *testing.T) {
 	defer leaktest.AfterTest(t)()
@@ -58,8 +64,7 @@ func TestGracePeriodInitTSCache(t *testing.T) {
 	// time used when the enforcer was created.
 	require.Equal(t, ts2, enforcer.GetGracePeriodInitTS())
 	// Start the enforcer to read the timestamp from the KV.
-	mockDiagnostics := diagnostics.Reporter{}
-	err := enforcer.Start(ctx, srv.SystemLayer().InternalDB().(descs.DB), &mockDiagnostics)
+	err := enforcer.Start(ctx, srv.SystemLayer().InternalDB().(descs.DB), &mockDiagnosticsReporter{lastPingTime: ts1})
 	require.NoError(t, err)
 	require.Equal(t, ts1, enforcer.GetGracePeriodInitTS())
 

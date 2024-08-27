@@ -8,11 +8,13 @@ go_library(
     deps = [
         "//pkg/ccl/utilccl/licenseccl",
         "//pkg/keys",
-        "//pkg/server/diagnostics",
         "//pkg/sql/catalog/descs",
         "//pkg/sql/isql",
+        "//pkg/sql/pgwire/pgcode",
+        "//pkg/sql/pgwire/pgerror",
         "//pkg/util/log",
         "//pkg/util/timeutil",
+        "@com_github_cockroachdb_errors//:errors",
     ],
 )
 

@@ -506,7 +506,7 @@ func (ex *connExecutor) execStmtInOpenState(
 			// Enforce license policies. Throttling can occur if there is no valid
 			// license or if it has expired.
 			licenseEnforcer := license.GetEnforcerInstance()
-			if err := licenseEnforcer.MaybeFailIfThrottled(maxOpen); err != nil {
+			if err := licenseEnforcer.MaybeFailIfThrottled(ctx, maxOpen); err != nil {
 				return makeErrEvent(err)
 			}
 		}
