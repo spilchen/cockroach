@@ -56,18 +56,21 @@ type Enforcer struct {
 	licenseRequiresTelemetry atomic.Bool
 
 	// gracePeriodEndTS tracks when the grace period ends and throttling begins.
-	// For licenses without throttling, this value will be 0.
+	// For licenses without throttling, this value will be 0. The value stored
+	// is the number of seconds since the unix epoch.
 	gracePeriodEndTS atomic.Int64
 
 	// hasLicense is true if any license is installed.
 	hasLicense atomic.Bool
 
 	// lastLicenseThrottlingLogTime keeps track of the last time we logged a
-	// message because we had to throttle due to a license issue.
+	// message because we had to throttle due to a license issue. The value
+	// stored is the number of seconds since the unix epoch.
 	lastLicenseThrottlingLogTime atomic.Int64
 
 	// lastTelemetryThrottlingLogTime keeps track of the last time we logged a
-	// message because we had to throttle due to a telemetry issue.
+	// message because we had to throttle due to a telemetry issue. The value
+	// stored is the number of seconds since the unix epoch.
 	lastTelemetryThrottlingLogTime atomic.Int64
 }
 
@@ -226,7 +229,7 @@ func (e *Enforcer) refreshForLicense(license *licenseccl.License) {
 
 func (e *Enforcer) storeNewGracePeriodEndDate(start time.Time, duration time.Duration) {
 	ts := start.Add(duration)
-	e.gracePeriodEndTS.Store(ts.UnixMicro()) // SPILLY - is correct?
+	e.gracePeriodEndTS.Store(ts.Unix())
 }
 
 // getMaxOpenTransactions returns the number of open transactions allowed before
@@ -243,8 +246,7 @@ func (e *Enforcer) calculateGracePeriodEnd() *time.Time {
 	if e.gracePeriodEndTS.Load() == 0 {
 		return nil
 	}
-	// SPILLY - it probably should be unix
-	ts := timeutil.FromUnixMicros(e.gracePeriodEndTS.Load())
+	ts := timeutil.Unix(e.gracePeriodEndTS.Load(), 0)
 	return &ts
 }
 
