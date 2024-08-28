@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/utilccl/licenseccl"
-	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
@@ -27,24 +26,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
-)
-
-var enterpriseLicense = settings.RegisterStringSetting(
-	settings.SystemVisible,
-	"enterprise.license",
-	"the encoded cluster license",
-	"",
-	settings.WithValidateString(
-		func(sv *settings.Values, s string) error {
-			_, err := decode(s)
-			return err
-		},
-	),
-	// Even though string settings are non-reportable by default, we
-	// still mark them explicitly in case a future code change flips the
-	// default.
-	settings.WithReportable(false),
-	settings.WithPublic,
 )
 
 // enterpriseStatus determines whether the cluster is enabled
@@ -156,7 +137,7 @@ func UpdateMetricOnLicenseChange(
 	ts timeutil.TimeSource,
 	stopper *stop.Stopper,
 ) error {
-	enterpriseLicense.SetOnChange(&st.SV, func(ctx context.Context) {
+	licenseccl.EnterpriseLicense.SetOnChange(&st.SV, func(ctx context.Context) {
 		updateMetricWithLicenseTTL(ctx, st, metric, ts)
 	})
 	return stopper.RunAsyncTask(ctx, "write-license-expiry-metric", func(ctx context.Context) {
@@ -235,7 +216,7 @@ func checkEnterpriseEnabledAt(
 // to cache the decoded license (if any). The returned license must not be
 // modified by the caller.
 func getLicense(st *cluster.Settings) (*licenseccl.License, error) {
-	str := enterpriseLicense.Get(&st.SV)
+	str := licenseccl.EnterpriseLicense.Get(&st.SV)
 	if str == "" {
 		return nil, nil
 	}

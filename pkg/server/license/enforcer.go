@@ -18,6 +18,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/utilccl/licenseccl"
 	"github.com/cockroachdb/cockroach/pkg/keys"
+	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
@@ -113,10 +114,16 @@ func newEnforcer() *Enforcer {
 // KV license metadata and will populate any missing data as needed. The DB
 // passed in must have access to the system tenant.
 func (e *Enforcer) Start(
-	ctx context.Context, db descs.DB, diagnosticsReader DiagnosticsReader,
+	ctx context.Context, sv *settings.Values, db descs.DB, diagnosticsReader DiagnosticsReader,
 ) error {
 	e.db = db
 	e.diagnosticsReader = diagnosticsReader
+
+	// Add a hook into the license setting so that we refresh our state whenever
+	// the license changes.
+	licenseccl.EnterpriseLicense.SetOnChange(sv, func(ctx context.Context) {
+		e.refreshForLicenseChange(ctx, licenseccl.EnterpriseLicense.Get(sv))
+	})
 
 	return e.db.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
 		// We could use a conditional put for this logic. However, we want to read
@@ -199,18 +206,23 @@ func (e *Enforcer) getStartTime() time.Time {
 	return e.startTime
 }
 
-// refreshForLicense resets the state when the license changes. We cache certain
+// RefreshEnforcerForLicenseChange resets the state when the license changes. We cache certain
 // information to optimize enforcement. Instead of reading the license from the
 // settings, unmarshaling it, and checking its type and expiry each time,
 // caching the information improves efficiency since licenses change infrequently.
-func (e *Enforcer) refreshForLicense(license *licenseccl.License) {
-	e.hasLicense.Store(license != nil)
+func (e *Enforcer) refreshForLicenseChange(ctx context.Context, licenseStr string) {
+	e.hasLicense.Store(len(licenseStr) != 0)
 
-	// SPILLY - call this function and add a callback for when the license changes
 	// No license is used.
-	if license == nil {
+	if len(licenseStr) == 0 {
 		e.storeNewGracePeriodEndDate(e.GetGracePeriodInitTS(), 7*24*time.Hour)
 		e.licenseRequiresTelemetry.Store(false)
+		return
+	}
+
+	license, err := licenseccl.Decode(licenseStr)
+	if err != nil {
+		log.Errorf(ctx, "unable to decode license: %v", err)
 		return
 	}
 

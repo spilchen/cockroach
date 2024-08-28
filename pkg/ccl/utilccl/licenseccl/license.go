@@ -12,8 +12,37 @@ import (
 	"encoding/base64"
 	"strings"
 
+	"github.com/cockroachdb/cockroach/pkg/settings"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/errors"
+)
+
+// EnterpriseLicense is the setting that stores the license.
+//
+// TODO(spilchen): move this setting to pkg/server and don't export it like we
+// used to do before. This has to live here until we do cleanup and/or possible
+// removal of the ccl/utilccl package.
+var EnterpriseLicense = settings.RegisterStringSetting(
+	settings.SystemVisible,
+	"enterprise.license",
+	"the encoded cluster license",
+	"",
+	settings.WithValidateString(
+		func(sv *settings.Values, s string) error {
+			_, err := Decode(s)
+			if err != nil {
+				return pgerror.WithCandidateCode(err, pgcode.Syntax)
+			}
+			return nil
+		},
+	),
+	// Even though string settings are non-reportable by default, we
+	// still mark them explicitly in case a future code change flips the
+	// default.
+	settings.WithReportable(false),
+	settings.WithPublic,
 )
 
 // LicensePrefix is a prefix on license strings to make them easily recognized.

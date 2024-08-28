@@ -8,6 +8,7 @@ go_library(
     deps = [
         "//pkg/ccl/utilccl/licenseccl",
         "//pkg/keys",
+        "//pkg/settings",
         "//pkg/sql/catalog/descs",
         "//pkg/sql/isql",
         "//pkg/sql/pgwire/pgcode",
