@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
+	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
@@ -78,6 +79,18 @@ type TestingKnobs struct {
 	// OverrideStartTime if set, overrides the time that's used to seed the
 	// grace period init timestamp.
 	OverrideStartTime *time.Time
+
+	// GracePeriodEndTime, if set, overrides the default duration of the grace
+	// period.
+	GracePeriodLength *time.Duration
+
+	// MaxOpenTxnsDuringThrottle, if set, overrides the maximum number of open
+	// transactions when throttling is active.
+	MaxOpenTxnsDuringThrottle *int64
+
+	// OverrideThrottleCheckTime if set, overrides the timestamp used when
+	// checking if throttling is active.
+	OverrideThrottleCheckTime *time.Time
 }
 
 // DiagnosticsReader is the interface to diagnostics reporter.
@@ -89,23 +102,6 @@ type DiagnosticsReader interface {
 
 var instance *Enforcer
 var once sync.Once
-
-// RegisterCallbackOnLicenseChange is a pointer to a function that will register
-// a callback when the license changes. This is initially empty here. When
-// initializing the ccl package, this variable will be set to a valid function.
-var RegisterCallbackOnLicenseChange = func(st *cluster.Settings) {}
-
-// LicType is the type to define the license type. The license types are in the
-// license protobuf. But since that is in ccl, we cannot import it here. So, we
-// redefine some of the types for a callback between ccl and the server.
-type LicType int
-
-const (
-	LicTypeNone LicType = iota
-	LicTypeTrial
-	LicTypeFree
-	LicTypeEnterprise
-)
 
 // GetEnforcerInstance returns the singleton instance of the Enforcer. The
 // Enforcer is responsible for license enforcement policies.
@@ -126,14 +122,16 @@ func newEnforcer() *Enforcer {
 	}
 }
 
+// SetDiagnosticsReader will set the pointer to the diagnostic reader.
+func (e *Enforcer) SetDiagnosticsReader(diagnosticsReader DiagnosticsReader) {
+	e.diagnosticsReader = diagnosticsReader
+}
+
 // Start will load the necessary metadata for the enforcer. It reads from the
 // KV license metadata and will populate any missing data as needed. The DB
 // passed in must have access to the system tenant.
-func (e *Enforcer) Start(
-	ctx context.Context, st *cluster.Settings, db descs.DB, diagnosticsReader DiagnosticsReader,
-) error {
+func (e *Enforcer) Start(ctx context.Context, st *cluster.Settings, db descs.DB) error {
 	e.db = db
-	e.diagnosticsReader = diagnosticsReader
 
 	// Add a hook into the license setting so that we refresh our state whenever
 	// the license changes.
@@ -181,8 +179,7 @@ func (e *Enforcer) MaybeFailIfThrottled(ctx context.Context, txnsOpened int64) (
 		return
 	}
 
-	// SPILLY - add testing knob to control this timestamp. This can be used in unit tests.
-	now := timeutil.Now()
+	now := e.getThrottleCheckTime()
 	if gracePeriodEnd := e.calculateGracePeriodEnd(); gracePeriodEnd != nil && now.After(*gracePeriodEnd) {
 		if e.hasLicense.Load() {
 			err = errors.WithHintf(pgerror.Newf(pgcode.CCLValidLicenseRequired,
@@ -219,13 +216,13 @@ func (e *Enforcer) RefreshForLicenseChange(licType LicType, licenseExpiry time.T
 
 	switch licType {
 	case LicTypeNone:
-		e.storeNewGracePeriodEndDate(e.GetGracePeriodInitTS(), 7*24*time.Hour)
+		e.storeNewGracePeriodEndDate(e.GetGracePeriodInitTS(), e.getGracePeriodLength(7*24*time.Hour))
 		e.licenseRequiresTelemetry.Store(false)
-	case LicTypeTrial:
-		e.storeNewGracePeriodEndDate(licenseExpiry, 7*24*time.Hour)
-		e.licenseRequiresTelemetry.Store(true)
 	case LicTypeFree:
-		e.storeNewGracePeriodEndDate(licenseExpiry, 30*24*time.Hour)
+		e.storeNewGracePeriodEndDate(licenseExpiry, e.getGracePeriodLength(7*24*time.Hour))
+		e.licenseRequiresTelemetry.Store(true)
+	case LicTypeTrial:
+		e.storeNewGracePeriodEndDate(licenseExpiry, e.getGracePeriodLength(30*24*time.Hour))
 		e.licenseRequiresTelemetry.Store(true)
 	default:
 		e.storeNewGracePeriodEndDate(timeutil.UnixEpoch, 0)
@@ -242,16 +239,48 @@ func (e *Enforcer) getStartTime() time.Time {
 	return e.startTime
 }
 
+// getThrottleCheckTime returns the time to use when checking if we should
+// throttle the new transaction.
+func (e *Enforcer) getThrottleCheckTime() time.Time {
+	if e.TestingKnobs != nil && e.TestingKnobs.OverrideThrottleCheckTime != nil {
+		return *e.TestingKnobs.OverrideThrottleCheckTime
+	}
+	return timeutil.Now()
+}
+
 func (e *Enforcer) storeNewGracePeriodEndDate(start time.Time, duration time.Duration) {
 	ts := start.Add(duration)
 	e.gracePeriodEndTS.Store(ts.Unix())
 }
 
+// getGracePeriodLength is a helper to pick the grace period length, while
+// accounting for testing knobs and/or environment variables.
+func (e *Enforcer) getGracePeriodLength(defaultAndMaxLength time.Duration) time.Duration {
+	newLength := envutil.EnvOrDefaultDuration("COCKROACH_LICENSE_GRACE_PERIOD_DURATION", defaultAndMaxLength)
+	if e.TestingKnobs != nil && e.TestingKnobs.GracePeriodLength != nil {
+		newLength = *e.TestingKnobs.GracePeriodLength
+	}
+	// We only allow shortening of the grace period for testing purposes. Ensure
+	// it can never increase.
+	if defaultAndMaxLength < newLength {
+		return defaultAndMaxLength
+	}
+	return newLength
+}
+
 // getMaxOpenTransactions returns the number of open transactions allowed before
 // throttling takes affect.
 func (e *Enforcer) getMaxOpenTransactions() int64 {
-	// SPILLY - can add check for env var.
-	return 5
+	const defaultMaxOpenTransactions = 5
+	newLimit := envutil.EnvOrDefaultInt64("COCKROACH_MAX_OPEN_TXNS_DURING_THROTTLE", defaultMaxOpenTransactions)
+	if e.TestingKnobs != nil && e.TestingKnobs.MaxOpenTxnsDuringThrottle != nil {
+		newLimit = *e.TestingKnobs.MaxOpenTxnsDuringThrottle
+	}
+	// Ensure we can never increase the number of open transactions allowed.
+	if newLimit > defaultMaxOpenTransactions {
+		return defaultMaxOpenTransactions
+	}
+	return newLimit
 }
 
 // calculateGracePeriodEnd returns the timestamp marking the end of the grace period.

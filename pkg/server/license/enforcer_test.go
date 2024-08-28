@@ -12,6 +12,8 @@ package license_test
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"testing"
 	"time"
 
@@ -64,8 +66,8 @@ func TestGracePeriodInitTSCache(t *testing.T) {
 	// time used when the enforcer was created.
 	require.Equal(t, ts2, enforcer.GetGracePeriodInitTS())
 	// Start the enforcer to read the timestamp from the KV.
-	err := enforcer.Start(ctx, srv.ClusterSettings(),
-		srv.SystemLayer().InternalDB().(descs.DB), &mockDiagnosticsReporter{lastPingTime: ts1})
+	enforcer.SetDiagnosticsReader(&mockDiagnosticsReporter{lastPingTime: ts1})
+	err := enforcer.Start(ctx, srv.ClusterSettings(), srv.SystemLayer().InternalDB().(descs.DB))
 	require.NoError(t, err)
 	require.Equal(t, ts1, enforcer.GetGracePeriodInitTS())
 
@@ -73,4 +75,75 @@ func TestGracePeriodInitTSCache(t *testing.T) {
 	// work for the system tenant and secondary tenant.
 	require.Equal(t, ts1, srv.SystemLayer().ExecutorConfig().(sql.ExecutorConfig).LicenseEnforcer.GetGracePeriodInitTS())
 	require.Equal(t, ts1, srv.ApplicationLayer().ExecutorConfig().(sql.ExecutorConfig).LicenseEnforcer.GetGracePeriodInitTS())
+}
+
+func TestThrottle(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	ctx := context.Background()
+
+	const UnderTxnThreshold = 3
+	const OverTxnThreshold = 7
+
+	// SPILLY - come up with shorter variable names
+	t0 := time.Unix(1724884362, 0)
+	t1d := t0.Add(24 * time.Hour)
+	t10d := t0.Add(10 * 24 * time.Hour)
+	t15d := t0.Add(15 * 24 * time.Hour)
+	t30d := t0.Add(30 * 24 * time.Hour)
+	t45d := t0.Add(40 * 24 * time.Hour)
+
+	// SPILLY - do we need to override the grace period duration? We have full
+	// control over the check time. Maybe remove that if not needed. Any other
+	// overrides that we don't need? Max transactions.
+
+	// SPILLY - finish with these unit tests
+
+	for i, tc := range []struct {
+		openTxnsCount         int64
+		licType               license.LicType
+		gracePeriodInit       time.Time
+		lastTelemetryPingTime time.Time
+		licExpiry             time.Time
+		checkTs               time.Time
+		expectedErrRegex      string
+	}{
+		// Expired free license but under the transaction threshold
+		{UnderTxnThreshold, license.LicTypeFree, t0, t1d, t30d, t45d, ""},
+		// Expired trial license but under the transaction threshold
+		{UnderTxnThreshold, license.LicTypeTrial, t0, t30d, t30d, t45d, ""},
+		// Over the transaction threshold but not expired
+		{OverTxnThreshold, license.LicTypeFree, t0, t10d, t45d, t10d, ""},
+		// Expired free license, past the grace period
+		{OverTxnThreshold, license.LicTypeFree, t0, t30d, t10d, t30d, "License expired"},
+		// Expired free license, but not past the grace period
+		{OverTxnThreshold, license.LicTypeFree, t0, t30d, t10d, t15d, ""},
+		// Valid free license, but telemetry ping hasn't been received in 5 days.
+		{OverTxnThreshold, license.LicTypeFree, t0, t10d, t45d, t15d, ""},
+		// Valid free license, but telemetry ping hasn't been received in 20 days.
+		{OverTxnThreshold, license.LicTypeFree, t0, t10d, t45d, t30d, "diagnostic reporting"},
+	} {
+		t.Run(fmt.Sprintf("test %d", i), func(t *testing.T) {
+			e := license.Enforcer{
+				TestingKnobs: &license.TestingKnobs{
+					OverrideStartTime:         &tc.gracePeriodInit,
+					OverrideThrottleCheckTime: &tc.checkTs,
+				},
+			}
+			e.SetDiagnosticsReader(&mockDiagnosticsReporter{
+				lastPingTime: tc.lastTelemetryPingTime,
+			})
+			e.RefreshForLicenseChange(tc.licType, tc.licExpiry)
+			err := e.MaybeFailIfThrottled(ctx, tc.openTxnsCount)
+			if tc.expectedErrRegex == "" {
+				require.NoError(t, err)
+			} else {
+				re := regexp.MustCompile(tc.expectedErrRegex)
+				match := re.MatchString(err.Error())
+				require.NotNil(t, match, "Error text %q doesn't match the expected regexp of %q",
+					err.Error(), tc.expectedErrRegex)
+			}
+		})
+	}
 }
