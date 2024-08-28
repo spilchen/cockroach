@@ -169,8 +169,7 @@ func (e *Enforcer) MaybeFailIfThrottled(ctx context.Context, txnsOpened int64) (
 
 	// SPILLY - add testing knob to control this timestamp. This can be used in unit tests.
 	now := timeutil.Now()
-	gracePeriodEnd := e.calculateGracePeriodEnd()
-	if gracePeriodEnd != nil && now.After(*gracePeriodEnd) {
+	if gracePeriodEnd := e.calculateGracePeriodEnd(); gracePeriodEnd != nil && now.After(*gracePeriodEnd) {
 		if e.hasLicense.Load() {
 			err = errors.WithHintf(pgerror.Newf(pgcode.CCLValidLicenseRequired,
 				"License expired. The maximum number of open transactions has been reached."),
@@ -205,6 +204,9 @@ func (e *Enforcer) getStartTime() time.Time {
 	}
 	return e.startTime
 }
+
+// SPILLY - do we need the organization name too to verify the license? Or can
+// we rely on license check to enforce that.
 
 // RefreshEnforcerForLicenseChange resets the state when the license changes. We cache certain
 // information to optimize enforcement. Instead of reading the license from the
