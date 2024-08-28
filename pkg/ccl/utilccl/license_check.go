@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/utilccl/licenseccl"
+	licenseserver "github.com/cockroachdb/cockroach/pkg/server/license"
+	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
@@ -26,6 +28,24 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
+)
+
+var enterpriseLicense = settings.RegisterStringSetting(
+	settings.SystemVisible,
+	"enterprise.license",
+	"the encoded cluster license",
+	"",
+	settings.WithValidateString(
+		func(sv *settings.Values, s string) error {
+			_, err := decode(s)
+			return err
+		},
+	),
+	// Even though string settings are non-reportable by default, we
+	// still mark them explicitly in case a future code change flips the
+	// default.
+	settings.WithReportable(false),
+	settings.WithPublic,
 )
 
 // enterpriseStatus determines whether the cluster is enabled
@@ -137,7 +157,7 @@ func UpdateMetricOnLicenseChange(
 	ts timeutil.TimeSource,
 	stopper *stop.Stopper,
 ) error {
-	licenseccl.EnterpriseLicense.SetOnChange(&st.SV, func(ctx context.Context) {
+	enterpriseLicense.SetOnChange(&st.SV, func(ctx context.Context) {
 		updateMetricWithLicenseTTL(ctx, st, metric, ts)
 	})
 	return stopper.RunAsyncTask(ctx, "write-license-expiry-metric", func(ctx context.Context) {
@@ -216,7 +236,7 @@ func checkEnterpriseEnabledAt(
 // to cache the decoded license (if any). The returned license must not be
 // modified by the caller.
 func getLicense(st *cluster.Settings) (*licenseccl.License, error) {
-	str := licenseccl.EnterpriseLicense.Get(&st.SV)
+	str := enterpriseLicense.Get(&st.SV)
 	if str == "" {
 		return nil, nil
 	}
@@ -315,4 +335,33 @@ func check(l *licenseccl.License, at time.Time, org, feature string, withDetails
 	}
 	return pgerror.Newf(pgcode.CCLValidLicenseRequired,
 		"license valid only for %q", l.OrganizationName)
+}
+
+// RegisterCallbackOnLicenseChange will register a callback to update the
+// license enforcement struct whenever the license changes.
+func RegisterCallbackOnLicenseChange(st *cluster.Settings) {
+	licenseEnforcer := licenseserver.GetEnforcerInstance()
+	enterpriseLicense.SetOnChange(&st.SV, func(ctx context.Context) {
+		lic, err := getLicense(st)
+		if err != nil {
+			log.Errorf(ctx, "unable to refresh license enforcer for license change: %v", err)
+			return
+		}
+		var licenseType licenseserver.LicType
+		var licenseExpiry time.Time
+		if lic == nil {
+			licenseType = licenseserver.LicTypeNone
+		} else {
+			licenseExpiry = time.Unix(lic.ValidUntilUnixSec, 0)
+			switch lic.Type {
+			case licenseccl.License_Free:
+				licenseType = licenseserver.LicTypeFree
+			case licenseccl.License_Trial:
+				licenseType = licenseserver.LicTypeTrial
+			default:
+				licenseType = licenseserver.LicTypeEnterprise
+			}
+		}
+		licenseEnforcer.RefreshForLicenseChange(licenseType, licenseExpiry)
+	})
 }

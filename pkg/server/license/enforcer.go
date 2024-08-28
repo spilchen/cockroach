@@ -16,9 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/ccl/utilccl/licenseccl"
 	"github.com/cockroachdb/cockroach/pkg/keys"
-	"github.com/cockroachdb/cockroach/pkg/settings"
+	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
@@ -91,6 +90,23 @@ type DiagnosticsReader interface {
 var instance *Enforcer
 var once sync.Once
 
+// RegisterCallbackOnLicenseChange is a pointer to a function that will register
+// a callback when the license changes. This is initially empty here. When
+// initializing the ccl package, this variable will be set to a valid function.
+var RegisterCallbackOnLicenseChange = func(st *cluster.Settings) {}
+
+// LicType is the type to define the license type. The license types are in the
+// license protobuf. But since that is in ccl, we cannot import it here. So, we
+// redefine some of the types for a callback between ccl and the server.
+type LicType int
+
+const (
+	LicTypeNone LicType = iota
+	LicTypeTrial
+	LicTypeFree
+	LicTypeEnterprise
+)
+
 // GetEnforcerInstance returns the singleton instance of the Enforcer. The
 // Enforcer is responsible for license enforcement policies.
 func GetEnforcerInstance() *Enforcer {
@@ -114,16 +130,14 @@ func newEnforcer() *Enforcer {
 // KV license metadata and will populate any missing data as needed. The DB
 // passed in must have access to the system tenant.
 func (e *Enforcer) Start(
-	ctx context.Context, sv *settings.Values, db descs.DB, diagnosticsReader DiagnosticsReader,
+	ctx context.Context, st *cluster.Settings, db descs.DB, diagnosticsReader DiagnosticsReader,
 ) error {
 	e.db = db
 	e.diagnosticsReader = diagnosticsReader
 
 	// Add a hook into the license setting so that we refresh our state whenever
 	// the license changes.
-	licenseccl.EnterpriseLicense.SetOnChange(sv, func(ctx context.Context) {
-		e.refreshForLicenseChange(ctx, licenseccl.EnterpriseLicense.Get(sv))
-	})
+	RegisterCallbackOnLicenseChange(st)
 
 	return e.db.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
 		// We could use a conditional put for this logic. However, we want to read
@@ -196,6 +210,29 @@ func (e *Enforcer) MaybeFailIfThrottled(ctx context.Context, txnsOpened int64) (
 	return
 }
 
+// RefreshForLicenseChange resets the state when the license changes. We cache certain
+// information to optimize enforcement. Instead of reading the license from the
+// settings, unmarshaling it, and checking its type and expiry each time,
+// caching the information improves efficiency since licenses change infrequently.
+func (e *Enforcer) RefreshForLicenseChange(licType LicType, licenseExpiry time.Time) {
+	e.hasLicense.Store(licType != LicTypeNone)
+
+	switch licType {
+	case LicTypeNone:
+		e.storeNewGracePeriodEndDate(e.GetGracePeriodInitTS(), 7*24*time.Hour)
+		e.licenseRequiresTelemetry.Store(false)
+	case LicTypeTrial:
+		e.storeNewGracePeriodEndDate(licenseExpiry, 7*24*time.Hour)
+		e.licenseRequiresTelemetry.Store(true)
+	case LicTypeFree:
+		e.storeNewGracePeriodEndDate(licenseExpiry, 30*24*time.Hour)
+		e.licenseRequiresTelemetry.Store(true)
+	default:
+		e.storeNewGracePeriodEndDate(timeutil.UnixEpoch, 0)
+		e.licenseRequiresTelemetry.Store(false)
+	}
+}
+
 // getStartTime returns the time when the enforcer was created. This accounts
 // for testing knobs that may override the time.
 func (e *Enforcer) getStartTime() time.Time {
@@ -203,42 +240,6 @@ func (e *Enforcer) getStartTime() time.Time {
 		return *e.TestingKnobs.OverrideStartTime
 	}
 	return e.startTime
-}
-
-// SPILLY - do we need the organization name too to verify the license? Or can
-// we rely on license check to enforce that.
-
-// RefreshEnforcerForLicenseChange resets the state when the license changes. We cache certain
-// information to optimize enforcement. Instead of reading the license from the
-// settings, unmarshaling it, and checking its type and expiry each time,
-// caching the information improves efficiency since licenses change infrequently.
-func (e *Enforcer) refreshForLicenseChange(ctx context.Context, licenseStr string) {
-	e.hasLicense.Store(len(licenseStr) != 0)
-
-	// No license is used.
-	if len(licenseStr) == 0 {
-		e.storeNewGracePeriodEndDate(e.GetGracePeriodInitTS(), 7*24*time.Hour)
-		e.licenseRequiresTelemetry.Store(false)
-		return
-	}
-
-	license, err := licenseccl.Decode(licenseStr)
-	if err != nil {
-		log.Errorf(ctx, "unable to decode license: %v", err)
-		return
-	}
-
-	switch license.Type {
-	case licenseccl.License_Trial:
-		e.storeNewGracePeriodEndDate(timeutil.Unix(license.ValidUntilUnixSec, 0), 7*24*time.Hour)
-		e.licenseRequiresTelemetry.Store(true)
-	case licenseccl.License_Free:
-		e.storeNewGracePeriodEndDate(timeutil.Unix(license.ValidUntilUnixSec, 0), 30*24*time.Hour)
-		e.licenseRequiresTelemetry.Store(true)
-	default:
-		e.storeNewGracePeriodEndDate(timeutil.UnixEpoch, 0)
-		e.licenseRequiresTelemetry.Store(false)
-	}
 }
 
 func (e *Enforcer) storeNewGracePeriodEndDate(start time.Time, duration time.Duration) {

@@ -64,7 +64,7 @@ func TestGracePeriodInitTSCache(t *testing.T) {
 	// time used when the enforcer was created.
 	require.Equal(t, ts2, enforcer.GetGracePeriodInitTS())
 	// Start the enforcer to read the timestamp from the KV.
-	err := enforcer.Start(ctx, &srv.ClusterSettings().SV,
+	err := enforcer.Start(ctx, srv.ClusterSettings(),
 		srv.SystemLayer().InternalDB().(descs.DB), &mockDiagnosticsReporter{lastPingTime: ts1})
 	require.NoError(t, err)
 	require.Equal(t, ts1, enforcer.GetGracePeriodInitTS())

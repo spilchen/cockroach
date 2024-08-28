@@ -1926,7 +1926,7 @@ func (s *SQLServer) startLicenseEnforcer(ctx context.Context, knobs base.Testing
 		}
 		err := startup.RunIdempotentWithRetry(ctx, s.stopper.ShouldQuiesce(), "license enforcer start",
 			func(ctx context.Context) error {
-				return s.execCfg.LicenseEnforcer.Start(ctx, &s.cfg.Settings.SV, s.internalDB, s.diagnosticsReporter)
+				return s.execCfg.LicenseEnforcer.Start(ctx, s.cfg.Settings, s.internalDB, s.diagnosticsReporter)
 			})
 		// This is not a critical component. If it fails to start, we log a warning
 		// rather than prevent the entire server from starting.

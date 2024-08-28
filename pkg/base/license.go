@@ -73,7 +73,3 @@ var UpdateMetricOnLicenseChange = func(
 var LicenseType = func(st *cluster.Settings) (string, error) {
 	return "OSS", nil
 }
-
-// UpdateEnforcerOnLicenseChange is a function that's called whenever the
-// license changes to refresh state in the license enforcer.
-var UpdateEnforcerOnLicenseChange = func(ctx context.Context, licenseStr string) {}
