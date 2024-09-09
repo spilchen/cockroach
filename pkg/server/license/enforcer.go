@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 )
@@ -37,6 +38,11 @@ const (
 type Enforcer struct {
 	// TestingKnobs are used to control the behavior of the enforcer for testing.
 	TestingKnobs *TestingKnobs
+
+	mu struct {
+		syncutil.Mutex
+		setupComplete bool
+	}
 
 	// telemetryStatusReporter is an interface for getting the timestamp of the
 	// last successful ping to the telemetry server. For some licenses, sending
@@ -127,6 +133,10 @@ func GetEnforcerInstance() *Enforcer {
 
 // newEnforcer creates a new Enforcer object.
 func newEnforcer() *Enforcer {
+	// SPILLY - we need to setup the enforcer such that if start is never called, the enforcer more or less works.
+	// What we need to do is:
+	// - register the callback, pick a suitable cluster init time. A problem with this is that we don't have the proper context for this.
+	// - lets stick with the Start() function. We have the proper caller context. But instead we will be a no-op if already called, and system tenant will be passed in that will avoid the KV call.
 	e := &Enforcer{
 		startTime: timeutil.Now(),
 	}
@@ -139,12 +149,28 @@ func (e *Enforcer) SetTelemetryStatusReporter(reporter TelemetryStatusReporter) 
 	e.telemetryStatusReporter.Store(&reporter)
 }
 
+// SPILLY - change the Start call so that db, initialStart are options.
+// we also want an option for system tenant.
+
 // Start will load the necessary metadata for the enforcer. It reads from the
 // KV license metadata and will populate any missing data as needed. The DB
 // passed in must have access to the system tenant.
 func (e *Enforcer) Start(
-	ctx context.Context, st *cluster.Settings, db isql.DB, initialStart bool,
+	ctx context.Context, st *cluster.Settings, opts ...Option,
 ) error {
+	options := options{}
+	for _, o := range opts {
+		o.apply(&options)
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.mu.setupComplete {
+		return nil
+	}
+
+	e.TestingKnobs = options.testingKnobs
+
 	// We always start disabled. If an error occurs, the enforcer setup will be
 	// incomplete, but the server will continue to start. To ensure stability in
 	// that case, we leave throttling disabled.
@@ -154,7 +180,7 @@ func (e *Enforcer) Start(
 	e.maybeLogActiveOverrides(ctx)
 
 	if !startDisabled {
-		if err := e.maybeWriteClusterInitGracePeriodTS(ctx, db, initialStart); err != nil {
+		if err := e.maybeWriteClusterInitGracePeriodTS(ctx, options); err != nil {
 			return err
 		}
 	}
@@ -172,6 +198,7 @@ func (e *Enforcer) Start(
 
 	// This should be the final step after all error checks are completed.
 	e.isDisabled.Store(startDisabled)
+	e.mu.setupComplete = true
 
 	return nil
 }
@@ -179,9 +206,23 @@ func (e *Enforcer) Start(
 // maybeWriteClusterInitGracePeriodTS checks if the cluster init grace period
 // timestamp needs to be written to the KV layer and writes it if needed.
 func (e *Enforcer) maybeWriteClusterInitGracePeriodTS(
-	ctx context.Context, db isql.DB, initialStart bool,
+	ctx context.Context, options options,
 ) error {
-	return db.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
+	// Secondary tenants do not have access to the system keyspace where
+	// keys.GracePeriodInitTimestamp is stored. As a fallback, we apply a 7-day
+	// grace period from the tenant's start time, which is used only when no
+	// license is installed. This logic applies specifically when secondary
+	// tenants are started in a separate process from the system tenant. If they
+	// are not, a shared singleton (used by all tenants) will have access to the
+	// system keyspace and handle the grace period.
+	if !options.isSystemTenant {
+		gracePeriodLength := e.getGracePeriodDuration(7 * 24 * time.Hour)
+		end := e.getStartTime().Add(gracePeriodLength)
+		e.clusterInitGracePeriodEndTS.Store(end.Unix())
+		return nil
+	}
+
+	return options.db.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
 		// We could use a conditional put for this logic. However, we want to read
 		// and cache the value, and the common case is that the value will be read.
 		// Only during the initialization of the first node in the cluster will we
@@ -196,7 +237,7 @@ func (e *Enforcer) maybeWriteClusterInitGracePeriodTS(
 			// cluster's creation time. Older databases built when we had a
 			// CockroachDB core license are given more time.
 			gracePeriodLength := 30 * 24 * time.Hour
-			if initialStart {
+			if options.isInitialStart {
 				gracePeriodLength = 7 * 24 * time.Hour
 			}
 			gracePeriodLength = e.getGracePeriodDuration(gracePeriodLength) // Allow the value to be shortened by env var

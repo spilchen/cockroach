@@ -1919,23 +1919,27 @@ func (s *SQLServer) startLicenseEnforcer(
 	// Start the license enforcer. This is only started for the system tenant since
 	// it requires access to the system keyspace. For secondary tenants, this struct
 	// is shared to provide access to the values cached from the KV read.
-	if s.execCfg.Codec.ForSystemTenant() {
-		licenseEnforcer := s.execCfg.LicenseEnforcer
-		if knobs.Server != nil {
-			licenseEnforcer.TestingKnobs = &knobs.Server.(*TestingKnobs).LicenseTestingKnobs
-		}
-		licenseEnforcer.SetTelemetryStatusReporter(s.diagnosticsReporter)
-		// TODO(spilchen): we need to tell the license enforcer about the
-		// diagnostics reporter. This will be handled in CRDB-39991
-		err := startup.RunIdempotentWithRetry(ctx, s.stopper.ShouldQuiesce(), "license enforcer start",
-			func(ctx context.Context) error {
-				return licenseEnforcer.Start(ctx, s.cfg.Settings, s.internalDB, initialStart)
-			})
-		// This is not a critical component. If it fails to start, we log a warning
-		// rather than prevent the entire server from starting.
-		if err != nil {
-			log.Warningf(ctx, "failed to start the license enforcer: %v", err)
-		}
+	// SPILLY - set status reporter in start??
+	licenseEnforcer := s.execCfg.LicenseEnforcer
+	licenseEnforcer.SetTelemetryStatusReporter(s.diagnosticsReporter)
+	opts := []license.Option{
+		license.WithInitialStart(initialStart),
+		license.WithDB(s.internalDB),
+		license.WithSystemTenant(s.execCfg.Codec.ForSystemTenant()),
+	}
+	if knobs.Server != nil {
+		opts = append(opts, license.WithTestingKnobs(&knobs.Server.(*TestingKnobs).LicenseTestingKnobs))
+	}
+	// TODO(spilchen): we need to tell the license enforcer about the
+	// diagnostics reporter. This will be handled in CRDB-39991
+	err := startup.RunIdempotentWithRetry(ctx, s.stopper.ShouldQuiesce(), "license enforcer start",
+		func(ctx context.Context) error {
+			return licenseEnforcer.Start(ctx, s.cfg.Settings, opts...)
+		})
+	// This is not a critical component. If it fails to start, we log a warning
+	// rather than prevent the entire server from starting.
+	if err != nil {
+		log.Warningf(ctx, "failed to start the license enforcer: %v", err)
 	}
 }
 

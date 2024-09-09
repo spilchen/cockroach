@@ -77,9 +77,15 @@ func TestGracePeriodInitTSCache(t *testing.T) {
 	require.Equal(t, ts2End, enforcer.GetClusterInitGracePeriodEndTS())
 	// Start the enforcer to read the timestamp from the KV.
 	enforcer.SetTelemetryStatusReporter(&mockTelemetryStatusReporter{lastPingTime: ts1})
-	err := enforcer.Start(ctx, srv.ClusterSettings(), srv.SystemLayer().InternalDB().(descs.DB), false /* initialStart */)
+	err := enforcer.Start(ctx, srv.ClusterSettings(),
+		license.WithDB(srv.SystemLayer().InternalDB().(descs.DB)),
+		license.WithInitialStart(false),
+		license.WithSystemTenant(true), license.WithTestingKnobs(enforcer.TestingKnobs),
+	)
 	require.NoError(t, err)
 	require.Equal(t, ts1End, enforcer.GetClusterInitGracePeriodEndTS())
+
+	// SPILLY - verify WithSystemTenant(false)
 
 	// Access the enforcer that is cached in the executor config to make sure they
 	// work for the system tenant and secondary tenant.
@@ -162,7 +168,7 @@ func TestThrottle(t *testing.T) {
 			e.SetTelemetryStatusReporter(&mockTelemetryStatusReporter{
 				lastPingTime: tc.lastTelemetryPingTime,
 			})
-			e.RefreshForLicenseChange(tc.licType, tc.licExpiry)
+			e.RefreshForLicenseChange(ctx, tc.licType, tc.licExpiry)
 			err := e.MaybeFailIfThrottled(ctx, tc.openTxnsCount)
 			if tc.expectedErrRegex == "" {
 				require.NoError(t, err)
@@ -205,6 +211,7 @@ func TestThrottleErrorMsg(t *testing.T) {
 	defer cancel()
 
 	srv, sqlDB, _ := serverutils.StartServer(t, base.TestServerArgs{
+		DefaultTestTenant: base.SharedTestTenantAlwaysEnabled,
 		Knobs: base.TestingKnobs{
 			Server: &server.TestingKnobs{
 				LicenseTestingKnobs: license.TestingKnobs{
@@ -224,7 +231,7 @@ func TestThrottleErrorMsg(t *testing.T) {
 
 	// Set up a free license that will expire in 30 days
 	licenseEnforcer := srv.SystemLayer().ExecutorConfig().(sql.ExecutorConfig).LicenseEnforcer
-	licenseEnforcer.RefreshForLicenseChange(license.LicTypeFree, t30d)
+	licenseEnforcer.RefreshForLicenseChange(ctx, license.LicTypeFree, t30d)
 
 	for _, tc := range []struct {
 		desc string
