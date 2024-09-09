@@ -353,6 +353,8 @@ func makeSharedProcessTenantServerConfig(
 
 	sqlCfg.NodeMetricsRecorder = nodeMetricsRecorder
 
+	sqlCfg.LicenseEnforcer = kvServerCfg.LicenseEnforcer
+
 	return baseCfg, sqlCfg, nil
 }
 

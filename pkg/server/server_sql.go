@@ -1059,7 +1059,7 @@ func newSQLServer(ctx context.Context, cfg sqlServerArgs) (*SQLServer, error) {
 		NodeDescs:                  cfg.nodeDescs,
 		TenantCapabilitiesReader:   cfg.tenantCapabilitiesReader,
 		CidrLookup:                 cfg.BaseConfig.CidrLookup,
-		LicenseEnforcer:            license.GetEnforcerInstance(),
+		LicenseEnforcer:            cfg.LicenseEnforcer,
 	}
 
 	if codec.ForSystemTenant() {
@@ -1919,13 +1919,12 @@ func (s *SQLServer) startLicenseEnforcer(
 	// Start the license enforcer. This is only started for the system tenant since
 	// it requires access to the system keyspace. For secondary tenants, this struct
 	// is shared to provide access to the values cached from the KV read.
-	// SPILLY - set status reporter in start??
 	licenseEnforcer := s.execCfg.LicenseEnforcer
-	licenseEnforcer.SetTelemetryStatusReporter(s.diagnosticsReporter)
-	opts := []license.Option{
+	opts := []license.EnforcerOption{
 		license.WithInitialStart(initialStart),
 		license.WithDB(s.internalDB),
 		license.WithSystemTenant(s.execCfg.Codec.ForSystemTenant()),
+		license.WithTelemetryStatusReporter(s.diagnosticsReporter),
 	}
 	if knobs.Server != nil {
 		opts = append(opts, license.WithTestingKnobs(&knobs.Server.(*TestingKnobs).LicenseTestingKnobs))

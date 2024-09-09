@@ -34,11 +34,11 @@ import (
 )
 
 type mockTelemetryStatusReporter struct {
-	lastPingTime time.Time
+	lastPingTime *time.Time
 }
 
 func (m mockTelemetryStatusReporter) GetLastSuccessfulTelemetryPing() time.Time {
-	return m.lastPingTime
+	return *m.lastPingTime
 }
 
 func TestGracePeriodInitTSCache(t *testing.T) {
@@ -76,16 +76,15 @@ func TestGracePeriodInitTSCache(t *testing.T) {
 	// time used when the enforcer was created.
 	require.Equal(t, ts2End, enforcer.GetClusterInitGracePeriodEndTS())
 	// Start the enforcer to read the timestamp from the KV.
-	enforcer.SetTelemetryStatusReporter(&mockTelemetryStatusReporter{lastPingTime: ts1})
 	err := enforcer.Start(ctx, srv.ClusterSettings(),
 		license.WithDB(srv.SystemLayer().InternalDB().(descs.DB)),
 		license.WithInitialStart(false),
-		license.WithSystemTenant(true), license.WithTestingKnobs(enforcer.TestingKnobs),
+		license.WithSystemTenant(true),
+		license.WithTestingKnobs(enforcer.TestingKnobs),
+		license.WithTelemetryStatusReporter(&mockTelemetryStatusReporter{lastPingTime: &ts1}),
 	)
 	require.NoError(t, err)
 	require.Equal(t, ts1End, enforcer.GetClusterInitGracePeriodEndTS())
-
-	// SPILLY - verify WithSystemTenant(false)
 
 	// Access the enforcer that is cached in the executor config to make sure they
 	// work for the system tenant and secondary tenant.
@@ -163,11 +162,11 @@ func TestThrottle(t *testing.T) {
 				TestingKnobs: &license.TestingKnobs{
 					OverrideStartTime:         &tc.gracePeriodInit,
 					OverrideThrottleCheckTime: &tc.checkTs,
+					OverrideTelemetryStatusReporter: &mockTelemetryStatusReporter{
+						lastPingTime: &tc.lastTelemetryPingTime,
+					},
 				},
 			}
-			e.SetTelemetryStatusReporter(&mockTelemetryStatusReporter{
-				lastPingTime: tc.lastTelemetryPingTime,
-			})
 			e.RefreshForLicenseChange(ctx, tc.licType, tc.licExpiry)
 			err := e.MaybeFailIfThrottled(ctx, tc.openTxnsCount)
 			if tc.expectedErrRegex == "" {
@@ -206,6 +205,8 @@ func TestThrottleErrorMsg(t *testing.T) {
 	// Pointer to the timestamp that we'll use for the throttle check. This is
 	// modified for every test unit.
 	throttleCheckTS := &time.Time{}
+	// Similar to throttleCheckTS, but for telemetry ping time.
+	lastPingTS := &time.Time{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -223,6 +224,9 @@ func TestThrottleErrorMsg(t *testing.T) {
 					// We are going to modify the throttle check timestamp in each test
 					// unit.
 					OverrideThrottleCheckTime: throttleCheckTS,
+					OverrideTelemetryStatusReporter: &mockTelemetryStatusReporter{
+						lastPingTime: lastPingTS,
+					},
 				},
 			},
 		},
@@ -255,12 +259,9 @@ func TestThrottleErrorMsg(t *testing.T) {
 		{"below-threshold-invalid-telemetry", 4, t10d, t0d, ""},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			// Adjust the throttle check time for this test unit
+			// Adjust the throttle check time and last telemetry ping time for this test unit
 			*throttleCheckTS = tc.throttleCheckTS
-
-			// Override the telemetry server so we have control of what the last ping
-			// time was.
-			licenseEnforcer.SetTelemetryStatusReporter(&mockTelemetryStatusReporter{lastPingTime: tc.telemetryTS})
+			*lastPingTS = tc.telemetryTS
 
 			// All but one of the queries will be run in a background Go routine.
 			startSignal := make(chan any, tc.concurrentQueries)

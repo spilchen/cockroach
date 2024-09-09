@@ -625,6 +625,7 @@ func (ts *testServer) startDefaultTestTenant(
 
 	if ts.params.Knobs.Server != nil {
 		params.TestingKnobs.Server.(*TestingKnobs).DiagnosticsTestingKnobs = ts.params.Knobs.Server.(*TestingKnobs).DiagnosticsTestingKnobs
+		params.TestingKnobs.Server.(*TestingKnobs).LicenseTestingKnobs = ts.params.Knobs.Server.(*TestingKnobs).LicenseTestingKnobs
 	}
 	return ts.StartTenant(ctx, params)
 }

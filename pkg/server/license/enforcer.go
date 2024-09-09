@@ -13,7 +13,6 @@ package license
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,7 +46,7 @@ type Enforcer struct {
 	// telemetryStatusReporter is an interface for getting the timestamp of the
 	// last successful ping to the telemetry server. For some licenses, sending
 	// telemetry data is required to avoid throttling.
-	telemetryStatusReporter atomic.Pointer[TelemetryStatusReporter]
+	telemetryStatusReporter TelemetryStatusReporter
 
 	// clusterInitGracePeriodEndTS marks the end of the grace period when a
 	// license is required. It is set during the cluster's initial startup. The
@@ -108,6 +107,10 @@ type TestingKnobs struct {
 	// OverrideThrottleCheckTime if set, overrides the timestamp used when
 	// checking if throttling is active.
 	OverrideThrottleCheckTime *time.Time
+
+	// OverrideTelemetryStatusReporter if set, overrides the telemetry status
+	// reporter.
+	OverrideTelemetryStatusReporter TelemetryStatusReporter
 }
 
 // TelemetryStatusReporter is the interface we use to find the last ping
@@ -118,25 +121,8 @@ type TelemetryStatusReporter interface {
 	GetLastSuccessfulTelemetryPing() time.Time
 }
 
-var instance *Enforcer
-var once sync.Once
-
-// GetEnforcerInstance returns the singleton instance of the Enforcer. The
-// Enforcer is responsible for license enforcement policies.
-func GetEnforcerInstance() *Enforcer {
-	once.Do(
-		func() {
-			instance = newEnforcer()
-		})
-	return instance
-}
-
-// newEnforcer creates a new Enforcer object.
-func newEnforcer() *Enforcer {
-	// SPILLY - we need to setup the enforcer such that if start is never called, the enforcer more or less works.
-	// What we need to do is:
-	// - register the callback, pick a suitable cluster init time. A problem with this is that we don't have the proper context for this.
-	// - lets stick with the Start() function. We have the proper caller context. But instead we will be a no-op if already called, and system tenant will be passed in that will avoid the KV call.
+// NewEnforcer creates a new Enforcer object.
+func NewEnforcer() *Enforcer {
 	e := &Enforcer{
 		startTime: timeutil.Now(),
 	}
@@ -144,20 +130,10 @@ func newEnforcer() *Enforcer {
 	return e
 }
 
-// SetTelemetryStatusReporter will set the pointer to the telemetry status reporter.
-func (e *Enforcer) SetTelemetryStatusReporter(reporter TelemetryStatusReporter) {
-	e.telemetryStatusReporter.Store(&reporter)
-}
-
-// SPILLY - change the Start call so that db, initialStart are options.
-// we also want an option for system tenant.
-
 // Start will load the necessary metadata for the enforcer. It reads from the
 // KV license metadata and will populate any missing data as needed. The DB
 // passed in must have access to the system tenant.
-func (e *Enforcer) Start(
-	ctx context.Context, st *cluster.Settings, opts ...Option,
-) error {
+func (e *Enforcer) Start(ctx context.Context, st *cluster.Settings, opts ...EnforcerOption) error {
 	options := options{}
 	for _, o := range opts {
 		o.apply(&options)
@@ -170,6 +146,7 @@ func (e *Enforcer) Start(
 	}
 
 	e.TestingKnobs = options.testingKnobs
+	e.telemetryStatusReporter = options.telemetryStatusReporter
 
 	// We always start disabled. If an error occurs, the enforcer setup will be
 	// incomplete, but the server will continue to start. To ensure stability in
@@ -205,9 +182,7 @@ func (e *Enforcer) Start(
 
 // maybeWriteClusterInitGracePeriodTS checks if the cluster init grace period
 // timestamp needs to be written to the KV layer and writes it if needed.
-func (e *Enforcer) maybeWriteClusterInitGracePeriodTS(
-	ctx context.Context, options options,
-) error {
+func (e *Enforcer) maybeWriteClusterInitGracePeriodTS(ctx context.Context, options options) error {
 	// Secondary tenants do not have access to the system keyspace where
 	// keys.GracePeriodInitTimestamp is stored. As a fallback, we apply a 7-day
 	// grace period from the tenant's start time, which is used only when no
@@ -219,6 +194,7 @@ func (e *Enforcer) maybeWriteClusterInitGracePeriodTS(
 		gracePeriodLength := e.getGracePeriodDuration(7 * 24 * time.Hour)
 		end := e.getStartTime().Add(gracePeriodLength)
 		e.clusterInitGracePeriodEndTS.Store(end.Unix())
+		log.Infof(ctx, "secondary tenant set new cluster init grace period end time: %s", end.UTC().String())
 		return nil
 	}
 
@@ -287,12 +263,16 @@ func (e *Enforcer) GetGracePeriodEndTS() (time.Time, bool) {
 // data needs to be received before we start to throttle. If the license doesn't
 // require telemetry, then false is returned for second return value.
 func (e *Enforcer) GetTelemetryDeadline() (deadline, lastPing time.Time, ok bool) {
-	if !e.licenseRequiresTelemetry.Load() || e.telemetryStatusReporter.Load() == nil {
+	if !e.licenseRequiresTelemetry.Load() {
 		return time.Time{}, time.Time{}, false
 	}
 
-	ptr := e.telemetryStatusReporter.Load()
-	lastTelemetryDataReceived := (*ptr).GetLastSuccessfulTelemetryPing()
+	tsr := e.getTelemetryStatusReporter()
+	if tsr == nil {
+		return time.Time{}, time.Time{}, false
+	}
+
+	lastTelemetryDataReceived := tsr.GetLastSuccessfulTelemetryPing()
 	throttleTS := lastTelemetryDataReceived.Add(e.getMaxTelemetryInterval())
 	return throttleTS, lastTelemetryDataReceived, true
 }
@@ -490,4 +470,14 @@ func (e *Enforcer) getInitialIsDisabledValue() bool {
 		return !envutil.EnvOrDefaultBool("COCKROACH_ENABLE_LICENSE_ENFORCER", false)
 	}
 	return !e.TestingKnobs.Enable
+}
+
+// getTelemetryStatusReporter returns a pointer to the telemetry status
+// reporter. It will return the override if one is set in the testing knobs. If
+// no telemetry status reporter is set, it will return nil.
+func (e *Enforcer) getTelemetryStatusReporter() TelemetryStatusReporter {
+	if e.TestingKnobs != nil && e.TestingKnobs.OverrideTelemetryStatusReporter != nil {
+		return e.TestingKnobs.OverrideTelemetryStatusReporter
+	}
+	return e.telemetryStatusReporter
 }

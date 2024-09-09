@@ -10,18 +10,17 @@
 
 package license
 
-import (
-	"github.com/cockroachdb/cockroach/pkg/sql/isql"
-)
+import "github.com/cockroachdb/cockroach/pkg/sql/isql"
 
 type options struct {
-	db             isql.DB
-	isInitialStart bool
-	isSystemTenant bool
-	testingKnobs   *TestingKnobs
+	db                      isql.DB
+	isInitialStart          bool
+	isSystemTenant          bool
+	testingKnobs            *TestingKnobs
+	telemetryStatusReporter TelemetryStatusReporter
 }
 
-type Option interface {
+type EnforcerOption interface {
 	apply(*options)
 }
 
@@ -31,28 +30,34 @@ func (f optionFunc) apply(o *options) {
 	f(o)
 }
 
-func WithDB(db isql.DB) Option {
+func WithDB(db isql.DB) EnforcerOption {
 	return optionFunc(func(o *options) {
 		o.db = db
 	})
 }
 
-func WithInitialStart(v bool) Option {
+func WithInitialStart(v bool) EnforcerOption {
 	return optionFunc(func(o *options) {
 		o.isInitialStart = v
 	})
 }
 
-func WithSystemTenant(v bool) Option {
+func WithSystemTenant(v bool) EnforcerOption {
 	return optionFunc(func(o *options) {
 		o.isSystemTenant = v
 	})
 }
 
-func WithTestingKnobs(tk *TestingKnobs) Option {
+func WithTestingKnobs(tk *TestingKnobs) EnforcerOption {
 	return optionFunc(func(o *options) {
 		if tk != nil {
 			o.testingKnobs = tk
 		}
+	})
+}
+
+func WithTelemetryStatusReporter(tsr TelemetryStatusReporter) EnforcerOption {
+	return optionFunc(func(o *options) {
+		o.telemetryStatusReporter = tsr
 	})
 }
