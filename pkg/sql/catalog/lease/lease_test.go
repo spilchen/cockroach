@@ -17,6 +17,7 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -929,6 +930,7 @@ func TestDescriptorRefreshOnRetry(t *testing.T) {
 	fooReleaseCount := int32(0)
 	var tableID int64
 
+	ctx := context.Background()
 	var params base.TestServerArgs
 	params.Knobs = base.TestingKnobs{
 		SQLLeaseManager: &lease.ManagerTestingKnobs{
@@ -938,11 +940,13 @@ func TestDescriptorRefreshOnRetry(t *testing.T) {
 				RemoveOnceDereferenced: true,
 				LeaseAcquiredEvent: func(desc catalog.Descriptor, _ error) {
 					if desc.GetName() == "foo" {
+						log.Infof(ctx, "lease acquirer stack trace: %s", debug.Stack())
 						atomic.AddInt32(&fooAcquiredCount, 1)
 					}
 				},
 				LeaseReleasedEvent: func(id descpb.ID, _ descpb.DescriptorVersion, _ error) {
 					if int64(id) == atomic.LoadInt64(&tableID) {
+						log.Infof(ctx, "lease releaser stack trace: %s", debug.Stack())
 						atomic.AddInt32(&fooReleaseCount, 1)
 					}
 				},
