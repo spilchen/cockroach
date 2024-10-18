@@ -210,46 +210,55 @@ ElementState:
     columnId: 1
     name: id
     tableId: 108
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 2
     name: g
     tableId: 108
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 3
     name: s
     tableId: 108
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4
     name: other
     tableId: 108
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967292e+09
     name: crdb_internal_origin_timestamp
     tableId: 108
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967293e+09
     name: crdb_internal_origin_id
     tableId: 108
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967294e+09
     name: tableoid
     tableId: 108
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967295e+09
     name: crdb_internal_mvcc_timestamp
     tableId: 108
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 5
     name: name
     tableId: 108
+    undoName: ""
   Status: PUBLIC
 - ColumnNotNull:
     columnId: 1
@@ -994,56 +1003,67 @@ ElementState:
     columnId: 1
     name: id
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 2
     name: c
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 3
     name: cs
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4
     name: cstored
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967292e+09
     name: crdb_internal_origin_timestamp
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967293e+09
     name: crdb_internal_origin_id
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967294e+09
     name: tableoid
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967295e+09
     name: crdb_internal_mvcc_timestamp
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 5
     name: cvirtual
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 6
     name: name
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 7
     name: crdb_internal_idx_expr
     tableId: 111
+    undoName: ""
   Status: PUBLIC
 - ColumnNotNull:
     columnId: 1

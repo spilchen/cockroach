@@ -43,7 +43,7 @@ var supportedAlterTableStatements = map[reflect.Type]supportedAlterTableCommand{
 
 func init() {
 	boolType := reflect.TypeOf((*bool)(nil)).Elem()
-	// Check function signatures inside the supportedAlterTableStatements map.
+	// Check function signatures inside the  map.
 	for statementType, statementEntry := range supportedAlterTableStatements {
 		callBackType := reflect.TypeOf(statementEntry.fn)
 		if callBackType.Kind() != reflect.Func {

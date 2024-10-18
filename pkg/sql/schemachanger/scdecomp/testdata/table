@@ -88,26 +88,31 @@ ElementState:
     columnId: 1
     name: id
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967292e+09
     name: crdb_internal_origin_timestamp
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967293e+09
     name: crdb_internal_origin_id
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967294e+09
     name: tableoid
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967295e+09
     name: crdb_internal_mvcc_timestamp
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnNotNull:
     columnId: 1
@@ -459,36 +464,43 @@ ElementState:
     columnId: 1
     name: id
     tableId: 105
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 2
     name: name
     tableId: 105
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 3
     name: price
     tableId: 105
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967292e+09
     name: crdb_internal_origin_timestamp
     tableId: 105
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967293e+09
     name: crdb_internal_origin_id
     tableId: 105
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967294e+09
     name: tableoid
     tableId: 105
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967295e+09
     name: crdb_internal_mvcc_timestamp
     tableId: 105
+    undoName: ""
   Status: PUBLIC
 - ColumnNotNull:
     columnId: 1
@@ -1051,31 +1063,37 @@ ElementState:
     columnId: 1
     name: id
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 2
     name: j
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967292e+09
     name: crdb_internal_origin_timestamp
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967293e+09
     name: crdb_internal_origin_id
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967294e+09
     name: tableoid
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967295e+09
     name: crdb_internal_mvcc_timestamp
     tableId: 104
+    undoName: ""
   Status: PUBLIC
 - ColumnNotNull:
     columnId: 1
@@ -1434,31 +1452,37 @@ ElementState:
     columnId: 1
     name: v
     tableId: 109
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 2
     name: rowid
     tableId: 109
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967292e+09
     name: crdb_internal_origin_timestamp
     tableId: 109
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967293e+09
     name: crdb_internal_origin_id
     tableId: 109
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967294e+09
     name: tableoid
     tableId: 109
+    undoName: ""
   Status: PUBLIC
 - ColumnName:
     columnId: 4.294967295e+09
     name: crdb_internal_mvcc_timestamp
     tableId: 109
+    undoName: ""
   Status: PUBLIC
 - ColumnNotNull:
     columnId: 2
