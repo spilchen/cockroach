@@ -267,7 +267,8 @@ func handleGeneralColumnConversion(
 		}
 	}
 
-	// TODO(spilchen): This check is being tracked under issue 47137.
+	// TODO(spilchen): Only support alter statements that only have a single
+	// command. This check is being tracked under issue 47137.
 	switch s := stmt.(type) {
 	case *tree.AlterTable:
 		if len(s.Cmds) > 1 {
