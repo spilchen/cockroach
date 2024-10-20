@@ -7,7 +7,6 @@ package scbuildstmt
 
 import (
 	"fmt"
-
 	"github.com/cockroachdb/cockroach/pkg/build"
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
@@ -18,6 +17,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgnotice"
+	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachange"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
@@ -307,6 +307,20 @@ func handleGeneralColumnConversion(
 		panic(err)
 	}
 
+	// Drop the column that the new column will be replacing.
+	b.Drop(col)
+	b.Drop(colName)
+	b.Drop(oldColType)
+	handleDropColumnPrimaryIndexes(b, tbl, col)
+
+	// Ensure all elements for the column are dropped before proceeding with the add.
+	// This check is run prior to adding any new elements, as it relies on column names,
+	// and we don't want it to include the newly added elements.
+	colElems := b.ResolveColumn(tbl.TableID, t.Column, ResolveParams{
+		RequiredPrivilege: privilege.CREATE,
+	})
+	assertAllColumnElementsAreDropped(colElems)
+
 	// Add the new column. It will be identical to the column it is replacing,
 	// except the type will differ, and it will have a transient computed expression.
 	// This expression will reference the original column to facilitate the backfill.
@@ -340,17 +354,12 @@ func handleGeneralColumnConversion(
 	}
 	addColumn(b, spec, t)
 
-	// Drop the column that the shadow is replacing.
-	b.Drop(col)
-	b.Drop(colName)
-	b.Drop(oldColType)
-	handleDropColumnPrimaryIndexes(b, tbl, col)
-
 	// Rename the old column to avoid a name conflict with the new column. This
 	// temporary name isn't referenced or visible since the column is dropped,
 	// but the new column needs the original name. The validation occurs at
 	// statement time, even though the old column won't be dropped until after the
 	// backfill.
+	// SPILLY - update comment to describe why this is needed
 	nameExists := func(name string) bool {
 		return getColumnIDFromColumnName(b, tbl.TableID, tree.Name(name), false /* required */) != 0
 	}
@@ -361,7 +370,7 @@ func handleGeneralColumnConversion(
 		Name:     oldColumnRename,
 		// If we don't complete the operation, the column won't be dropped, so we
 		// need to remember the original name to preserve it.
-		UndoName: colName.Name,
+		AbsentName: colName.Name,
 	})
 }
 
