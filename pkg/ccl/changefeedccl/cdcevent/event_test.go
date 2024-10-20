@@ -598,6 +598,8 @@ func TestEventColumnOrderingWithSchemaChanges(t *testing.T) {
 	sqlDB := sqlutils.MakeSQLRunner(db)
 	// Use alter column type to force column reordering.
 	sqlDB.Exec(t, `SET enable_experimental_alter_column_type_general = true`)
+	// SPILLY - set a thing to force the legacy and open an issue
+	sqlDB.Exec(t, `SET use_declarative_schema_changer = 'off'`)
 
 	type decodeExpectation struct {
 		expectUnwatchedErr bool
