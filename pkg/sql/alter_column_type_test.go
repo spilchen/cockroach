@@ -151,6 +151,8 @@ INSERT INTO test2 VALUES (true);
 	go func() {
 		sqlDB.ExecMultiple(t,
 			`SET enable_experimental_alter_column_type_general = true;`,
+			// SPILLY - this test depends on the legacy schema changer. Rewrite for the DSC.
+			`SET use_declarative_schema_changer = 'off';`,
 			`ALTER TABLE test ALTER COLUMN x TYPE BOOL USING (x > 0);`)
 		wg.Done()
 	}()
@@ -203,7 +205,9 @@ func TestVisibilityDuringAlterColumnType(t *testing.T) {
 	sqlDB := sqlutils.MakeSQLRunner(db)
 	defer s.Stopper().Stop(ctx)
 
-	sqlDB.Exec(t, `SET enable_experimental_alter_column_type_general = true;`)
+	sqlDB.ExecMultiple(t, `SET enable_experimental_alter_column_type_general = true;`,
+		// SPILLY - comment here if this works
+		`SET use_declarative_schema_changer = 'off'`)
 
 	sqlDB.Exec(t, `
 CREATE DATABASE t;
