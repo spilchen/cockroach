@@ -75,6 +75,9 @@ INSERT INTO test2 VALUES ('hello');`)
 	go func() {
 		sqlDB.ExecMultiple(t,
 			`SET enable_experimental_alter_column_type_general = true;`,
+			// TODO(spilchen): This test is designed for the legacy schema changer.
+			// Update it for the declarative schema changer (DSC).
+			`SET use_declarative_schema_changer = 'off';`,
 			`ALTER TABLE test ALTER COLUMN x TYPE STRING;`)
 		wg.Done()
 	}()
@@ -151,7 +154,8 @@ INSERT INTO test2 VALUES (true);
 	go func() {
 		sqlDB.ExecMultiple(t,
 			`SET enable_experimental_alter_column_type_general = true;`,
-			// SPILLY - this test depends on the legacy schema changer. Rewrite for the DSC.
+			// TODO(spilchen): This test is designed for the legacy schema changer.
+			// Update it for the declarative schema changer (DSC).
 			`SET use_declarative_schema_changer = 'off';`,
 			`ALTER TABLE test ALTER COLUMN x TYPE BOOL USING (x > 0);`)
 		wg.Done()
@@ -206,7 +210,8 @@ func TestVisibilityDuringAlterColumnType(t *testing.T) {
 	defer s.Stopper().Stop(ctx)
 
 	sqlDB.ExecMultiple(t, `SET enable_experimental_alter_column_type_general = true;`,
-		// SPILLY - comment here if this works
+		// TODO(spilchen): This test is designed for the legacy schema changer.
+		// Update it for the declarative schema changer (DSC).
 		`SET use_declarative_schema_changer = 'off'`)
 
 	sqlDB.Exec(t, `

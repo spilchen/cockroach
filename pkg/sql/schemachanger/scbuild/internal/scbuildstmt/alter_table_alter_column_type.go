@@ -340,9 +340,12 @@ func handleGeneralColumnConversion(
 		},
 		transientCompute: true,
 		notNull:          retrieveColumnNotNull(b, tbl.TableID, col.ColumnID) != nil,
-		// The new column will be placed in the same column family as the one it's replacing,
-		// so there's no need to specify a family. However, the new column will be added to
-		// the end of the family's column ID list, which changes its internal ordering.
+		// TODO(spilchen): The new column will be placed in the same column family as the
+		// one it's replacing, so there's no need to specify a family. However, the new
+		// column will be added to the end of the family's column ID list, which changes
+		// its internal ordering. This needs to be revisited as CDC may have a dependency
+		// on the same ordering (see TestEventColumnOrderingWithSchemaChanges). This will
+		// be resolved in issue 133040.
 		fam: nil,
 	}
 	addColumn(b, spec, t)
