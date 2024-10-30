@@ -66,7 +66,7 @@ func init() {
 	)
 
 	registerDepRule(
-		"DEFAULT or ON UPDATE existence precedes writes to column",
+		"DEFAULT or ON UPDATE existence precedes writes to column, except if a complex column type conversion is in progress",
 		scgraph.Precedence,
 		"expr", "column",
 		func(from, to NodeVars) rel.Clauses {
@@ -77,6 +77,7 @@ func init() {
 				),
 				to.Type((*scpb.Column)(nil)),
 				JoinOnColumnID(from, to, "table-id", "col-id"),
+				IsNotComplexAlterTypeChange("table-id", "col-id"),
 				StatusesToPublicOrTransient(from, scpb.Status_PUBLIC, to, scpb.Status_WRITE_ONLY),
 			}
 		},
@@ -105,6 +106,21 @@ func init() {
 		},
 	)
 
+	registerDepRule(
+		"column default expression is public after transient compute expression transitions to absent",
+		scgraph.SameStagePrecedence,
+		"transient-compute-expression", "column-default-expression",
+		func(from, to NodeVars) rel.Clauses {
+			return rel.Clauses{
+				from.Type((*scpb.ColumnComputeExpression)(nil)),
+				to.Type((*scpb.ColumnDefaultExpression)(nil)),
+				JoinOnColumnID(from, to, "table-id", "col-id"),
+				ToPublicOrTransient(from, to),
+				from.CurrentStatus(scpb.Status_TRANSIENT_ABSENT),
+				to.CurrentStatus(scpb.Status_PUBLIC),
+			}
+		},
+	)
 }
 
 // This rule ensures that columns depend on each other in increasing order.

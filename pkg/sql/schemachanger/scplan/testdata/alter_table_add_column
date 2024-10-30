@@ -2992,7 +2992,7 @@ ALTER TABLE defaultdb.baz ADD g INT UNIQUE DEFAULT 1
 - from: [ColumnDefaultExpression:{DescID: 109, ColumnID: 2, Expr: 1:::INT8}, PUBLIC]
   to:   [Column:{DescID: 109, ColumnID: 2}, WRITE_ONLY]
   kind: Precedence
-  rule: DEFAULT or ON UPDATE existence precedes writes to column
+  rule: DEFAULT or ON UPDATE existence precedes writes to column, except if a complex column type conversion is in progress
 - from: [ColumnName:{DescID: 109, Name: g, ColumnID: 2}, PUBLIC]
   to:   [Column:{DescID: 109, ColumnID: 2}, PUBLIC]
   kind: Precedence

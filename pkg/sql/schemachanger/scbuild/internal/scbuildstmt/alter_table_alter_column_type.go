@@ -245,7 +245,7 @@ func handleGeneralColumnConversion(
 			panic(scerrors.NotImplementedErrorf(t,
 				"backfilling during ALTER COLUMN TYPE for a column "+
 					"with a computed expression is not supported"))
-		case *scpb.ColumnOnUpdateExpression, *scpb.ColumnDefaultExpression:
+		case *scpb.ColumnOnUpdateExpression:
 			// TODO(#132909): The use of a temporary compute expression currently
 			// blocks altering types with DEFAULT or ON UPDATE expressions. We should
 			// be able to add these after the backfill completes and the old column is
@@ -306,17 +306,34 @@ func handleGeneralColumnConversion(
 		panic(err)
 	}
 
+	oldDefExpr := retrieveColumnDefaultExpressionElem(b, tbl.TableID, col.ColumnID)
+
 	// First set the target status of the old column to drop. We will replace this
 	// column with a new column. This column stays visible until the second backfill.
 	b.Drop(col)
 	b.Drop(colName)
 	b.Drop(oldColType)
+	if oldDefExpr != nil {
+		b.Drop(oldDefExpr)
+	}
 	handleDropColumnPrimaryIndexes(b, tbl, col)
 
 	// The new column is replacing an existing one, so we want to insert it into the
 	// column family at the same position as the old column. Normally, when adding a new
 	// column, it is appended to the end of the column family.
 	newColType.ColumnFamilyOrderFollowsColumnID = oldColType.ColumnID
+
+	var newDefExpr *scpb.ColumnDefaultExpression
+	if oldDefExpr != nil {
+		newDefExpr = &scpb.ColumnDefaultExpression{
+			TableID:    tbl.TableID,
+			ColumnID:   newColID,
+			Expression: oldDefExpr.Expression,
+		}
+	}
+
+	// SPILLY - check that we drop everything
+	// SPILLY - do we need to adjust the default expression at all?
 
 	// Add the spec for the new column. It will be identical to the column it is replacing,
 	// except the type will differ, and it will have a transient computed expression.
@@ -337,6 +354,7 @@ func handleGeneralColumnConversion(
 			ColumnID: newColID,
 			Name:     colName.Name,
 		},
+		def:     newDefExpr,
 		colType: newColType,
 		compute: &scpb.ColumnComputeExpression{
 			TableID:    tbl.TableID,

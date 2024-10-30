@@ -141,6 +141,22 @@ func ColumnInSourcePrimaryIndex(
 	return columnInSourcePrimaryIndex(indexColumn.El, index.El, relationIDVar, columnIDVar, indexIDVar)
 }
 
+// IsComplexAlterColumnType checks if the specified column is undergoing
+// a complex type alteration, which requires a backfill.
+func IsComplexAlterColumnType(tableIDVar, columnIDVar rel.Var) rel.Clauses {
+	newColumn := MkNodeVars("new-column")
+	newTransientComputeExpression := MkNodeVars("new-transient-compute-expression")
+	return rel.Clauses{
+		newColumn.Type((*scpb.Column)(nil)),
+		newTransientComputeExpression.Type((*scpb.ColumnComputeExpression)(nil)),
+		newColumn.TargetStatus(scpb.ToPublic),
+		newTransientComputeExpression.TargetStatus(scpb.Transient),
+		JoinOnColumnID(newColumn, newTransientComputeExpression, tableIDVar, columnIDVar),
+		newColumn.JoinTargetNode(),
+		newTransientComputeExpression.JoinTargetNode(),
+	}
+}
+
 // IsPotentialSecondaryIndexSwap determines if a secondary index recreate is
 // occurring because of a primary key alter.
 func IsPotentialSecondaryIndexSwap(indexIdVar rel.Var, tableIDVar rel.Var) rel.Clauses {
@@ -313,6 +329,13 @@ var (
 	IsNotPotentialSecondaryIndexSwap = screl.Schema.DefNotJoin2("no secondary index swap is on going",
 		"table-id", "index-id", func(a, b rel.Var) rel.Clauses {
 			return IsPotentialSecondaryIndexSwap(b, a)
+		})
+
+	// IsNotComplexAlterTypeChange determines if no column alteration in progress
+	// that requires a backfill.
+	IsNotComplexAlterTypeChange = screl.Schema.DefNotJoin2("no complex column type alteration in progress",
+		"table-id", "column-id", func(t, c rel.Var) rel.Clauses {
+			return IsComplexAlterColumnType(t, c)
 		})
 )
 
