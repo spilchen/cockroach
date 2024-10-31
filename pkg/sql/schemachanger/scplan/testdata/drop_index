@@ -155,10 +155,11 @@ DROP INDEX idx1 CASCADE
 ops
 DROP INDEX idx2 CASCADE
 ----
-StatementPhase stage 1 of 1 with 3 MutationType ops
+StatementPhase stage 1 of 1 with 4 MutationType ops
   transitions:
     [[Column:{DescID: 104, ColumnID: 4}, ABSENT], PUBLIC] -> WRITE_ONLY
     [[ColumnName:{DescID: 104, Name: crdb_internal_idx_expr, ColumnID: 4}, ABSENT], PUBLIC] -> ABSENT
+    [[ColumnComputeExpression:{DescID: 104, ColumnID: 4}, ABSENT], PUBLIC] -> ABSENT
     [[SecondaryIndex:{DescID: 104, IndexID: 4, ConstraintID: 0, RecreateSourceIndexID: 0}, ABSENT], PUBLIC] -> VALIDATED
   ops:
     *scop.MakePublicSecondaryIndexWriteOnly
@@ -170,19 +171,24 @@ StatementPhase stage 1 of 1 with 3 MutationType ops
     *scop.SetColumnName
       ColumnID: 4
       Name: crdb_internal_column_4_name_placeholder
+      TableID: 104
+    *scop.RemoveColumnComputeExpression
+      ColumnID: 4
       TableID: 104
 PreCommitPhase stage 1 of 2 with 1 MutationType op
   transitions:
     [[Column:{DescID: 104, ColumnID: 4}, ABSENT], WRITE_ONLY] -> PUBLIC
     [[ColumnName:{DescID: 104, Name: crdb_internal_idx_expr, ColumnID: 4}, ABSENT], ABSENT] -> PUBLIC
+    [[ColumnComputeExpression:{DescID: 104, ColumnID: 4}, ABSENT], ABSENT] -> PUBLIC
     [[SecondaryIndex:{DescID: 104, IndexID: 4, ConstraintID: 0, RecreateSourceIndexID: 0}, ABSENT], VALIDATED] -> PUBLIC
   ops:
     *scop.UndoAllInTxnImmediateMutationOpSideEffects
       {}
-PreCommitPhase stage 2 of 2 with 5 MutationType ops
+PreCommitPhase stage 2 of 2 with 6 MutationType ops
   transitions:
     [[Column:{DescID: 104, ColumnID: 4}, ABSENT], PUBLIC] -> WRITE_ONLY
     [[ColumnName:{DescID: 104, Name: crdb_internal_idx_expr, ColumnID: 4}, ABSENT], PUBLIC] -> ABSENT
+    [[ColumnComputeExpression:{DescID: 104, ColumnID: 4}, ABSENT], PUBLIC] -> ABSENT
     [[SecondaryIndex:{DescID: 104, IndexID: 4, ConstraintID: 0, RecreateSourceIndexID: 0}, ABSENT], PUBLIC] -> VALIDATED
   ops:
     *scop.MakePublicSecondaryIndexWriteOnly
@@ -194,6 +200,9 @@ PreCommitPhase stage 2 of 2 with 5 MutationType ops
     *scop.SetColumnName
       ColumnID: 4
       Name: crdb_internal_column_4_name_placeholder
+      TableID: 104
+    *scop.RemoveColumnComputeExpression
+      ColumnID: 4
       TableID: 104
     *scop.SetJobStateOnDescriptor
       DescriptorID: 104
@@ -246,17 +255,13 @@ PostCommitNonRevertiblePhase stage 1 of 2 with 8 MutationType ops
     *scop.UpdateSchemaChangerJob
       IsNonCancelable: true
       JobID: 1
-PostCommitNonRevertiblePhase stage 2 of 2 with 6 MutationType ops
+PostCommitNonRevertiblePhase stage 2 of 2 with 5 MutationType ops
   transitions:
     [[Column:{DescID: 104, ColumnID: 4}, ABSENT], DELETE_ONLY] -> ABSENT
-    [[ColumnComputeExpression:{DescID: 104, ColumnID: 4}, ABSENT], PUBLIC] -> ABSENT
     [[ColumnType:{DescID: 104, ColumnFamilyID: 0, ColumnID: 4, TypeName: STRING}, ABSENT], PUBLIC] -> ABSENT
     [[SecondaryIndex:{DescID: 104, IndexID: 4, ConstraintID: 0, RecreateSourceIndexID: 0}, ABSENT], DELETE_ONLY] -> ABSENT
     [[IndexData:{DescID: 104, IndexID: 4}, ABSENT], PUBLIC] -> ABSENT
   ops:
-    *scop.RemoveColumnComputeExpression
-      ColumnID: 4
-      TableID: 104
     *scop.MakeIndexAbsent
       IndexID: 4
       TableID: 104
@@ -314,7 +319,7 @@ DROP INDEX idx2 CASCADE
   rule: dependents removed before column
 - from: [ColumnComputeExpression:{DescID: 104, ColumnID: 4}, ABSENT]
   to:   [ColumnType:{DescID: 104, ColumnFamilyID: 0, ColumnID: 4, TypeName: STRING}, ABSENT]
-  kind: SameStagePrecedence
+  kind: Precedence
   rule: column type dependents removed right before column type
 - from: [ColumnName:{DescID: 104, Name: crdb_internal_idx_expr, ColumnID: 4}, ABSENT]
   to:   [Column:{DescID: 104, ColumnID: 4}, ABSENT]
@@ -444,15 +449,16 @@ PreCommitPhase stage 2 of 2 with 6 MutationType ops
       - 104
       JobID: 1
       NonCancelable: true
-      RunningStatus: PostCommitNonRevertiblePhase stage 1 of 3 with 9 MutationType ops pending
+      RunningStatus: PostCommitNonRevertiblePhase stage 1 of 3 with 10 MutationType ops pending
       Statements:
       - statement: DROP INDEX idx3 CASCADE
         redactedstatement: DROP INDEX ‹defaultdb›.public.‹t1›@‹idx3› CASCADE
         statementtag: DROP INDEX
-PostCommitNonRevertiblePhase stage 1 of 3 with 11 MutationType ops
+PostCommitNonRevertiblePhase stage 1 of 3 with 12 MutationType ops
   transitions:
     [[Column:{DescID: 104, ColumnID: 5}, ABSENT], PUBLIC] -> WRITE_ONLY
     [[ColumnName:{DescID: 104, Name: crdb_internal_i_shard_16, ColumnID: 5}, ABSENT], PUBLIC] -> ABSENT
+    [[ColumnComputeExpression:{DescID: 104, ColumnID: 5}, ABSENT], PUBLIC] -> ABSENT
     [[ColumnNotNull:{DescID: 104, ColumnID: 5, IndexID: 0}, ABSENT], VALIDATED] -> ABSENT
     [[IndexColumn:{DescID: 104, ColumnID: 5, IndexID: 6}, ABSENT], PUBLIC] -> ABSENT
     [[IndexColumn:{DescID: 104, ColumnID: 1, IndexID: 6}, ABSENT], PUBLIC] -> ABSENT
@@ -473,6 +479,9 @@ PostCommitNonRevertiblePhase stage 1 of 3 with 11 MutationType ops
     *scop.SetColumnName
       ColumnID: 5
       Name: crdb_internal_column_5_name_placeholder
+      TableID: 104
+    *scop.RemoveColumnComputeExpression
+      ColumnID: 5
       TableID: 104
     *scop.MakeWriteOnlyIndexDeleteOnly
       IndexID: 6
@@ -522,15 +531,11 @@ PostCommitNonRevertiblePhase stage 2 of 3 with 5 MutationType ops
     *scop.UpdateSchemaChangerJob
       IsNonCancelable: true
       JobID: 1
-PostCommitNonRevertiblePhase stage 3 of 3 with 4 MutationType ops
+PostCommitNonRevertiblePhase stage 3 of 3 with 3 MutationType ops
   transitions:
     [[Column:{DescID: 104, ColumnID: 5}, ABSENT], DELETE_ONLY] -> ABSENT
-    [[ColumnComputeExpression:{DescID: 104, ColumnID: 5}, ABSENT], PUBLIC] -> ABSENT
     [[ColumnType:{DescID: 104, ColumnFamilyID: 0, ColumnID: 5, TypeName: INT8}, ABSENT], PUBLIC] -> ABSENT
   ops:
-    *scop.RemoveColumnComputeExpression
-      ColumnID: 5
-      TableID: 104
     *scop.MakeDeleteOnlyColumnAbsent
       ColumnID: 5
       TableID: 104
@@ -592,7 +597,7 @@ DROP INDEX idx3 CASCADE
   rule: dependents removed before column
 - from: [ColumnComputeExpression:{DescID: 104, ColumnID: 5}, ABSENT]
   to:   [ColumnType:{DescID: 104, ColumnFamilyID: 0, ColumnID: 5, TypeName: INT8}, ABSENT]
-  kind: SameStagePrecedence
+  kind: Precedence
   rule: column type dependents removed right before column type
 - from: [ColumnName:{DescID: 104, Name: crdb_internal_i_shard_16, ColumnID: 5}, ABSENT]
   to:   [Column:{DescID: 104, ColumnID: 5}, ABSENT]

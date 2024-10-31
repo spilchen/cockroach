@@ -2632,7 +2632,7 @@ deprules
     - joinTargetNode($constraint, $constraint-Target, $constraint-Node)
 - name: column type dependents removed right before column type
   from: dependent-Node
-  kind: SameStagePrecedence
+  kind: Precedence
   to: column-type-Node
   query:
     - $dependent[Type] IN ['*scpb.ColumnComputeExpression', '*scpb.ColumnDefaultExpression', '*scpb.ColumnOnUpdateExpression', '*scpb.SequenceOwner']
@@ -7036,7 +7036,7 @@ deprules
     - joinTargetNode($constraint, $constraint-Target, $constraint-Node)
 - name: column type dependents removed right before column type
   from: dependent-Node
-  kind: SameStagePrecedence
+  kind: Precedence
   to: column-type-Node
   query:
     - $dependent[Type] IN ['*scpb.ColumnComputeExpression', '*scpb.ColumnDefaultExpression', '*scpb.ColumnOnUpdateExpression', '*scpb.SequenceOwner']

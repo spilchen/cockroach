@@ -64,26 +64,11 @@ func init() {
 // Special cases of the above.
 func init() {
 
-	// SPILLY - test out this rule as not same stage and see what breaks
-	registerDepRule(
-		"column type dependents removed right before column type",
-		//scgraph.SameStagePrecedence,
-		scgraph.Precedence,
-		"dependent", "column-type",
-		func(from, to NodeVars) rel.Clauses {
-			return rel.Clauses{
-				from.TypeFilter(rulesVersionKey, isColumnTypeDependent),
-				to.Type((*scpb.ColumnType)(nil)),
-				JoinOnColumnID(from, to, "table-id", "col-id"),
-				IsNotComplexAlterTypeChange("table-id", "col-id"),
-				StatusesToAbsent(from, scpb.Status_ABSENT, to, scpb.Status_ABSENT),
-			}
-		},
-	)
-
-	// This is the same rule above, but specific for complex alter column type.
-	// Column dependents, such as default expression, can be added after the
-	// column type is added.
+	// All dependents of the column type must be removed before the column type itself.
+	// Previously, SameStagePrecedence was used here, but an exception was needed for
+	// column type alterations. In such cases, expressions like default expressions
+	// may be added many stages after the column type. If this operation is undone,
+	// planning becomes impossible if SameStagePrecedence is still applied.
 	registerDepRule(
 		"column type dependents removed right before column type",
 		scgraph.Precedence,
@@ -93,7 +78,6 @@ func init() {
 				from.TypeFilter(rulesVersionKey, isColumnTypeDependent),
 				to.Type((*scpb.ColumnType)(nil)),
 				JoinOnColumnID(from, to, "table-id", "col-id"),
-				rel.And(IsComplexAlterColumnType("index-id", "table-id")...),
 				StatusesToAbsent(from, scpb.Status_ABSENT, to, scpb.Status_ABSENT),
 			}
 		},

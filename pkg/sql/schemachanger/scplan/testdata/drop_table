@@ -1645,7 +1645,7 @@ DROP TABLE defaultdb.shipments CASCADE;
   rule: dependents removed before column
 - from: [ColumnDefaultExpression:{DescID: 109, ColumnID: 1, Expr: gen_random_uuid()}, ABSENT]
   to:   [ColumnType:{DescID: 109, ColumnFamilyID: 0, ColumnID: 1, TypeName: UUID}, ABSENT]
-  kind: SameStagePrecedence
+  kind: Precedence
   rule: column type dependents removed right before column type
 - from: [ColumnDefaultExpression:{DescID: 109, ColumnID: 1, Expr: gen_random_uuid()}, ABSENT]
   to:   [Table:{DescID: 109}, ABSENT]
@@ -1657,7 +1657,7 @@ DROP TABLE defaultdb.shipments CASCADE;
   rule: dependents removed before column
 - from: [ColumnDefaultExpression:{DescID: 109, ColumnID: 5, ReferencedSequenceIDs: [106], Expr: nextval(106:::REGCLASS)}, ABSENT]
   to:   [ColumnType:{DescID: 109, ColumnFamilyID: 0, ColumnID: 5, TypeName: INT8}, ABSENT]
-  kind: SameStagePrecedence
+  kind: Precedence
   rule: column type dependents removed right before column type
 - from: [ColumnDefaultExpression:{DescID: 109, ColumnID: 5, ReferencedSequenceIDs: [106], Expr: nextval(106:::REGCLASS)}, ABSENT]
   to:   [Table:{DescID: 109}, ABSENT]
@@ -1669,7 +1669,7 @@ DROP TABLE defaultdb.shipments CASCADE;
   rule: dependents removed before column
 - from: [ColumnDefaultExpression:{DescID: 109, ColumnID: 6, Expr: [FUNCTION 100112](), ReferencedFunctionIDs: [112]}, ABSENT]
   to:   [ColumnType:{DescID: 109, ColumnFamilyID: 0, ColumnID: 6, TypeName: INT8}, ABSENT]
-  kind: SameStagePrecedence
+  kind: Precedence
   rule: column type dependents removed right before column type
 - from: [ColumnDefaultExpression:{DescID: 109, ColumnID: 6, Expr: [FUNCTION 100112](), ReferencedFunctionIDs: [112]}, ABSENT]
   to:   [Table:{DescID: 109}, ABSENT]
@@ -2345,7 +2345,7 @@ DROP TABLE defaultdb.shipments CASCADE;
   rule: dependents removed before column
 - from: [SequenceOwner:{DescID: 109, ColumnID: 2, ReferencedDescID: 110}, ABSENT]
   to:   [ColumnType:{DescID: 109, ColumnFamilyID: 0, ColumnID: 2, TypeName: STRING}, ABSENT]
-  kind: SameStagePrecedence
+  kind: Precedence
   rule: column type dependents removed right before column type
 - from: [SequenceOwner:{DescID: 109, ColumnID: 2, ReferencedDescID: 110}, ABSENT]
   to:   [Table:{DescID: 109}, ABSENT]

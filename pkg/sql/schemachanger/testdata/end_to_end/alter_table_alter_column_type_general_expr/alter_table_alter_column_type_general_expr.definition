@@ -8,7 +8,7 @@ stage-exec phase=PostCommitPhase stage=:
 INSERT INTO t VALUES (100+$stageKey, default);
 ----
 
-# One row with value iis expected to be inserted after each stage.
+# One row is expected to be inserted after each stage.
 stage-query phase=PostCommitPhase stage=:
 SELECT count(*)=$successfulStageCount FROM t WHERE i >= 100;
 ----
