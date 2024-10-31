@@ -106,14 +106,21 @@ func init() {
 		},
 	)
 
+	// A computed expression cannot have a DEFAULT or ON UPDATE expression.
+	// However, if the computed expression is temporary (e.g., for an ALTER COLUMN
+	// TYPE requiring a backfill), these expressions can be added once the
+	// computed expression is dropped.
 	registerDepRule(
-		"column default expression is public after transient compute expression transitions to absent",
+		"DEFAULT or ON UPDATE expressions is public after transient compute expression transitions to absent",
 		scgraph.SameStagePrecedence,
-		"transient-compute-expression", "column-default-expression",
+		"transient-compute-expression", "column-expr",
 		func(from, to NodeVars) rel.Clauses {
 			return rel.Clauses{
 				from.Type((*scpb.ColumnComputeExpression)(nil)),
-				to.Type((*scpb.ColumnDefaultExpression)(nil)),
+				to.Type(
+					(*scpb.ColumnDefaultExpression)(nil),
+					(*scpb.ColumnOnUpdateExpression)(nil),
+				),
 				JoinOnColumnID(from, to, "table-id", "col-id"),
 				ToPublicOrTransient(from, to),
 				from.CurrentStatus(scpb.Status_TRANSIENT_ABSENT),

@@ -750,6 +750,19 @@ deprules
     - $column-Node[CurrentStatus] = WRITE_ONLY
     - joinTargetNode($expr, $expr-Target, $expr-Node)
     - joinTargetNode($column, $column-Target, $column-Node)
+- name: DEFAULT or ON UPDATE expressions is public after transient compute expression transitions to absent
+  from: transient-compute-expression-Node
+  kind: SameStagePrecedence
+  to: column-expr-Node
+  query:
+    - $transient-compute-expression[Type] = '*scpb.ColumnComputeExpression'
+    - $column-expr[Type] IN ['*scpb.ColumnDefaultExpression', '*scpb.ColumnOnUpdateExpression']
+    - joinOnColumnID($transient-compute-expression, $column-expr, $table-id, $col-id)
+    - ToPublicOrTransient($transient-compute-expression-Target, $column-expr-Target)
+    - $transient-compute-expression-Node[CurrentStatus] = TRANSIENT_ABSENT
+    - $column-expr-Node[CurrentStatus] = PUBLIC
+    - joinTargetNode($transient-compute-expression, $transient-compute-expression-Target, $transient-compute-expression-Node)
+    - joinTargetNode($column-expr, $column-expr-Target, $column-expr-Node)
 - name: 'ForeignKeyConstraint transitions to ABSENT uphold 2-version invariant: PUBLIC->VALIDATED'
   from: prev-Node
   kind: PreviousTransactionPrecedence
@@ -2467,19 +2480,6 @@ deprules
     - $column-Node[CurrentStatus] = TRANSIENT_WRITE_ONLY
     - joinTargetNode($column-constraint, $column-constraint-Target, $column-constraint-Node)
     - joinTargetNode($column, $column-Target, $column-Node)
-- name: column default expression is public after transient compute expression transitions to absent
-  from: transient-compute-expression-Node
-  kind: SameStagePrecedence
-  to: column-default-expression-Node
-  query:
-    - $transient-compute-expression[Type] = '*scpb.ColumnComputeExpression'
-    - $column-default-expression[Type] = '*scpb.ColumnDefaultExpression'
-    - joinOnColumnID($transient-compute-expression, $column-default-expression, $table-id, $col-id)
-    - ToPublicOrTransient($transient-compute-expression-Target, $column-default-expression-Target)
-    - $transient-compute-expression-Node[CurrentStatus] = TRANSIENT_ABSENT
-    - $column-default-expression-Node[CurrentStatus] = PUBLIC
-    - joinTargetNode($transient-compute-expression, $transient-compute-expression-Target, $transient-compute-expression-Node)
-    - joinTargetNode($column-default-expression, $column-default-expression-Target, $column-default-expression-Node)
 - name: column dependents exist before column becomes public
   from: dependent-Node
   kind: Precedence
@@ -5154,6 +5154,19 @@ deprules
     - $column-Node[CurrentStatus] = WRITE_ONLY
     - joinTargetNode($expr, $expr-Target, $expr-Node)
     - joinTargetNode($column, $column-Target, $column-Node)
+- name: DEFAULT or ON UPDATE expressions is public after transient compute expression transitions to absent
+  from: transient-compute-expression-Node
+  kind: SameStagePrecedence
+  to: column-expr-Node
+  query:
+    - $transient-compute-expression[Type] = '*scpb.ColumnComputeExpression'
+    - $column-expr[Type] IN ['*scpb.ColumnDefaultExpression', '*scpb.ColumnOnUpdateExpression']
+    - joinOnColumnID($transient-compute-expression, $column-expr, $table-id, $col-id)
+    - ToPublicOrTransient($transient-compute-expression-Target, $column-expr-Target)
+    - $transient-compute-expression-Node[CurrentStatus] = TRANSIENT_ABSENT
+    - $column-expr-Node[CurrentStatus] = PUBLIC
+    - joinTargetNode($transient-compute-expression, $transient-compute-expression-Target, $transient-compute-expression-Node)
+    - joinTargetNode($column-expr, $column-expr-Target, $column-expr-Node)
 - name: 'ForeignKeyConstraint transitions to ABSENT uphold 2-version invariant: PUBLIC->VALIDATED'
   from: prev-Node
   kind: PreviousTransactionPrecedence
@@ -6871,19 +6884,6 @@ deprules
     - $column-Node[CurrentStatus] = TRANSIENT_WRITE_ONLY
     - joinTargetNode($column-constraint, $column-constraint-Target, $column-constraint-Node)
     - joinTargetNode($column, $column-Target, $column-Node)
-- name: column default expression is public after transient compute expression transitions to absent
-  from: transient-compute-expression-Node
-  kind: SameStagePrecedence
-  to: column-default-expression-Node
-  query:
-    - $transient-compute-expression[Type] = '*scpb.ColumnComputeExpression'
-    - $column-default-expression[Type] = '*scpb.ColumnDefaultExpression'
-    - joinOnColumnID($transient-compute-expression, $column-default-expression, $table-id, $col-id)
-    - ToPublicOrTransient($transient-compute-expression-Target, $column-default-expression-Target)
-    - $transient-compute-expression-Node[CurrentStatus] = TRANSIENT_ABSENT
-    - $column-default-expression-Node[CurrentStatus] = PUBLIC
-    - joinTargetNode($transient-compute-expression, $transient-compute-expression-Target, $transient-compute-expression-Node)
-    - joinTargetNode($column-default-expression, $column-default-expression-Target, $column-default-expression-Node)
 - name: column dependents exist before column becomes public
   from: dependent-Node
   kind: Precedence

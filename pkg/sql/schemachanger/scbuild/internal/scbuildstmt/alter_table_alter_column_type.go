@@ -7,6 +7,7 @@ package scbuildstmt
 
 import (
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 
 	"github.com/cockroachdb/cockroach/pkg/build"
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
@@ -245,14 +246,6 @@ func handleGeneralColumnConversion(
 			panic(scerrors.NotImplementedErrorf(t,
 				"backfilling during ALTER COLUMN TYPE for a column "+
 					"with a computed expression is not supported"))
-		case *scpb.ColumnOnUpdateExpression:
-			// TODO(#132909): The use of a temporary compute expression currently
-			// blocks altering types with DEFAULT or ON UPDATE expressions. We should
-			// be able to add these after the backfill completes and the old column is
-			// dropped by using dependency rules.
-			panic(scerrors.NotImplementedErrorf(t,
-				"backfilling during ALTER COLUMN TYPE for a column "+
-					"with a DEFAULT or ON UPDATE expression is not supported"))
 		}
 	})
 
@@ -292,6 +285,8 @@ func handleGeneralColumnConversion(
 				"type is not supported"))
 	}
 
+	colNotNull := retrieveColumnNotNull(b, tbl.TableID, col.ColumnID)
+
 	// Generate the ID of the new column we are adding.
 	newColID := b.NextTableColumnID(tbl)
 	newColType.ColumnID = newColID
@@ -306,7 +301,12 @@ func handleGeneralColumnConversion(
 		panic(err)
 	}
 
-	oldDefExpr := retrieveColumnDefaultExpressionElem(b, tbl.TableID, col.ColumnID)
+	// Generate DEFAULT or ON UPDATE expressions for the new column, if they
+	// existed on the old column. These expressions are not permitted on columns
+	// with a computed expression. Dependency rules ensure they are added only
+	// after the temporary compute expression for the new column is removed.
+	oldDefExpr, newDefExpr := getColumnDefaultExpressionsForColumnReplacement(b, tbl, col, newColID)
+	oldOnUpdateExpr, newOnUpdateExpr := getColumnOnUpdateExpressionsForColumnReplacement(b, tbl, col, newColID)
 
 	// First set the target status of the old column to drop. We will replace this
 	// column with a new column. This column stays visible until the second backfill.
@@ -316,24 +316,26 @@ func handleGeneralColumnConversion(
 	if oldDefExpr != nil {
 		b.Drop(oldDefExpr)
 	}
+	if oldOnUpdateExpr != nil {
+		b.Drop(oldOnUpdateExpr)
+	}
+	if colNotNull != nil {
+		b.Drop(colNotNull)
+	}
 	handleDropColumnPrimaryIndexes(b, tbl, col)
+
+	// Ensure all elements for the column are dropped before proceeding with the add.
+	// This check is run prior to adding any new elements, as it relies on column names,
+	// and we don't want it to include the newly added elements.
+	colElems := b.ResolveColumn(tbl.TableID, t.Column, ResolveParams{
+		RequiredPrivilege: privilege.CREATE,
+	})
+	assertAllColumnElementsAreDropped(colElems)
 
 	// The new column is replacing an existing one, so we want to insert it into the
 	// column family at the same position as the old column. Normally, when adding a new
 	// column, it is appended to the end of the column family.
 	newColType.ColumnFamilyOrderFollowsColumnID = oldColType.ColumnID
-
-	var newDefExpr *scpb.ColumnDefaultExpression
-	if oldDefExpr != nil {
-		newDefExpr = &scpb.ColumnDefaultExpression{
-			TableID:    tbl.TableID,
-			ColumnID:   newColID,
-			Expression: oldDefExpr.Expression,
-		}
-	}
-
-	// SPILLY - check that we drop everything
-	// SPILLY - do we need to adjust the default expression at all?
 
 	// Add the spec for the new column. It will be identical to the column it is replacing,
 	// except the type will differ, and it will have a transient computed expression.
@@ -354,8 +356,9 @@ func handleGeneralColumnConversion(
 			ColumnID: newColID,
 			Name:     colName.Name,
 		},
-		def:     newDefExpr,
-		colType: newColType,
+		def:      newDefExpr,
+		onUpdate: newOnUpdateExpr,
+		colType:  newColType,
 		compute: &scpb.ColumnComputeExpression{
 			TableID:    tbl.TableID,
 			ColumnID:   newColID,
@@ -487,4 +490,40 @@ func getPgAttributeNum(col *scpb.Column) catid.PGAttributeNum {
 		return col.PgAttributeNum
 	}
 	return catid.PGAttributeNum(col.ColumnID)
+}
+
+// getColumnDefaultExpressionsForColumnReplacement retrieves the
+// scpb.ColumnDefaultExpression objects when altering a column type that
+// requires replacing and backfilling the old column with a new one.
+// If no column default expressions exist, both output parameters will be nil.
+func getColumnDefaultExpressionsForColumnReplacement(
+	b BuildCtx, tbl *scpb.Table, col *scpb.Column, newColID catid.ColumnID,
+) (oldDefExpr, newDefExpr *scpb.ColumnDefaultExpression) {
+	oldDefExpr = retrieveColumnDefaultExpressionElem(b, tbl.TableID, col.ColumnID)
+	if oldDefExpr != nil {
+		newDefExpr = &scpb.ColumnDefaultExpression{
+			TableID:    tbl.TableID,
+			ColumnID:   newColID,
+			Expression: oldDefExpr.Expression,
+		}
+	}
+	return
+}
+
+// getColumnOnUpdateExpressionsForColumnReplacement retrieves the
+// scpb.ColumnOnUpdateExpression objects when altering a column type that
+// requires replacing and backfilling the old column with a new one.
+// If no on update expressions exist, both output parameters will be nil.
+func getColumnOnUpdateExpressionsForColumnReplacement(
+	b BuildCtx, tbl *scpb.Table, col *scpb.Column, newColID catid.ColumnID,
+) (oldOnUpdateExpr, newOnUpdateExpr *scpb.ColumnOnUpdateExpression) {
+	oldOnUpdateExpr = retrieveColumnOnUpdateExpressionElem(b, tbl.TableID, col.ColumnID)
+	if oldOnUpdateExpr != nil {
+		newOnUpdateExpr = &scpb.ColumnOnUpdateExpression{
+			TableID:    tbl.TableID,
+			ColumnID:   newColID,
+			Expression: oldOnUpdateExpr.Expression,
+		}
+	}
+	return
 }
