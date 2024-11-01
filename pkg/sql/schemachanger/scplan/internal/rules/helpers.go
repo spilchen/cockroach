@@ -141,19 +141,17 @@ func ColumnInSourcePrimaryIndex(
 	return columnInSourcePrimaryIndex(indexColumn.El, index.El, relationIDVar, columnIDVar, indexIDVar)
 }
 
-// IsComplexAlterColumnType checks if the specified column is undergoing
-// a complex type alteration, which requires a backfill.
-func IsComplexAlterColumnType(tableIDVar, columnIDVar rel.Var) rel.Clauses {
-	newColumn := MkNodeVars("new-column")
-	newTransientComputeExpression := MkNodeVars("new-transient-compute-expression")
+// IsAlterColumnTypeOp checks if the specified column is undergoing a type alteration
+func IsAlterColumnTypeOp(tableIDVar, columnIDVar rel.Var) rel.Clauses {
+	column := MkNodeVars("column")
+	computeExpression := MkNodeVars("compute-expression")
 	return rel.Clauses{
-		newColumn.Type((*scpb.Column)(nil)),
-		newTransientComputeExpression.Type((*scpb.ColumnComputeExpression)(nil)),
-		newColumn.TargetStatus(scpb.ToPublic),
-		newTransientComputeExpression.TargetStatus(scpb.Transient),
-		JoinOnColumnID(newColumn, newTransientComputeExpression, tableIDVar, columnIDVar),
-		newColumn.JoinTargetNode(),
-		newTransientComputeExpression.JoinTargetNode(),
+		column.Type((*scpb.Column)(nil)),
+		computeExpression.Type((*scpb.ColumnComputeExpression)(nil)),
+		JoinOnColumnID(column, computeExpression, tableIDVar, columnIDVar),
+		computeExpression.El.AttrEq(screl.Usage, scpb.ColumnComputeExpression_USING_EXPRESSION),
+		column.JoinTargetNode(),
+		computeExpression.JoinTargetNode(),
 	}
 }
 
@@ -331,11 +329,10 @@ var (
 			return IsPotentialSecondaryIndexSwap(b, a)
 		})
 
-	// IsNotComplexAlterTypeChange determines if no column alteration in progress
-	// that requires a backfill.
-	IsNotComplexAlterTypeChange = screl.Schema.DefNotJoin2("no complex column type alteration in progress",
+	// IsNotAlterColumnTypeOp determines if no column alteration in progress
+	IsNotAlterColumnTypeOp = screl.Schema.DefNotJoin2("no column type alteration in progress",
 		"table-id", "column-id", func(t, c rel.Var) rel.Clauses {
-			return IsComplexAlterColumnType(t, c)
+			return IsAlterColumnTypeOp(t, c)
 		})
 )
 

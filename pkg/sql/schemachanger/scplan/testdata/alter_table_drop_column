@@ -1970,12 +1970,11 @@ PostCommitPhase stage 7 of 7 with 1 ValidationType op
     *scop.ValidateIndex
       IndexID: 3
       TableID: 107
-PostCommitNonRevertiblePhase stage 1 of 3 with 62 MutationType ops
+PostCommitNonRevertiblePhase stage 1 of 3 with 60 MutationType ops
   transitions:
     [[Column:{DescID: 107, ColumnID: 3}, ABSENT], PUBLIC] -> WRITE_ONLY
     [[ColumnName:{DescID: 107, Name: v2, ColumnID: 3}, ABSENT], PUBLIC] -> ABSENT
     [[ColumnNotNull:{DescID: 107, ColumnID: 3, IndexID: 0}, ABSENT], VALIDATED] -> ABSENT
-    [[ColumnDefaultExpression:{DescID: 107, ColumnID: 3, ReferencedSequenceIDs: [106], Expr: nextval(106:::REGCLASS)}, ABSENT], PUBLIC] -> ABSENT
     [[PrimaryIndex:{DescID: 107, IndexID: 1, ConstraintID: 2}, ABSENT], PUBLIC] -> VALIDATED
     [[IndexName:{DescID: 107, Name: foo_pkey, IndexID: 1}, ABSENT], PUBLIC] -> ABSENT
     [[IndexColumn:{DescID: 107, ColumnID: 3, IndexID: 2}, ABSENT], PUBLIC] -> ABSENT
@@ -2123,14 +2122,6 @@ PostCommitNonRevertiblePhase stage 1 of 3 with 62 MutationType ops
       ColumnID: 3
       Name: crdb_internal_column_3_name_placeholder
       TableID: 107
-    *scop.RemoveColumnDefaultExpression
-      ColumnID: 3
-      TableID: 107
-    *scop.UpdateTableBackReferencesInSequences
-      BackReferencedColumnID: 3
-      BackReferencedTableID: 107
-      SequenceIDs:
-      - 106
     *scop.MakeWriteOnlyIndexDeleteOnly
       IndexID: 2
       TableID: 107
@@ -2284,15 +2275,24 @@ PostCommitNonRevertiblePhase stage 2 of 3 with 13 MutationType ops
       - 108
       IsNonCancelable: true
       JobID: 1
-PostCommitNonRevertiblePhase stage 3 of 3 with 10 MutationType ops
+PostCommitNonRevertiblePhase stage 3 of 3 with 12 MutationType ops
   transitions:
     [[Column:{DescID: 107, ColumnID: 3}, ABSENT], DELETE_ONLY] -> ABSENT
     [[ColumnType:{DescID: 107, ColumnFamilyID: 0, ColumnID: 3, TypeName: INT8}, ABSENT], PUBLIC] -> ABSENT
+    [[ColumnDefaultExpression:{DescID: 107, ColumnID: 3, ReferencedSequenceIDs: [106], Expr: nextval(106:::REGCLASS)}, ABSENT], PUBLIC] -> ABSENT
     [[PrimaryIndex:{DescID: 107, IndexID: 1, ConstraintID: 2}, ABSENT], DELETE_ONLY] -> ABSENT
     [[IndexData:{DescID: 107, IndexID: 1}, ABSENT], PUBLIC] -> ABSENT
     [[IndexData:{DescID: 107, IndexID: 2}, ABSENT], PUBLIC] -> ABSENT
     [[IndexData:{DescID: 107, IndexID: 4}, TRANSIENT_ABSENT], PUBLIC] -> TRANSIENT_ABSENT
   ops:
+    *scop.RemoveColumnDefaultExpression
+      ColumnID: 3
+      TableID: 107
+    *scop.UpdateTableBackReferencesInSequences
+      BackReferencedColumnID: 3
+      BackReferencedTableID: 107
+      SequenceIDs:
+      - 106
     *scop.MakeIndexAbsent
       IndexID: 1
       TableID: 107
@@ -2464,8 +2464,8 @@ ALTER TABLE defaultdb.foo DROP COLUMN v2 CASCADE;
   rule: dependents removed before column
 - from: [ColumnDefaultExpression:{DescID: 107, ColumnID: 3, ReferencedSequenceIDs: [106], Expr: nextval(106:::REGCLASS)}, ABSENT]
   to:   [ColumnType:{DescID: 107, ColumnFamilyID: 0, ColumnID: 3, TypeName: INT8}, ABSENT]
-  kind: Precedence
-  rule: column type dependents removed right before column type
+  kind: SameStagePrecedence
+  rule: column type dependents removed right before column type, except if part of a column type alteration 
 - from: [ColumnName:{DescID: 107, Name: v2, ColumnID: 3}, ABSENT]
   to:   [Column:{DescID: 107, ColumnID: 3}, ABSENT]
   kind: Precedence
@@ -3042,11 +3042,10 @@ ALTER TABLE defaultdb.foo DROP COLUMN v2 CASCADE;
 ops
 ALTER TABLE defaultdb.foo DROP COLUMN udfcol;
 ----
-StatementPhase stage 1 of 1 with 12 MutationType ops
+StatementPhase stage 1 of 1 with 10 MutationType ops
   transitions:
     [[Column:{DescID: 107, ColumnID: 4}, ABSENT], PUBLIC] -> WRITE_ONLY
     [[ColumnName:{DescID: 107, Name: udfcol, ColumnID: 4}, ABSENT], PUBLIC] -> ABSENT
-    [[ColumnDefaultExpression:{DescID: 107, ColumnID: 4, Expr: [FUNCTION 100109](), ReferencedFunctionIDs: [109]}, ABSENT], PUBLIC] -> ABSENT
     [[PrimaryIndex:{DescID: 107, IndexID: 3, ConstraintID: 3, TemporaryIndexID: 4, SourceIndexID: 1}, PUBLIC], ABSENT] -> BACKFILL_ONLY
     [[IndexColumn:{DescID: 107, ColumnID: 1, IndexID: 3}, PUBLIC], ABSENT] -> PUBLIC
     [[IndexColumn:{DescID: 107, ColumnID: 2, IndexID: 3}, PUBLIC], ABSENT] -> PUBLIC
@@ -3064,14 +3063,6 @@ StatementPhase stage 1 of 1 with 12 MutationType ops
       ColumnID: 4
       Name: crdb_internal_column_4_name_placeholder
       TableID: 107
-    *scop.RemoveColumnDefaultExpression
-      ColumnID: 4
-      TableID: 107
-    *scop.RemoveTableColumnBackReferencesInFunctions
-      BackReferencedColumnID: 4
-      BackReferencedTableID: 107
-      FunctionIDs:
-      - 109
     *scop.MakeAbsentIndexBackfilling
       Index:
         ConstraintID: 3
@@ -3121,7 +3112,6 @@ PreCommitPhase stage 1 of 2 with 1 MutationType op
   transitions:
     [[Column:{DescID: 107, ColumnID: 4}, ABSENT], WRITE_ONLY] -> PUBLIC
     [[ColumnName:{DescID: 107, Name: udfcol, ColumnID: 4}, ABSENT], ABSENT] -> PUBLIC
-    [[ColumnDefaultExpression:{DescID: 107, ColumnID: 4, Expr: [FUNCTION 100109](), ReferencedFunctionIDs: [109]}, ABSENT], ABSENT] -> PUBLIC
     [[PrimaryIndex:{DescID: 107, IndexID: 3, ConstraintID: 3, TemporaryIndexID: 4, SourceIndexID: 1}, PUBLIC], BACKFILL_ONLY] -> ABSENT
     [[IndexColumn:{DescID: 107, ColumnID: 1, IndexID: 3}, PUBLIC], PUBLIC] -> ABSENT
     [[IndexColumn:{DescID: 107, ColumnID: 2, IndexID: 3}, PUBLIC], PUBLIC] -> ABSENT
@@ -3134,11 +3124,10 @@ PreCommitPhase stage 1 of 2 with 1 MutationType op
   ops:
     *scop.UndoAllInTxnImmediateMutationOpSideEffects
       {}
-PreCommitPhase stage 2 of 2 with 17 MutationType ops
+PreCommitPhase stage 2 of 2 with 15 MutationType ops
   transitions:
     [[Column:{DescID: 107, ColumnID: 4}, ABSENT], PUBLIC] -> WRITE_ONLY
     [[ColumnName:{DescID: 107, Name: udfcol, ColumnID: 4}, ABSENT], PUBLIC] -> ABSENT
-    [[ColumnDefaultExpression:{DescID: 107, ColumnID: 4, Expr: [FUNCTION 100109](), ReferencedFunctionIDs: [109]}, ABSENT], PUBLIC] -> ABSENT
     [[PrimaryIndex:{DescID: 107, IndexID: 3, ConstraintID: 3, TemporaryIndexID: 4, SourceIndexID: 1}, PUBLIC], ABSENT] -> BACKFILL_ONLY
     [[IndexColumn:{DescID: 107, ColumnID: 1, IndexID: 3}, PUBLIC], ABSENT] -> PUBLIC
     [[IndexColumn:{DescID: 107, ColumnID: 2, IndexID: 3}, PUBLIC], ABSENT] -> PUBLIC
@@ -3156,14 +3145,6 @@ PreCommitPhase stage 2 of 2 with 17 MutationType ops
       ColumnID: 4
       Name: crdb_internal_column_4_name_placeholder
       TableID: 107
-    *scop.RemoveColumnDefaultExpression
-      ColumnID: 4
-      TableID: 107
-    *scop.RemoveTableColumnBackReferencesInFunctions
-      BackReferencedColumnID: 4
-      BackReferencedTableID: 107
-      FunctionIDs:
-      - 109
     *scop.MakeAbsentIndexBackfilling
       Index:
         ConstraintID: 3
@@ -3407,14 +3388,23 @@ PostCommitNonRevertiblePhase stage 2 of 3 with 8 MutationType ops
     *scop.UpdateSchemaChangerJob
       IsNonCancelable: true
       JobID: 1
-PostCommitNonRevertiblePhase stage 3 of 3 with 7 MutationType ops
+PostCommitNonRevertiblePhase stage 3 of 3 with 9 MutationType ops
   transitions:
     [[Column:{DescID: 107, ColumnID: 4}, ABSENT], DELETE_ONLY] -> ABSENT
     [[ColumnType:{DescID: 107, ColumnFamilyID: 0, ColumnID: 4, TypeName: INT8}, ABSENT], PUBLIC] -> ABSENT
+    [[ColumnDefaultExpression:{DescID: 107, ColumnID: 4, Expr: [FUNCTION 100109](), ReferencedFunctionIDs: [109]}, ABSENT], PUBLIC] -> ABSENT
     [[PrimaryIndex:{DescID: 107, IndexID: 1, ConstraintID: 2}, ABSENT], DELETE_ONLY] -> ABSENT
     [[IndexData:{DescID: 107, IndexID: 1}, ABSENT], PUBLIC] -> ABSENT
     [[IndexData:{DescID: 107, IndexID: 4}, TRANSIENT_ABSENT], PUBLIC] -> TRANSIENT_ABSENT
   ops:
+    *scop.RemoveColumnDefaultExpression
+      ColumnID: 4
+      TableID: 107
+    *scop.RemoveTableColumnBackReferencesInFunctions
+      BackReferencedColumnID: 4
+      BackReferencedTableID: 107
+      FunctionIDs:
+      - 109
     *scop.MakeIndexAbsent
       IndexID: 1
       TableID: 107
@@ -3485,8 +3475,8 @@ ALTER TABLE defaultdb.foo DROP COLUMN udfcol;
   rule: dependents removed before column
 - from: [ColumnDefaultExpression:{DescID: 107, ColumnID: 4, Expr: [FUNCTION 100109](), ReferencedFunctionIDs: [109]}, ABSENT]
   to:   [ColumnType:{DescID: 107, ColumnFamilyID: 0, ColumnID: 4, TypeName: INT8}, ABSENT]
-  kind: Precedence
-  rule: column type dependents removed right before column type
+  kind: SameStagePrecedence
+  rule: column type dependents removed right before column type, except if part of a column type alteration 
 - from: [ColumnName:{DescID: 107, Name: udfcol, ColumnID: 4}, ABSENT]
   to:   [Column:{DescID: 107, ColumnID: 4}, ABSENT]
   kind: Precedence

@@ -693,7 +693,7 @@ begin transaction #17
 validate forward indexes [4] in table #104
 commit transaction #17
 begin transaction #18
-## PostCommitNonRevertiblePhase stage 1 of 4 with 20 MutationType ops
+## PostCommitNonRevertiblePhase stage 1 of 4 with 18 MutationType ops
 upsert descriptor #104
   ...
          oid: 20
@@ -804,9 +804,11 @@ upsert descriptor #104
        mutationId: 1
        state: DELETE_ONLY
   +  - column:
+  +      defaultExpr: 99:::INT8
   +      id: 2
   +      name: j
   +      nullable: true
+  +      onUpdateExpr: (-1):::INT8
   +      type:
   +        family: IntFamily
   +        oid: 20
@@ -851,14 +853,13 @@ upsert descriptor #104
      createAsOfTime:
        wallTime: "1640995200000000000"
   ...
-     mutations:
      - column:
-  -      defaultExpr: 99:::INT8
+         defaultExpr: 99:::INT8
   -      id: 3
   +      id: 2
          name: j
          nullable: true
-  -      onUpdateExpr: (-1):::INT8
+         onUpdateExpr: (-1):::INT8
   -      pgAttributeNum: 2
          type:
   -        family: StringFamily
@@ -927,9 +928,11 @@ upsert descriptor #104
        mutationId: 1
   -    state: DELETE_ONLY
   -  - column:
+  -      defaultExpr: 99:::INT8
   -      id: 2
   -      name: j
   -      nullable: true
+  -      onUpdateExpr: (-1):::INT8
   -      type:
   -        family: IntFamily
   -        oid: 20
@@ -986,10 +989,10 @@ upsert descriptor #104
   -  version: "13"
   +  version: "14"
 persist all catalog changes to storage
-update progress of schema change job #1: "PostCommitNonRevertiblePhase stage 4 of 4 with 6 MutationType ops pending"
+update progress of schema change job #1: "PostCommitNonRevertiblePhase stage 4 of 4 with 8 MutationType ops pending"
 commit transaction #20
 begin transaction #21
-## PostCommitNonRevertiblePhase stage 4 of 4 with 8 MutationType ops
+## PostCommitNonRevertiblePhase stage 4 of 4 with 10 MutationType ops
 upsert descriptor #104
   ...
      createAsOfTime:
@@ -1036,9 +1039,11 @@ upsert descriptor #104
      modificationTime: {}
   -  mutations:
   -  - column:
+  -      defaultExpr: 99:::INT8
   -      id: 2
   -      name: j
   -      nullable: true
+  -      onUpdateExpr: (-1):::INT8
   -      type:
   -        family: IntFamily
   -        oid: 20

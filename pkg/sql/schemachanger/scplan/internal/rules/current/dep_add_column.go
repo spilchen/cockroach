@@ -66,7 +66,7 @@ func init() {
 	)
 
 	registerDepRule(
-		"DEFAULT or ON UPDATE existence precedes writes to column, except if a complex column type conversion is in progress",
+		"DEFAULT or ON UPDATE existence precedes writes to column, except if they are added as part of a alter column type",
 		scgraph.Precedence,
 		"expr", "column",
 		func(from, to NodeVars) rel.Clauses {
@@ -77,7 +77,7 @@ func init() {
 				),
 				to.Type((*scpb.Column)(nil)),
 				JoinOnColumnID(from, to, "table-id", "col-id"),
-				IsNotComplexAlterTypeChange("table-id", "col-id"),
+				IsNotAlterColumnTypeOp("table-id", "col-id"),
 				StatusesToPublicOrTransient(from, scpb.Status_PUBLIC, to, scpb.Status_WRITE_ONLY),
 			}
 		},

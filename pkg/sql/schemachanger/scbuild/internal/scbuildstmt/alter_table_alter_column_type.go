@@ -370,6 +370,7 @@ func handleGeneralColumnConversion(
 			TableID:    tbl.TableID,
 			ColumnID:   newColID,
 			Expression: *b.WrapExpression(tbl.TableID, expr),
+			Usage:      scpb.ColumnComputeExpression_USING_EXPRESSION,
 		},
 		transientCompute: true,
 		notNull:          retrieveColumnNotNull(b, tbl.TableID, col.ColumnID) != nil,
