@@ -7,6 +7,7 @@ package scbuildstmt
 
 import (
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 
 	"github.com/cockroachdb/cockroach/pkg/build"
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
@@ -305,8 +306,10 @@ func handleGeneralColumnConversion(
 	// existed on the old column. These expressions are not permitted on columns
 	// with a computed expression. Dependency rules ensure they are added only
 	// after the temporary compute expression for the new column is removed.
-	oldDefExpr, newDefExpr := getColumnDefaultExpressionsForColumnReplacement(b, tbl, col, newColID)
-	oldOnUpdateExpr, newOnUpdateExpr := getColumnOnUpdateExpressionsForColumnReplacement(b, tbl, col, newColID)
+	oldDefExpr, newDefExpr := getColumnDefaultExpressionsForColumnReplacement(b, tbl.TableID, col.ColumnID, newColID)
+	oldOnUpdateExpr, newOnUpdateExpr := getColumnOnUpdateExpressionsForColumnReplacement(b, tbl.TableID, col.ColumnID, newColID)
+
+	oldColComment, newColComment := getColumnCommentForColumnReplacement(b, tbl.TableID, col.ColumnID, newColID)
 
 	// First set the target status of the old column to drop. We will replace this
 	// column with a new column. This column stays visible until the second backfill.
@@ -321,6 +324,9 @@ func handleGeneralColumnConversion(
 	}
 	if colNotNull != nil {
 		b.Drop(colNotNull)
+	}
+	if oldColComment != nil {
+		b.Drop(oldColComment)
 	}
 	handleDropColumnPrimaryIndexes(b, tbl, col)
 
@@ -358,6 +364,7 @@ func handleGeneralColumnConversion(
 		},
 		def:      newDefExpr,
 		onUpdate: newOnUpdateExpr,
+		comment:  newColComment,
 		colType:  newColType,
 		compute: &scpb.ColumnComputeExpression{
 			TableID:    tbl.TableID,
@@ -497,15 +504,12 @@ func getPgAttributeNum(col *scpb.Column) catid.PGAttributeNum {
 // requires replacing and backfilling the old column with a new one.
 // If no column default expressions exist, both output parameters will be nil.
 func getColumnDefaultExpressionsForColumnReplacement(
-	b BuildCtx, tbl *scpb.Table, col *scpb.Column, newColID catid.ColumnID,
+	b BuildCtx, tableID catid.DescID, oldColID, newColID catid.ColumnID,
 ) (oldDefExpr, newDefExpr *scpb.ColumnDefaultExpression) {
-	oldDefExpr = retrieveColumnDefaultExpressionElem(b, tbl.TableID, col.ColumnID)
+	oldDefExpr = retrieveColumnDefaultExpressionElem(b, tableID, oldColID)
 	if oldDefExpr != nil {
-		newDefExpr = &scpb.ColumnDefaultExpression{
-			TableID:    tbl.TableID,
-			ColumnID:   newColID,
-			Expression: oldDefExpr.Expression,
-		}
+		newDefExpr = protoutil.Clone(oldDefExpr).(*scpb.ColumnDefaultExpression)
+		newDefExpr.ColumnID = newColID
 	}
 	return
 }
@@ -515,15 +519,31 @@ func getColumnDefaultExpressionsForColumnReplacement(
 // requires replacing and backfilling the old column with a new one.
 // If no on update expressions exist, both output parameters will be nil.
 func getColumnOnUpdateExpressionsForColumnReplacement(
-	b BuildCtx, tbl *scpb.Table, col *scpb.Column, newColID catid.ColumnID,
+	b BuildCtx, tableID catid.DescID, oldColID, newColID catid.ColumnID,
 ) (oldOnUpdateExpr, newOnUpdateExpr *scpb.ColumnOnUpdateExpression) {
-	oldOnUpdateExpr = retrieveColumnOnUpdateExpressionElem(b, tbl.TableID, col.ColumnID)
+	oldOnUpdateExpr = retrieveColumnOnUpdateExpressionElem(b, tableID, oldColID)
 	if oldOnUpdateExpr != nil {
-		newOnUpdateExpr = &scpb.ColumnOnUpdateExpression{
-			TableID:    tbl.TableID,
-			ColumnID:   newColID,
-			Expression: oldOnUpdateExpr.Expression,
-		}
+		newOnUpdateExpr = protoutil.Clone(oldOnUpdateExpr).(*scpb.ColumnOnUpdateExpression)
+		newOnUpdateExpr.ColumnID = newColID
+	}
+	return
+}
+
+// getColumnCommentForColumnReplacement returns two versions of ColumnComment when
+// replacing a column: one for the old column and one for the new column. If no
+// column comment exists, both output parameters will be nil.
+func getColumnCommentForColumnReplacement(
+	b BuildCtx, tableID catid.DescID, oldColID, newColID catid.ColumnID,
+) (oldColumnComment, newColumnComment *scpb.ColumnComment) {
+	oldColumnComment = retrieveColumnComment(b, tableID, oldColID)
+	if oldColumnComment != nil {
+		// We intentionally keep all aspects of the new column comment unchanged.
+		// Technically, the column ID should be updated, but since the comment is stored
+		// using PGAttributeNum rather than the column ID, we want the Add/Drop actions
+		// to cancel each other out; this won't work if the ColumnID is updated, as the
+		// attributes would differ. The drop action on the column comment is only included
+		// to satisfy the call to assertAllColumnElementsAreDropped.
+		newColumnComment = protoutil.Clone(oldColumnComment).(*scpb.ColumnComment)
 	}
 	return
 }
