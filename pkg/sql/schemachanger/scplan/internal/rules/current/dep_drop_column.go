@@ -202,9 +202,13 @@ func init() {
 	// storing all public columns within the table (as the column being dropped is still considered public
 	// before it moves to WRITE_ONLY but the new primary index does not contain it since the schema changer
 	// knows it is transitioning to a target status of ABSENT).
+	//
+	// We apply SameStagePrecedence to allow swapping dropped and added columns within the same stage. This
+	// is important when a drop/add operation is used to replace a column, as in an ALTER COLUMN ... TYPE
+	// operation.
 	registerDepRule(
 		"New primary index should go public only after columns being dropped move to WRITE_ONLY",
-		scgraph.Precedence,
+		scgraph.SameStagePrecedence,
 		"column", "new-primary-index",
 		func(from, to NodeVars) rel.Clauses {
 			ic := MkNodeVars("index-column")
