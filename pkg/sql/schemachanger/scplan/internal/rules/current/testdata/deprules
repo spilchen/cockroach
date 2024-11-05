@@ -763,27 +763,6 @@ deprules
     - $column-expr-Node[CurrentStatus] = PUBLIC
     - joinTargetNode($transient-compute-expression, $transient-compute-expression-Target, $transient-compute-expression-Node)
     - joinTargetNode($column-expr, $column-expr-Target, $column-expr-Node)
-- name: During alter column type, new primary index should go public in the same stage we are dropping the column
-  from: column-Node
-  kind: SameStagePrecedence
-  to: new-primary-index-Node
-  query:
-    - $column[Type] = '*scpb.Column'
-    - $new-primary-index[Type] = '*scpb.PrimaryIndex'
-    - ColumnInSourcePrimaryIndex($index-column, $new-primary-index, $table-id, $column-id, $index-id)
-    - joinOnColumnID($index-column, $column, $table-id, $column-id)
-    - $column-Target[TargetStatus] = ABSENT
-    - $column-Node[CurrentStatus] = WRITE_ONLY
-    - $new-primary-index-Target[TargetStatus] = PUBLIC
-    - $new-primary-index-Node[CurrentStatus] = PUBLIC
-    - $column[Type] = '*scpb.Column'
-    - $compute-expression[Type] = '*scpb.ColumnComputeExpression'
-    - joinOnColumnID($column, $compute-expression, $table-id, $column-id)
-    - $compute-expression[Usage] = USING_EXPRESSION
-    - joinTargetNode($column, $column-Target, $column-Node)
-    - joinTargetNode($compute-expression, $compute-expression-Target, $compute-expression-Node)
-    - joinTargetNode($column, $column-Target, $column-Node)
-    - joinTargetNode($new-primary-index, $new-primary-index-Target, $new-primary-index-Node)
 - name: 'ForeignKeyConstraint transitions to ABSENT uphold 2-version invariant: PUBLIC->VALIDATED'
   from: prev-Node
   kind: PreviousTransactionPrecedence
@@ -911,6 +890,33 @@ deprules
     - descriptorIsDataNotBeingAdded-25.1($descID)
     - joinTargetNode($prev, $prev-Target, $prev-Node)
     - joinTargetNode($next, $next-Target, $next-Node)
+- name: New primary index for alter column type should go public in the same stage as dropped column
+  from: column-Node
+  kind: SameStagePrecedence
+  to: new-primary-index-Node
+  query:
+    - $column[Type] = '*scpb.Column'
+    - $new-primary-index[Type] = '*scpb.PrimaryIndex'
+    - ColumnInSourcePrimaryIndex($index-column, $new-primary-index, $table-id, $old-column-id, $index-id)
+    - joinOnColumnID($index-column, $column, $table-id, $old-column-id)
+    - $column-Target[TargetStatus] = ABSENT
+    - $column-Node[CurrentStatus] = WRITE_ONLY
+    - $new-primary-index-Target[TargetStatus] = PUBLIC
+    - $new-primary-index-Node[CurrentStatus] = PUBLIC
+    - $old-column-name[Type] = '*scpb.ColumnName'
+    - $new-column-name[Type] = '*scpb.ColumnName'
+    - joinOnColumnName($old-column-name, $new-column-name, $table-id, $column-name)
+    - $old-column-name[ColumnID] = $old-column-id
+    - $old-column-name-Target[TargetStatus] = ABSENT
+    - $new-column-name-Target[TargetStatus] = PUBLIC
+    - $compute-expression[Type] = '*scpb.ColumnComputeExpression'
+    - joinOnColumnID($new-column-name, $compute-expression, $table-id, $new-column-id)
+    - $compute-expression[Usage] = USING_EXPRESSION
+    - joinTargetNode($old-column-name, $old-column-name-Target, $old-column-name-Node)
+    - joinTargetNode($new-column-name, $new-column-name-Target, $new-column-name-Node)
+    - joinTargetNode($compute-expression, $compute-expression-Target, $compute-expression-Node)
+    - joinTargetNode($column, $column-Target, $column-Node)
+    - joinTargetNode($new-primary-index, $new-primary-index-Target, $new-primary-index-Node)
 - name: New primary index should go public only after columns being dropped move to WRITE_ONLY
   from: column-Node
   kind: Precedence
@@ -918,13 +924,13 @@ deprules
   query:
     - $column[Type] = '*scpb.Column'
     - $new-primary-index[Type] = '*scpb.PrimaryIndex'
-    - ColumnInSourcePrimaryIndex($index-column, $new-primary-index, $table-id, $column-id, $index-id)
-    - joinOnColumnID($index-column, $column, $table-id, $column-id)
+    - ColumnInSourcePrimaryIndex($index-column, $new-primary-index, $table-id, $old-column-id, $index-id)
+    - joinOnColumnID($index-column, $column, $table-id, $old-column-id)
     - $column-Target[TargetStatus] = ABSENT
     - $column-Node[CurrentStatus] = WRITE_ONLY
     - $new-primary-index-Target[TargetStatus] = PUBLIC
     - $new-primary-index-Node[CurrentStatus] = PUBLIC
-    - no column type alteration in progress($table-id, $column-id)
+    - dropped column is not part of column type operation($table-id, $old-column-id)
     - joinTargetNode($column, $column-Target, $column-Node)
     - joinTargetNode($new-primary-index, $new-primary-index-Target, $new-primary-index-Node)
 - name: 'PrimaryIndex transitions to ABSENT uphold 2-version invariant: BACKFILLED->DELETE_ONLY'
@@ -5264,27 +5270,6 @@ deprules
     - $column-expr-Node[CurrentStatus] = PUBLIC
     - joinTargetNode($transient-compute-expression, $transient-compute-expression-Target, $transient-compute-expression-Node)
     - joinTargetNode($column-expr, $column-expr-Target, $column-expr-Node)
-- name: During alter column type, new primary index should go public in the same stage we are dropping the column
-  from: column-Node
-  kind: SameStagePrecedence
-  to: new-primary-index-Node
-  query:
-    - $column[Type] = '*scpb.Column'
-    - $new-primary-index[Type] = '*scpb.PrimaryIndex'
-    - ColumnInSourcePrimaryIndex($index-column, $new-primary-index, $table-id, $column-id, $index-id)
-    - joinOnColumnID($index-column, $column, $table-id, $column-id)
-    - $column-Target[TargetStatus] = ABSENT
-    - $column-Node[CurrentStatus] = WRITE_ONLY
-    - $new-primary-index-Target[TargetStatus] = PUBLIC
-    - $new-primary-index-Node[CurrentStatus] = PUBLIC
-    - $column[Type] = '*scpb.Column'
-    - $compute-expression[Type] = '*scpb.ColumnComputeExpression'
-    - joinOnColumnID($column, $compute-expression, $table-id, $column-id)
-    - $compute-expression[Usage] = USING_EXPRESSION
-    - joinTargetNode($column, $column-Target, $column-Node)
-    - joinTargetNode($compute-expression, $compute-expression-Target, $compute-expression-Node)
-    - joinTargetNode($column, $column-Target, $column-Node)
-    - joinTargetNode($new-primary-index, $new-primary-index-Target, $new-primary-index-Node)
 - name: 'ForeignKeyConstraint transitions to ABSENT uphold 2-version invariant: PUBLIC->VALIDATED'
   from: prev-Node
   kind: PreviousTransactionPrecedence
@@ -5412,6 +5397,33 @@ deprules
     - descriptorIsDataNotBeingAdded-25.1($descID)
     - joinTargetNode($prev, $prev-Target, $prev-Node)
     - joinTargetNode($next, $next-Target, $next-Node)
+- name: New primary index for alter column type should go public in the same stage as dropped column
+  from: column-Node
+  kind: SameStagePrecedence
+  to: new-primary-index-Node
+  query:
+    - $column[Type] = '*scpb.Column'
+    - $new-primary-index[Type] = '*scpb.PrimaryIndex'
+    - ColumnInSourcePrimaryIndex($index-column, $new-primary-index, $table-id, $old-column-id, $index-id)
+    - joinOnColumnID($index-column, $column, $table-id, $old-column-id)
+    - $column-Target[TargetStatus] = ABSENT
+    - $column-Node[CurrentStatus] = WRITE_ONLY
+    - $new-primary-index-Target[TargetStatus] = PUBLIC
+    - $new-primary-index-Node[CurrentStatus] = PUBLIC
+    - $old-column-name[Type] = '*scpb.ColumnName'
+    - $new-column-name[Type] = '*scpb.ColumnName'
+    - joinOnColumnName($old-column-name, $new-column-name, $table-id, $column-name)
+    - $old-column-name[ColumnID] = $old-column-id
+    - $old-column-name-Target[TargetStatus] = ABSENT
+    - $new-column-name-Target[TargetStatus] = PUBLIC
+    - $compute-expression[Type] = '*scpb.ColumnComputeExpression'
+    - joinOnColumnID($new-column-name, $compute-expression, $table-id, $new-column-id)
+    - $compute-expression[Usage] = USING_EXPRESSION
+    - joinTargetNode($old-column-name, $old-column-name-Target, $old-column-name-Node)
+    - joinTargetNode($new-column-name, $new-column-name-Target, $new-column-name-Node)
+    - joinTargetNode($compute-expression, $compute-expression-Target, $compute-expression-Node)
+    - joinTargetNode($column, $column-Target, $column-Node)
+    - joinTargetNode($new-primary-index, $new-primary-index-Target, $new-primary-index-Node)
 - name: New primary index should go public only after columns being dropped move to WRITE_ONLY
   from: column-Node
   kind: Precedence
@@ -5419,13 +5431,13 @@ deprules
   query:
     - $column[Type] = '*scpb.Column'
     - $new-primary-index[Type] = '*scpb.PrimaryIndex'
-    - ColumnInSourcePrimaryIndex($index-column, $new-primary-index, $table-id, $column-id, $index-id)
-    - joinOnColumnID($index-column, $column, $table-id, $column-id)
+    - ColumnInSourcePrimaryIndex($index-column, $new-primary-index, $table-id, $old-column-id, $index-id)
+    - joinOnColumnID($index-column, $column, $table-id, $old-column-id)
     - $column-Target[TargetStatus] = ABSENT
     - $column-Node[CurrentStatus] = WRITE_ONLY
     - $new-primary-index-Target[TargetStatus] = PUBLIC
     - $new-primary-index-Node[CurrentStatus] = PUBLIC
-    - no column type alteration in progress($table-id, $column-id)
+    - dropped column is not part of column type operation($table-id, $old-column-id)
     - joinTargetNode($column, $column-Target, $column-Node)
     - joinTargetNode($new-primary-index, $new-primary-index-Target, $new-primary-index-Node)
 - name: 'PrimaryIndex transitions to ABSENT uphold 2-version invariant: BACKFILLED->DELETE_ONLY'
