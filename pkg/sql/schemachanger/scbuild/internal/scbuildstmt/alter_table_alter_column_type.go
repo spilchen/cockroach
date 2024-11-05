@@ -240,13 +240,14 @@ func handleGeneralColumnConversion(
 			panic(sqlerrors.NewAlterColumnTypeColWithConstraintNotSupportedErr())
 		case *scpb.SecondaryIndex:
 			panic(sqlerrors.NewAlterColumnTypeColInIndexNotSupportedErr())
-		case *scpb.ColumnComputeExpression:
-			// TODO(#125844): we currently lose the original computed expression.
-			panic(scerrors.NotImplementedErrorf(t,
-				"backfilling during ALTER COLUMN TYPE for a column "+
-					"with a computed expression is not supported"))
 		}
 	})
+
+	if oldColType.IsVirtual {
+		// TODO(#125840): we currently don't support altering the type of a virtual column
+		panic(scerrors.NotImplementedErrorf(t,
+			"backfilling during ALTER COLUMN TYPE for a virtual column is not supported"))
+	}
 
 	// We block any attempt to alter the type of a column that is a key column in
 	// the primary key. We can't use walkColumnDependencies here, as it doesn't
@@ -299,6 +300,12 @@ func handleGeneralColumnConversion(
 	oldDefExpr, newDefExpr := getColumnDefaultExpressionsForColumnReplacement(b, tbl.TableID, col.ColumnID, newColID)
 	oldOnUpdateExpr, newOnUpdateExpr := getColumnOnUpdateExpressionsForColumnReplacement(b, tbl.TableID, col.ColumnID, newColID)
 
+	oldComputeExpr, newComputeExpr, err := getColumnComputeExpressionsForColumnReplacement(
+		b, tn, tbl.TableID, col.ColumnID, newColID, newColType.Type)
+	if err != nil {
+		panic(err)
+	}
+
 	oldColComment, newColComment := getColumnCommentForColumnReplacement(b, tbl.TableID, col.ColumnID, newColID)
 
 	// First, set the target status of the old column to drop. This column will be
@@ -308,6 +315,9 @@ func handleGeneralColumnConversion(
 	b.Drop(col)
 	b.Drop(colName)
 	b.Drop(oldColType)
+	if oldComputeExpr != nil {
+		b.Drop(oldComputeExpr)
+	}
 	if oldDefExpr != nil {
 		b.Drop(oldDefExpr)
 	}
@@ -358,14 +368,14 @@ func handleGeneralColumnConversion(
 		onUpdate: newOnUpdateExpr,
 		comment:  newColComment,
 		colType:  newColType,
-		compute: &scpb.ColumnComputeExpression{
+		compute:  newComputeExpr,
+		transientCompute: &scpb.ColumnComputeExpression{
 			TableID:    tbl.TableID,
 			ColumnID:   newColID,
 			Expression: *b.WrapExpression(tbl.TableID, expr),
 			Usage:      scpb.ColumnComputeExpression_ALTER_TYPE_USING,
 		},
-		transientCompute: true,
-		notNull:          retrieveColumnNotNull(b, tbl.TableID, col.ColumnID) != nil,
+		notNull: retrieveColumnNotNull(b, tbl.TableID, col.ColumnID) != nil,
 		// The new column will be placed in the same column family as the one
 		// it's replacing, so there's no need to specify a family.
 		fam: nil,
@@ -508,6 +518,42 @@ func getColumnOnUpdateExpressionsForColumnReplacement(
 	if oldOnUpdateExpr != nil {
 		newOnUpdateExpr = protoutil.Clone(oldOnUpdateExpr).(*scpb.ColumnOnUpdateExpression)
 		newOnUpdateExpr.ColumnID = newColID
+	}
+	return
+}
+
+// SPILLY - prolog
+func getColumnComputeExpressionsForColumnReplacement(
+	b BuildCtx, tn *tree.TableName, tableID catid.DescID, oldColID, newColID catid.ColumnID, newColType *types.T,
+) (oldComputeExpr, newComputeExpr *scpb.ColumnComputeExpression, err error) {
+	oldComputeExpr = b.QueryByID(tableID).FilterColumnComputeExpression().Filter(
+		func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.ColumnComputeExpression) bool {
+			return e.ColumnID == oldColID
+		}).MustGetZeroOrOneElement()
+	if oldComputeExpr != nil {
+		newComputeExpr = protoutil.Clone(oldComputeExpr).(*scpb.ColumnComputeExpression)
+		newComputeExpr.ColumnID = newColID
+
+		// We need to check that the new compute expression is compatible with the new column type.
+		var expr tree.Expr
+		expr, err = parser.ParseExpr(string(newComputeExpr.Expression.Expr))
+		if err != nil {
+			return
+		}
+
+		_, _, _, err = schemaexpr.DequalifyAndValidateExprImpl(b, expr, newColType,
+			tree.StoredComputedColumnExpr, b.SemaCtx(), volatility.Volatile, tn, b.ClusterSettings().Version.ActiveVersion(b),
+			func() colinfo.ResultColumns {
+				return getNonDropResultColumns(b, tableID)
+			},
+			func(columnName tree.Name) (exists bool, accessible bool, id catid.ColumnID, typ *types.T) {
+				return columnLookupFn(b, tableID, columnName)
+			},
+		)
+		if err != nil {
+			return
+		}
+		// SPILLY - do we need to save off the new expression. Possibly for enum types?
 	}
 	return
 }

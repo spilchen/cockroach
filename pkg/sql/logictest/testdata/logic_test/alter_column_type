@@ -1361,4 +1361,35 @@ rowid  INT8   false  unique_rowid()  ·  {t_many_pkey}  true
 statement ok
 DROP TABLE t_many;
 
+subtest stored_compute
+
+statement ok
+CREATE TABLE stored1 (A INT NOT NULL PRIMARY KEY, COMP1 SMALLINT NOT NULL AS (C1 / 10) STORED, FAMILY F1(A, COMP1));
+
+statement ok
+INSERT INTO stored1 VALUES (10),(150),(190),(2000);
+
+query II
+SELECT * FROM stored1 ORDER BY C1;
+----
+10 1
+150 15
+190 19
+2000 200
+
+statement ok
+ALTER TABLE stored1 ALTER COLUMN COMP1 SET DATA TYPE BIGINT;
+
+query TT
+SHOW CREATE TABLE stored1;
+----
+stored1 CREATE TABLE public.stored1(
+                  A INT8 NOT NULL,
+                  COMP1 SMALLINT NOT NULL,
+                  FAMILY F1 (A, COMP1)
+                )
+
+statement ok
+DROP TABLE stored1;
+
 subtest end
