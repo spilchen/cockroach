@@ -32,8 +32,11 @@ func init() {
 		},
 	)
 
+	// This rule is similar to the one above but omits the column name. This is specific
+	// to ALTER COLUMN ... TYPE, which replaces a column with the same name. The column
+	// name is assigned during the swap, as it replaces the old column.
 	registerDepRule(
-		"column existence precedes column dependents (version for alter column type)",
+		"column existence precedes column dependents during an alter column type",
 		scgraph.Precedence,
 		"column", "dependent",
 		func(from, to NodeVars) rel.Clauses {
@@ -67,7 +70,7 @@ func init() {
 	registerDepRule(
 		"column type set right after column existence",
 		scgraph.SameStagePrecedence,
-		"column", "column-name-or-type",
+		"column", "column-type",
 		func(from, to NodeVars) rel.Clauses {
 			return rel.Clauses{
 				from.Type((*scpb.Column)(nil)),
@@ -78,6 +81,10 @@ func init() {
 		},
 	)
 
+	// There are two distinct rules for transitioning the column name to public,
+	// depending on whether an ALTER COLUMN TYPE operation is in progress.
+	// This rule applies when an ALTER COLUMN TYPE is *not* occurring and is
+	// identical to the prior rule for ColumnType, except that it applies to ColumnName.
 	registerDepRule(
 		"column name set right after column existence, except for alter column type",
 		scgraph.SameStagePrecedence,
@@ -93,7 +100,10 @@ func init() {
 		},
 	)
 
-	// SPILLY - consider better spot for this
+	// This rule is similar to the previous one but applies during an ALTER COLUMN TYPE operation.
+	// In this scenario, we are replacing one column with another, both of which share the same name.
+	// To prevent any period where a column with that name is not public, we ensure that the column
+	// names are swapped in the same stage.
 	registerDepRule(
 		"during alter column type, column names for old and new columns are swapped in the same stage",
 		scgraph.SameStagePrecedence,
@@ -107,27 +117,8 @@ func init() {
 				to.TargetStatus(scpb.ToPublic),
 				to.CurrentStatus(scpb.Status_PUBLIC),
 				JoinOnDescID(from, to, "table-id"),
-				// SPILLY - we have matched on table id. We want to pull out the columnID of To.
 				to.El.AttrEqVar(screl.ColumnID, "new-col-id"),
 				rel.And(IsAlterColumnTypeOp("table-id", "new-col-id")...),
-			}
-		},
-	)
-
-	registerDepRule(
-		"during alter column type, transient column name set right after column existence",
-		scgraph.SameStagePrecedence,
-		"column", "column-name-or-type",
-		func(from, to NodeVars) rel.Clauses {
-			return rel.Clauses{
-				from.Type((*scpb.Column)(nil)),
-				to.Type((*scpb.ColumnName)(nil)),
-				from.TargetStatus(scpb.ToPublic),
-				to.TargetStatus(scpb.Transient),
-				from.CurrentStatus(scpb.Status_DELETE_ONLY),
-				to.CurrentStatus(scpb.Status_PUBLIC),
-				JoinOnColumnID(from, to, "table-id", "col-id"),
-				rel.And(IsAlterColumnTypeOp("table-id", "col-id")...),
 			}
 		},
 	)

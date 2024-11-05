@@ -108,7 +108,6 @@ const (
 	// Usage is an attribute for column compute expression to identify why it's
 	// being added.
 	Usage
-	SwapColumnID
 
 	// AttrMax is the largest possible Attr value.
 	// Note: add any new enum values before TargetStatus, leave these at the end.
@@ -265,7 +264,6 @@ var elementSchemaOptions = []rel.SchemaOption{
 		rel.EntityAttr(DescID, "TableID"),
 		rel.EntityAttr(ColumnID, "ColumnID"),
 		rel.EntityAttr(Name, "Name"),
-		rel.EntityAttr(SwapColumnID, "SwapColumnID"),
 	),
 	rel.EntityMapping(t((*scpb.ColumnType)(nil)),
 		rel.EntityAttr(DescID, "TableID"),

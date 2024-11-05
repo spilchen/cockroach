@@ -38,8 +38,7 @@ func _() {
 	_ = x[TypeName-23]
 	_ = x[PartitionName-24]
 	_ = x[Usage-25]
-	_ = x[SwapColumnID-26]
-	_ = x[AttrMax-26]
+	_ = x[AttrMax-25]
 }
 
 func (i Attr) String() string {
@@ -94,8 +93,6 @@ func (i Attr) String() string {
 		return "PartitionName"
 	case Usage:
 		return "Usage"
-	case SwapColumnID:
-		return "SwapColumnID"
 	default:
 		return "Attr(" + strconv.FormatInt(int64(i), 10) + ")"
 	}

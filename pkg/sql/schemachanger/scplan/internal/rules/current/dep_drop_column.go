@@ -206,6 +206,9 @@ func init() {
 	// We apply SameStagePrecedence to allow swapping dropped and added columns within the same stage. This
 	// is important when a drop/add operation is used to replace a column, as in an ALTER COLUMN ... TYPE
 	// operation.
+	// SPILLY - this rule as SameStagePrecedence messes up an alter statement that does add/drop of the same
+	// column. Previously, it would set the dropped column to be WRITE_ONLY and its column name would be set as the placeholder.
+	// SPILLY - we could keep this rule and try to solve the add/drop case.
 	registerDepRule(
 		"New primary index should go public only after columns being dropped move to WRITE_ONLY",
 		scgraph.SameStagePrecedence,

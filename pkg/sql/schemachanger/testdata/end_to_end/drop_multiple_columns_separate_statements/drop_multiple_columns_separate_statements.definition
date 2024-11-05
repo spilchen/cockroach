@@ -21,6 +21,7 @@ pq: column "k" does not exist
 stage-exec phase=PostCommitPhase stage=:
 INSERT INTO t (i) VALUES($stageKey);
 ----
+pq: duplicate key value violates unique constraint "t_pkey"
 
 stage-exec phase=PostCommitPhase stage=:
 SELECT j+1, k FROM t
@@ -58,6 +59,7 @@ pq: column "j" does not exist
 stage-exec phase=PostCommitNonRevertiblePhase stage=:
 INSERT INTO t (i) VALUES($stageKey);
 ----
+pq: duplicate key value violates unique constraint "t_pkey"
 
 stage-exec phase=PostCommitNonRevertiblePhase stage=:
 SELECT count(i) FROM t

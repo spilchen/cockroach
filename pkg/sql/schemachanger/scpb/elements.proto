@@ -629,12 +629,6 @@ message ColumnName {
   uint32 table_id = 1 [(gogoproto.customname) = "TableID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.DescID"];
   uint32 column_id = 2 [(gogoproto.customname) = "ColumnID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.ColumnID"];
   string name = 3;
-  // AbsentName is the name to use when ColumnName transitions to ABSENT. If this
-  // is omitted, a placeholder name is used.
-  string absent_name = 4;
-  // When a new column is added to replace an old one, this stores the column ID of the old column.
-  // SPILLY - update
-  uint32 swap_column_id = 5 [(gogoproto.customname) = "SwapColumnID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.ColumnID"];
 }
 
 message IndexName {
