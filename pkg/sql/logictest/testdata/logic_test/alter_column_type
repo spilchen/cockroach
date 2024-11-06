@@ -1364,30 +1364,66 @@ DROP TABLE t_many;
 subtest stored_compute
 
 statement ok
-CREATE TABLE stored1 (A INT NOT NULL PRIMARY KEY, COMP1 SMALLINT NOT NULL AS (C1 / 10) STORED, FAMILY F1(A, COMP1));
+CREATE TABLE stored1 (A INT NOT NULL PRIMARY KEY, COMP1 SMALLINT NOT NULL AS ((A / 10)::int8) STORED, FAMILY F1(A, COMP1));
 
 statement ok
 INSERT INTO stored1 VALUES (10),(150),(190),(2000);
 
 query II
-SELECT * FROM stored1 ORDER BY C1;
+SELECT * FROM stored1 ORDER BY A;
 ----
 10 1
 150 15
 190 19
 2000 200
 
+# Do trivial column change (SMALLINT -> BIGINT)
 statement ok
 ALTER TABLE stored1 ALTER COLUMN COMP1 SET DATA TYPE BIGINT;
 
 query TT
 SHOW CREATE TABLE stored1;
 ----
-stored1 CREATE TABLE public.stored1(
-                  A INT8 NOT NULL,
-                  COMP1 SMALLINT NOT NULL,
-                  FAMILY F1 (A, COMP1)
-                )
+stored1  CREATE TABLE public.stored1 (
+           a INT8 NOT NULL,
+           comp1 INT8 NOT NULL AS ((a / 10:::INT8)::INT8) STORED,
+           CONSTRAINT stored1_pkey PRIMARY KEY (a ASC),
+           FAMILY f1 (a, comp1)
+         )
+
+query II
+SELECT * FROM stored1 ORDER BY A;
+----
+10 1
+150 15
+190 19
+2000 200
+
+# Do validation-only change (BIGINT -> INT4). But first insert a row that will violate INT4.
+statement ok
+INSERT INTO stored1 VALUES (2147483648),(2147483647);
+
+statement ok
+# SPILLY - the validation should have prevented this
+ALTER TABLE stored1 ALTER COLUMN COMP1 SET DATA TYPE INT4;
+
+query TT
+SHOW CREATE TABLE stored1;
+----
+stored1  CREATE TABLE public.stored1 (
+           a INT8 NOT NULL,
+           comp1 INT4 NOT NULL AS ((a / 10:::INT8)::INT8) STORED,
+           CONSTRAINT stored1_pkey PRIMARY KEY (a ASC),
+           FAMILY f1 (a, comp1)
+         )
+
+query II
+SELECT * FROM stored1 ORDER BY A;
+----
+10 1
+150 15
+190 19
+2000 200
 
 statement ok
 DROP TABLE stored1;
