@@ -196,7 +196,7 @@ func init() {
 				from.Type((*scpb.ColumnComputeExpression)(nil)),
 				to.Type((*scpb.ColumnComputeExpression)(nil)),
 				JoinOnColumnID(from, to, "table-id", "col-id"),
-				from.El.AttrEq(screl.Usage, scpb.ColumnComputeExpression_USING_EXPRESSION),
+				from.El.AttrEq(screl.Usage, scpb.ColumnComputeExpression_ALTER_TYPE_USING),
 				to.El.AttrEq(screl.Usage, scpb.ColumnComputeExpression_REGULAR),
 				ToPublicOrTransient(from, to),
 				from.CurrentStatus(scpb.Status_TRANSIENT_ABSENT),

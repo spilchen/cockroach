@@ -1403,8 +1403,8 @@ SELECT * FROM stored1 ORDER BY A;
 statement ok
 INSERT INTO stored1 VALUES (2147483648),(2147483647);
 
-statement ok
 # SPILLY - the validation should have prevented this
+statement ok
 ALTER TABLE stored1 ALTER COLUMN COMP1 SET DATA TYPE INT4;
 
 query TT
@@ -1424,6 +1424,44 @@ SELECT * FROM stored1 ORDER BY A;
 150 15
 190 19
 2000 200
+2147483647  214748365
+2147483648  214748365
+
+# Attempt to convert to a type that is compatible with the computed expression
+statement error pq: column "comp1" cannot be cast automatically to type BOOL
+ALTER TABLE stored1 ALTER COLUMN comp1 SET DATA TYPE BOOL;
+
+statement error pq: expected STORED COMPUTED COLUMN expression to have type string, but '\(a / 10\)::INT8' has type int
+ALTER TABLE stored1 ALTER COLUMN comp1 SET DATA TYPE TEXT;
+
+# Convert the type to something compatible, but specify a custom value for the
+# column with the USING expression. This will force a type conversion with a backfill.
+statement ok
+ALTER TABLE stored1 ALTER COLUMN comp1 SET DATA TYPE INT2 USING -1;
+
+statement ok
+INSERT INTO stored1 VALUES (-1000);
+
+query TT
+SHOW CREATE TABLE stored1;
+----
+stored1  CREATE TABLE public.stored1 (
+           a INT8 NOT NULL,
+           comp1 INT2 NOT NULL AS ((a / 10:::INT8)::INT8) STORED,
+           CONSTRAINT stored1_pkey PRIMARY KEY (a ASC),
+           FAMILY f1 (a, comp1)
+         )
+
+query II
+SELECT * FROM stored1 ORDER BY A;
+----
+-1000 -100
+10 -1
+150 -1
+190 -1
+2000 -1
+2147483647  -1
+2147483648  -1
 
 statement ok
 DROP TABLE stored1;
