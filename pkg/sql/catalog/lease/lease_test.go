@@ -1291,10 +1291,15 @@ CREATE TABLE t.test2 ();
 `); err != nil {
 		t.Fatal(err)
 	}
-	// Disable the automatic stats collection, which could interfere with
-	// the lease acquisition counts in this test.
-	if _, err := t.db.Exec("SET CLUSTER SETTING sql.stats.automatic_collection.enabled = false"); err != nil {
-		t.Fatal(err)
+	// Disable background tasks that might query or acquire leases, as they could interfere with lease acquisition
+	// counts in this test.
+	for _, clusterSetting := range []string{
+		"sql.stats.automatic_collection.enabled",
+		"sql.telemetry.capture_index_usage_stats.enabled",
+	} {
+		if _, err := t.db.Exec(fmt.Sprintf("SET CLUSTER SETTING %s = false", clusterSetting)); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	test1Desc := desctestutils.TestingGetPublicTableDescriptor(t.kvDB, t.server.Codec(), "t", "test1")
