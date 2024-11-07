@@ -1364,7 +1364,7 @@ DROP TABLE t_many;
 subtest stored_compute
 
 statement ok
-CREATE TABLE stored1 (A INT NOT NULL PRIMARY KEY, COMP1 SMALLINT NOT NULL AS ((A / 10)::int8) STORED, FAMILY F1(A, COMP1));
+CREATE TABLE stored1 (A INT NOT NULL PRIMARY KEY, COMP1 SMALLINT NOT NULL AS (A) STORED, FAMILY F1(A, COMP1));
 
 statement ok
 INSERT INTO stored1 VALUES (10),(150),(190),(2000);
@@ -1372,10 +1372,10 @@ INSERT INTO stored1 VALUES (10),(150),(190),(2000);
 query II
 SELECT * FROM stored1 ORDER BY A;
 ----
-10 1
-150 15
-190 19
-2000 200
+10 10
+150 150
+190 190
+2000 2000
 
 # Do trivial column change (SMALLINT -> BIGINT)
 statement ok
@@ -1386,7 +1386,7 @@ SHOW CREATE TABLE stored1;
 ----
 stored1  CREATE TABLE public.stored1 (
            a INT8 NOT NULL,
-           comp1 INT8 NOT NULL AS ((a / 10:::INT8)::INT8) STORED,
+           comp1 INT8 NOT NULL AS (a) STORED,
            CONSTRAINT stored1_pkey PRIMARY KEY (a ASC),
            FAMILY f1 (a, comp1)
          )
@@ -1394,16 +1394,21 @@ stored1  CREATE TABLE public.stored1 (
 query II
 SELECT * FROM stored1 ORDER BY A;
 ----
-10 1
-150 15
-190 19
-2000 200
+10 10
+150 150
+190 190
+2000 2000
 
 # Do validation-only change (BIGINT -> INT4). But first insert a row that will violate INT4.
 statement ok
 INSERT INTO stored1 VALUES (2147483648),(2147483647);
 
-# SPILLY - the validation should have prevented this
+statement error pq: validate check constraint: integer out of range for type int4
+ALTER TABLE stored1 ALTER COLUMN COMP1 SET DATA TYPE INT4;
+
+statement ok
+DELETE FROM stored1 WHERE a = 2147483648;
+
 statement ok
 ALTER TABLE stored1 ALTER COLUMN COMP1 SET DATA TYPE INT4;
 
@@ -1412,7 +1417,7 @@ SHOW CREATE TABLE stored1;
 ----
 stored1  CREATE TABLE public.stored1 (
            a INT8 NOT NULL,
-           comp1 INT4 NOT NULL AS ((a / 10:::INT8)::INT8) STORED,
+           comp1 INT4 NOT NULL AS (a) STORED,
            CONSTRAINT stored1_pkey PRIMARY KEY (a ASC),
            FAMILY f1 (a, comp1)
          )
@@ -1420,18 +1425,17 @@ stored1  CREATE TABLE public.stored1 (
 query II
 SELECT * FROM stored1 ORDER BY A;
 ----
-10 1
-150 15
-190 19
-2000 200
-2147483647  214748365
-2147483648  214748365
+10 10
+150 150
+190 190
+2000 2000
+2147483647  2147483647
 
 # Attempt to convert to a type that is compatible with the computed expression
 statement error pq: column "comp1" cannot be cast automatically to type BOOL
 ALTER TABLE stored1 ALTER COLUMN comp1 SET DATA TYPE BOOL;
 
-statement error pq: expected STORED COMPUTED COLUMN expression to have type string, but '\(a / 10\)::INT8' has type int
+statement error pq: expected STORED COMPUTED COLUMN expression to have type string, but 'a' has type int
 ALTER TABLE stored1 ALTER COLUMN comp1 SET DATA TYPE TEXT;
 
 # Convert the type to something compatible, but specify a custom value for the
@@ -1447,7 +1451,7 @@ SHOW CREATE TABLE stored1;
 ----
 stored1  CREATE TABLE public.stored1 (
            a INT8 NOT NULL,
-           comp1 INT2 NOT NULL AS ((a / 10:::INT8)::INT8) STORED,
+           comp1 INT2 NOT NULL AS (a) STORED,
            CONSTRAINT stored1_pkey PRIMARY KEY (a ASC),
            FAMILY f1 (a, comp1)
          )
@@ -1455,13 +1459,12 @@ stored1  CREATE TABLE public.stored1 (
 query II
 SELECT * FROM stored1 ORDER BY A;
 ----
--1000 -100
+-1000 -1000
 10 -1
 150 -1
 190 -1
 2000 -1
 2147483647  -1
-2147483648  -1
 
 statement ok
 DROP TABLE stored1;
