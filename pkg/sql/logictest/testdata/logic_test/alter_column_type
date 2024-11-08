@@ -1504,4 +1504,120 @@ ALTER TABLE stored1 ALTER COLUMN comp1 SET DATA TYPE INT4 USING -1, ALTER COLUMN
 statement ok
 DROP TABLE stored1;
 
+subtest virtual_compute
+
+statement ok
+CREATE TABLE virt1 (c1 BIGINT NOT NULL PRIMARY KEY, v1 BIGINT NOT NULL AS (c1) virtual);
+
+statement ok
+INSERT INTO virt1 VALUES (100), (2147483647);
+
+# Ensure the USING expression cannot be used
+statement error pq: type change for virtual column "v1" cannot be altered with a USING expression
+ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE INT4 USING 10;
+
+statement ok
+ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE INT4;
+
+query II
+SELECT * from virt1 ORDER BY c1;
+----
+100 100
+2147483647 2147483647
+
+query TT
+SHOW CREATE TABLE virt1;
+----
+virt1      CREATE TABLE public.virt1 (
+             c1 INT8 NOT NULL,
+             v1 INT4 NOT NULL AS (c1) VIRTUAL,
+             CONSTRAINT virt1_pkey PRIMARY KEY (c1 ASC)
+           )
+
+statement error pq: validate check constraint: integer out of range for type int2
+ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE INT2;
+
+statement ok
+DELETE FROM virt1 WHERE c1 = 2147483647;
+
+statement ok
+ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE INT2;
+
+statement ok
+INSERT INTO virt1 VALUES (-9999);
+
+query II
+SELECT * from virt1 ORDER BY c1;
+----
+-9999 -9999
+100 100
+
+query TT
+SHOW CREATE TABLE virt1;
+----
+virt1      CREATE TABLE public.virt1 (
+             c1 INT8 NOT NULL,
+             v1 INT2 NOT NULL AS (c1) VIRTUAL,
+             CONSTRAINT virt1_pkey PRIMARY KEY (c1 ASC)
+           )
+
+statement error pq: expected STORED COMPUTED COLUMN expression to have type string, but 'c1' has type int
+ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE TEXT;
+
+statement error pq: expected STORED COMPUTED COLUMN expression to have type float, but 'c1' has type int
+ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE FLOAT;
+
+statement ok
+DROP TABLE virt1;
+
+subtest virtual_compute_tz
+
+statement ok
+CREATE TABLE virt2 (C1 TIMESTAMP(6) NOT NULL PRIMARY KEY, v1 TIMESTAMP(3) AS (c1) VIRTUAL);
+
+statement ok
+INSERT INTO virt2 VALUES ('2024-10-31 16:50:00.123456');
+
+query TT
+SELECT * FROM virt2 ORDER BY c1;
+----
+2024-10-31 16:50:00.123456 +0000 +0000  2024-10-31 16:50:00.123 +0000 +0000
+
+statement ok
+ALTER TABLE virt2 ALTER COLUMN v1 SET DATA TYPE TIMESTAMP(2);
+
+query TT
+SELECT * FROM virt2 ORDER BY c1;
+----
+2024-10-31 16:50:00.123456 +0000 +0000  2024-10-31 16:50:00.12 +0000 +0000
+
+query TT
+SHOW CREATE TABLE virt2;
+----
+virt2      CREATE TABLE public.virt2 (
+             c1 TIMESTAMP(6) NOT NULL,
+             v1 TIMESTAMP(3) NULL AS (c1) VIRTUAL,
+             CONSTRAINT virt1_pkey PRIMARY KEY (c1 ASC)
+           )
+
+statement ok
+ALTER TABLE virt2 ALTER COLUMN v1 SET DATA TYPE TIMESTAMP(5);
+
+query TT
+SELECT * FROM virt2 ORDER BY c1;
+----
+2024-10-31 16:50:00.123456 +0000 +0000  2024-10-31 16:50:00.12345 +0000 +0000
+
+query TT
+SHOW CREATE TABLE virt2;
+----
+virt2      CREATE TABLE public.virt2 (
+             c1 TIMESTAMP(6) NOT NULL,
+             v1 TIMESTAMP(5) NULL AS (c1) VIRTUAL,
+             CONSTRAINT virt1_pkey PRIMARY KEY (c1 ASC)
+           )
+
+statement ok
+DROP TABLE virt2;
+
 subtest end

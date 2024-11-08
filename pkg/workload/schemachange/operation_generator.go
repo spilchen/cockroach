@@ -27,7 +27,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/parser"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/randgen"
-	"github.com/cockroachdb/cockroach/pkg/sql/schemachange"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
@@ -2529,17 +2528,23 @@ func (og *operationGenerator) setColumnType(ctx context.Context, tx pgx.Tx) (*op
 
 	stmt := makeOpStmt(OpStmtDDL)
 	if newType != nil {
-		// Ignoring the error here intentionally, as we want to carry on with
-		// the operation and not fail it prematurely.
-		kind, _ := schemachange.ClassifyConversion(context.Background(), columnForTypeChange.typ, newType)
-		stmt.expectedExecErrors.addAll(codesWithConditions{
-			{code: pgcode.CannotCoerce, condition: kind == schemachange.ColumnConversionImpossible},
-		})
-
+		// SPILLY - check for computed errors
+		// Some type conversions are simply not supported. Instead of attempting to
+		// replicate the runtime logic, which can be error-prone, we will mark it as
+		// a potential error.
+		stmt.potentialExecErrors.add(pgcode.CannotCoerce)
 		// We will remove this as we complete the alter type epic.
 		// This is a restriction in the legacy schema changer only,
 		// where alter type cannot be executed inside a transaction.
 		stmt.potentialExecErrors.add(pgcode.FeatureNotSupported)
+		// We fail if the column we are attempting to alter has a TTL expression.
+		stmt.potentialExecErrors.add(pgcode.InvalidTableDefinition)
+		// We fail if the column we are attempting to alter is used as an
+		// identity column and we try to convert it to a non-int.
+		stmt.potentialExecErrors.add(pgcode.InvalidParameterValue)
+		// We could fail since we don't specify the USING expression, so it's
+		// possible that we could pick a data type that doesn't have an automatic cast.
+		stmt.potentialExecErrors.add(pgcode.DatatypeMismatch)
 	}
 
 	stmt.potentialExecErrors.addAll(codesWithConditions{
@@ -2549,17 +2554,6 @@ func (og *operationGenerator) setColumnType(ctx context.Context, tx pgx.Tx) (*op
 
 	// TODO(#134008): Remove this with the PR that fixes this bug.
 	stmt.potentialExecErrors.add(pgcode.DependentObjectsStillExist)
-
-	// We fail if the column we are attempting to alter has a TTL expression.
-	stmt.potentialExecErrors.add(pgcode.InvalidTableDefinition)
-
-	// We fail if the column we are attempting to alter is used as an
-	// identity column and we try to convert it to a non-int.
-	stmt.potentialExecErrors.add(pgcode.InvalidParameterValue)
-
-	// We could fail since we don't specify the USING expression, so it's
-	// possible that we could pick a data type that doesn't have an automatic cast.
-	stmt.potentialExecErrors.add(pgcode.DatatypeMismatch)
 
 	stmt.sql = fmt.Sprintf(`%s ALTER TABLE %s ALTER COLUMN %s SET DATA TYPE %s`,
 		setSessionVariableString, tableName.String(), columnForTypeChange.name.String(), newTypeName.SQLString())

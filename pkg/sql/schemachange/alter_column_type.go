@@ -229,15 +229,30 @@ func ClassifyConversion(
 // ClassifyConversionFromTree is a wrapper for ClassifyConversion when we want
 // to take into account the parsed AST for ALTER TABLE .. ALTER COLUMN.
 func ClassifyConversionFromTree(
-	ctx context.Context, t *tree.AlterTableAlterColumnType, oldType *types.T, newType *types.T,
-) (ColumnConversionKind, error) {
+	ctx context.Context, t *tree.AlterTableAlterColumnType, oldType *types.T, newType *types.T, isVirtual bool,
+) (kind ColumnConversionKind, err error) {
 	if t.Using != nil {
 		// If an expression is provided, we always need to try a general conversion.
 		// We have to follow the process to create a new column and backfill it
 		// using the expression.
 		return ColumnConversionGeneral, nil
 	}
-	return ClassifyConversion(ctx, oldType, newType)
+	kind, err = ClassifyConversion(ctx, oldType, newType)
+	if err != nil {
+		return
+	}
+	// A rewrite isn't applicable for virtual columns since they don’t exist
+	// physically. We'll simply fall back to a validation kind instead. For
+	// conversions that would require general handling due to incompatible type
+	// families (e.g., INT -> TEXT), we assume these will already be rejected
+	// because the computed expression doesn’t match the new type. Such cases
+	// are handled by validateNewTypeForComputedColumn.
+	if isVirtual && kind == ColumnConversionGeneral {
+		// SPILLY - the validation didn't work. Going from TIMESAMP(3) to TIMESTAMP(2) failed with a validation error:
+		// validation of CHECK "CAST(CAST(v1 AS TIMESTAMP(2)) AS TIMESTAMP(3)) = v1" failed on row: c1='2024-10-31 16:50:00.123456', v1='2024-10-31 16:50:00.123'
+		kind = ColumnConversionTrivial
+	}
+	return
 }
 
 // ValidateAlterColumnTypeChecks performs validation checks on the proposed type
@@ -250,6 +265,7 @@ func ValidateAlterColumnTypeChecks(
 	settions *cluster.Settings,
 	origTyp *types.T,
 	isGeneratedAsIdentity bool,
+	isVirtual bool,
 ) (*types.T, error) {
 	typ := origTyp
 	// Special handling for STRING COLLATE xy to verify that we recognize the language.
@@ -267,6 +283,13 @@ func ValidateAlterColumnTypeChecks(
 		if typ.InternalType.Family != types.IntFamily {
 			return typ, sqlerrors.NewIdentityColumnTypeError()
 		}
+	}
+
+	// A USING expression is unnecessary when altering the type of a virtual column,
+	// as its value is always computed at runtime and is not stored on disk.
+	if isVirtual && t.Using != nil {
+		return typ, pgerror.Newf(pgcode.FeatureNotSupported,
+			"type change for virtual column %q cannot be altered with a USING expression", t.Column)
 	}
 
 	return typ, colinfo.ValidateColumnDefType(ctx, settions, typ)
