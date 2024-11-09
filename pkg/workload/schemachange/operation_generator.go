@@ -2528,14 +2528,15 @@ func (og *operationGenerator) setColumnType(ctx context.Context, tx pgx.Tx) (*op
 
 	stmt := makeOpStmt(OpStmtDDL)
 	if newType != nil {
-		// SPILLY - check for computed errors
 		// Some type conversions are simply not supported. Instead of attempting to
 		// replicate the runtime logic, which can be error-prone, we will mark it as
 		// a potential error.
 		stmt.potentialExecErrors.add(pgcode.CannotCoerce)
-		// We will remove this as we complete the alter type epic.
-		// This is a restriction in the legacy schema changer only,
-		// where alter type cannot be executed inside a transaction.
+		// Some type conversions are allowed, but the values stored with the old column
+		// type are out of range for the new type.
+		stmt.potentialExecErrors.add(pgcode.NumericValueOutOfRange)
+		// TODO(49351): We will remove this when we support alter
+		// type inside a transaction.
 		stmt.potentialExecErrors.add(pgcode.FeatureNotSupported)
 		// We fail if the column we are attempting to alter has a TTL expression.
 		stmt.potentialExecErrors.add(pgcode.InvalidTableDefinition)

@@ -7,7 +7,6 @@ package schemaexpr
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
@@ -457,7 +456,7 @@ func SanitizeVarFreeExpr(
 				return typedExpr, nil
 			}
 		}
-		return nil, fmt.Errorf("expected %s expression to have type %s, but '%s' has type %s",
+		return nil, pgerror.Newf(pgcode.CannotCoerce, "expected %s expression to have type %s, but '%s' has type %s",
 			context, expectedType, expr, actualType)
 	}
 	return typedExpr, nil

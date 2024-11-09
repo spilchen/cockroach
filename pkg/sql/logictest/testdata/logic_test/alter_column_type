@@ -1596,8 +1596,8 @@ SHOW CREATE TABLE virt2;
 ----
 virt2      CREATE TABLE public.virt2 (
              c1 TIMESTAMP(6) NOT NULL,
-             v1 TIMESTAMP(3) NULL AS (c1) VIRTUAL,
-             CONSTRAINT virt1_pkey PRIMARY KEY (c1 ASC)
+             v1 TIMESTAMP(2) NULL AS (c1) VIRTUAL,
+             CONSTRAINT virt2_pkey PRIMARY KEY (c1 ASC)
            )
 
 statement ok
@@ -1606,7 +1606,7 @@ ALTER TABLE virt2 ALTER COLUMN v1 SET DATA TYPE TIMESTAMP(5);
 query TT
 SELECT * FROM virt2 ORDER BY c1;
 ----
-2024-10-31 16:50:00.123456 +0000 +0000  2024-10-31 16:50:00.12345 +0000 +0000
+2024-10-31 16:50:00.123456 +0000 +0000  2024-10-31 16:50:00.12346 +0000 +0000
 
 query TT
 SHOW CREATE TABLE virt2;
@@ -1614,7 +1614,7 @@ SHOW CREATE TABLE virt2;
 virt2      CREATE TABLE public.virt2 (
              c1 TIMESTAMP(6) NOT NULL,
              v1 TIMESTAMP(5) NULL AS (c1) VIRTUAL,
-             CONSTRAINT virt1_pkey PRIMARY KEY (c1 ASC)
+             CONSTRAINT virt2_pkey PRIMARY KEY (c1 ASC)
            )
 
 statement ok

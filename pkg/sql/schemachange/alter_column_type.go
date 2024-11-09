@@ -115,6 +115,27 @@ var classifiers = map[types.Family]map[types.Family]classifier{
 	},
 }
 
+// virtualGeneralReclassifier is used to classify general conversions for virtual
+// computed columns. General conversions don’t apply to these columns, as they
+// aren’t physically stored on disk. If this map is used and the type family is
+// missing, it’s assumed that the type conversion cannot be applied.
+var virtualGeneralReclassifier = map[types.Family]map[types.Family]classifier{
+	types.TimestampFamily: {
+		types.TimestampTZFamily: ColumnConversionTrivial.classifier(),
+		types.TimestampFamily:   ColumnConversionTrivial.classifier(),
+	},
+	types.TimestampTZFamily: {
+		types.TimestampFamily:   ColumnConversionTrivial.classifier(),
+		types.TimestampTZFamily: ColumnConversionTrivial.classifier(),
+	},
+	types.TimeFamily: {
+		types.TimeFamily: ColumnConversionTrivial.classifier(),
+	},
+	types.TimeTZFamily: {
+		types.TimeTZFamily: ColumnConversionTrivial.classifier(),
+	},
+}
+
 // classifierHardestOf creates a composite classifier that returns the
 // hardest kind of the enclosed classifiers.  If any of the
 // classifiers report impossible, impossible will be returned.
@@ -229,7 +250,11 @@ func ClassifyConversion(
 // ClassifyConversionFromTree is a wrapper for ClassifyConversion when we want
 // to take into account the parsed AST for ALTER TABLE .. ALTER COLUMN.
 func ClassifyConversionFromTree(
-	ctx context.Context, t *tree.AlterTableAlterColumnType, oldType *types.T, newType *types.T, isVirtual bool,
+	ctx context.Context,
+	t *tree.AlterTableAlterColumnType,
+	oldType *types.T,
+	newType *types.T,
+	isVirtual bool,
 ) (kind ColumnConversionKind, err error) {
 	if t.Using != nil {
 		// If an expression is provided, we always need to try a general conversion.
@@ -241,16 +266,21 @@ func ClassifyConversionFromTree(
 	if err != nil {
 		return
 	}
-	// A rewrite isn't applicable for virtual columns since they don’t exist
-	// physically. We'll simply fall back to a validation kind instead. For
-	// conversions that would require general handling due to incompatible type
-	// families (e.g., INT -> TEXT), we assume these will already be rejected
-	// because the computed expression doesn’t match the new type. Such cases
-	// are handled by validateNewTypeForComputedColumn.
+	// A general rewrite isn't applicable for virtual columns since they don’t exist
+	// physically. We need to pick a new classifier. For conversions that would require
+	// general handling due to incompatible type families (e.g., INT -> TEXT), we
+	// assume these will already be rejected because the computed expression doesn’t
+	// match the new type. Such cases are handled by validateNewTypeForComputedColumn.
 	if isVirtual && kind == ColumnConversionGeneral {
-		// SPILLY - the validation didn't work. Going from TIMESAMP(3) to TIMESTAMP(2) failed with a validation error:
-		// validation of CHECK "CAST(CAST(v1 AS TIMESTAMP(2)) AS TIMESTAMP(3)) = v1" failed on row: c1='2024-10-31 16:50:00.123456', v1='2024-10-31 16:50:00.123'
-		kind = ColumnConversionTrivial
+		if inner, oldTypeFamilyFound := virtualGeneralReclassifier[oldType.Family()]; oldTypeFamilyFound {
+			if fn, newTypeFamilyFound := inner[newType.Family()]; newTypeFamilyFound {
+				kind = fn(oldType, newType)
+				return
+			}
+		}
+		kind = ColumnConversionImpossible
+		err = pgerror.Newf(pgcode.CannotCoerce, "cannot convert %s to %s for a virtual column",
+			oldType.SQLString(), newType.SQLString())
 	}
 	return
 }
