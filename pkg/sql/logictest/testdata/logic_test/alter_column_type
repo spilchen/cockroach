@@ -1516,15 +1516,24 @@ INSERT INTO virt1 VALUES (100), (2147483647);
 statement error pq: type change for virtual column "v1" cannot be altered with a USING expression
 ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE INT4 USING 10;
 
+skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
+skipif config local-mixed-24.2
 statement ok
 ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE INT4;
 
+skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
+skipif config local-mixed-24.2
 query II
 SELECT * from virt1 ORDER BY c1;
 ----
 100 100
 2147483647 2147483647
 
+skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
+skipif config local-mixed-24.2
 query TT
 SHOW CREATE TABLE virt1;
 ----
@@ -1534,24 +1543,32 @@ virt1      CREATE TABLE public.virt1 (
              CONSTRAINT virt1_pkey PRIMARY KEY (c1 ASC)
            )
 
+skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 statement error pq: validate check constraint: integer out of range for type int2
 ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE INT2;
 
 statement ok
 DELETE FROM virt1 WHERE c1 = 2147483647;
 
+skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 statement ok
 ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE INT2;
 
 statement ok
 INSERT INTO virt1 VALUES (-9999);
 
+skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 query II
 SELECT * from virt1 ORDER BY c1;
 ----
 -9999 -9999
 100 100
 
+skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 query TT
 SHOW CREATE TABLE virt1;
 ----
@@ -1561,9 +1578,15 @@ virt1      CREATE TABLE public.virt1 (
              CONSTRAINT virt1_pkey PRIMARY KEY (c1 ASC)
            )
 
+skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
+skipif config local-mixed-24.2
 statement error pq: expected STORED COMPUTED COLUMN expression to have type string, but 'c1' has type int
 ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE TEXT;
 
+skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
+skipif config local-mixed-24.2
 statement error pq: expected STORED COMPUTED COLUMN expression to have type float, but 'c1' has type int
 ALTER TABLE virt1 ALTER COLUMN v1 SET DATA TYPE FLOAT;
 
