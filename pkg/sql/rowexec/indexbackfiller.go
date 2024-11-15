@@ -418,12 +418,10 @@ func (ib *indexBackfiller) buildIndexEntryBatch(
 		}
 
 		// TODO(knz): do KV tracing in DistSQL processors.
-		log.Infof(ctx, "SPILLY: building batch of index entries with chunk size %d", nextChunkSize)
 		var err error
 		entries, key, memUsedBuildingBatch, err = ib.BuildIndexEntriesChunk(
 			ctx, txn.KV(), ib.desc, sp, nextChunkSize, false, /* traceKV */
 		)
-		log.Infof(ctx, "SPILLY: finished building batch of index entries: %s", err)
 		return err
 	}
 
