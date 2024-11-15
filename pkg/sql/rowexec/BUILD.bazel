@@ -102,6 +102,7 @@ go_library(
         "//pkg/util/optional",
         "//pkg/util/protoutil",
         "//pkg/util/randutil",
+        "//pkg/util/retry",
         "//pkg/util/stringarena",
         "//pkg/util/syncutil",
         "//pkg/util/timeutil",

@@ -7,6 +7,9 @@ package rowexec
 
 import (
 	"context"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
+	"github.com/cockroachdb/cockroach/pkg/util/retry"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
@@ -408,19 +411,52 @@ func (ib *indexBackfiller) buildIndexEntryBatch(
 	defer traceSpan.Finish()
 	start := timeutil.Now()
 	var entries []rowenc.IndexEntry
-	if err := ib.flowCtx.Cfg.DB.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
+	nextChunkSize := ib.spec.ChunkSize // Save to a local variable so we can reduce it on retry
+	buildFunc := func(ctx context.Context, txn isql.Txn) error {
 		if err := txn.KV().SetFixedTimestamp(ctx, readAsOf); err != nil {
 			return err
 		}
 
 		// TODO(knz): do KV tracing in DistSQL processors.
+		log.Infof(ctx, "SPILLY: building batch of index entries with chunk size %d", nextChunkSize)
 		var err error
 		entries, key, memUsedBuildingBatch, err = ib.BuildIndexEntriesChunk(
-			ctx, txn.KV(), ib.desc, sp, ib.spec.ChunkSize, false, /* traceKV */
+			ctx, txn.KV(), ib.desc, sp, nextChunkSize, false, /* traceKV */
 		)
+		log.Infof(ctx, "SPILLY: finished building batch of index entries: %s", err)
 		return err
-	}); err != nil {
-		return nil, nil, 0, err
+	}
+
+	// Memory used while building index entries is released by another goroutine
+	// once those entries are processed. However, with wide rows and/or limited
+	// memory, memory pressure issues can arise. To address this, we retry with
+	// a smaller chunk size after an exponential backoff. Although the maximum
+	// wait time between retries may seem lengthy, it is significantly faster
+	// than allowing the entire schema operation to fail and restart.
+	opts := retry.Options{
+		InitialBackoff: 500 * time.Millisecond,
+		Multiplier:     2,
+		MaxRetries:     2, // SPILLY temp to test exhaust case 15,
+		MaxBackoff:     1 * time.Minute,
+	}
+	for r := retry.StartWithCtx(ctx, opts); r.Next(); {
+		if err := ib.flowCtx.Cfg.DB.Txn(ctx, buildFunc); err != nil {
+			// Retry for any out of memory error. We want to wait for the goroutine
+			// that processes the prior batches of index entries to free memory.
+			if pgerror.GetPGCode(err) == pgcode.OutOfMemory {
+				// SPILLY - confirm memory is getting calculated/tracked properly in the retry case
+				nextChunkSize = max(1, nextChunkSize/2)
+				log.Infof(ctx,
+					"out of memory building index entries; retrying with a batch size of %d",
+					nextChunkSize)
+				continue
+			}
+			return nil, nil, 0, err
+		}
+		break // Batch completed successfully, no need for a retry.
+	}
+	if ctx.Err() != nil {
+		return nil, nil, 0, ctx.Err()
 	}
 	prepTime := timeutil.Since(start)
 	log.VEventf(ctx, 3, "index backfill stats: entries %d, prepare %+v",
