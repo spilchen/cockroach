@@ -436,15 +436,27 @@ func (ib *indexBackfiller) buildIndexEntryBatch(
 	opts := retry.Options{
 		InitialBackoff: 500 * time.Millisecond,
 		Multiplier:     2,
-		MaxRetries:     2, // SPILLY temp to test exhaust case 15,
+		MaxRetries:     15,
 		MaxBackoff:     1 * time.Minute,
 	}
-	for r := retry.StartWithCtx(ctx, opts); r.Next(); {
+	r := retry.StartWithCtx(ctx, opts)
+	for {
 		if err := ib.flowCtx.Cfg.DB.Txn(ctx, buildFunc); err != nil {
 			// Retry for any out of memory error. We want to wait for the goroutine
 			// that processes the prior batches of index entries to free memory.
-			if pgerror.GetPGCode(err) == pgcode.OutOfMemory {
-				// SPILLY - confirm memory is getting calculated/tracked properly in the retry case
+			if pgerror.GetPGCode(err) == pgcode.OutOfMemory && nextChunkSize > 1 {
+				// There is no need to track the memory we allocated in the last failed
+				// attempt. We will allocate new memory on the next iteration.
+				if memUsedBuildingBatch > 0 {
+					entries = nil
+					ib.ShrinkBoundAccount(ctx, memUsedBuildingBatch)
+					memUsedBuildingBatch = 0
+				}
+
+				if !r.Next() {
+					// If we have exhausted all retries, fail with the out of memory error.
+					return nil, nil, 0, err
+				}
 				nextChunkSize = max(1, nextChunkSize/2)
 				log.Infof(ctx,
 					"out of memory building index entries; retrying with a batch size of %d",
@@ -454,9 +466,6 @@ func (ib *indexBackfiller) buildIndexEntryBatch(
 			return nil, nil, 0, err
 		}
 		break // Batch completed successfully, no need for a retry.
-	}
-	if ctx.Err() != nil {
-		return nil, nil, 0, ctx.Err()
 	}
 	prepTime := timeutil.Since(start)
 	log.VEventf(ctx, 3, "index backfill stats: entries %d, prepare %+v",
