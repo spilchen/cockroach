@@ -276,7 +276,7 @@ func handleGeneralColumnConversion(
 		switch e.(type) {
 		case *scpb.SequenceOwner:
 			panic(sqlerrors.NewAlterColumnTypeColOwnsSequenceNotSupportedErr())
-		case *scpb.CheckConstraint, *scpb.CheckConstraintUnvalidated,
+		case *scpb.CheckConstraintUnvalidated,
 			*scpb.UniqueWithoutIndexConstraint, *scpb.UniqueWithoutIndexConstraintUnvalidated,
 			*scpb.ForeignKeyConstraint, *scpb.ForeignKeyConstraintUnvalidated:
 			panic(sqlerrors.NewAlterColumnTypeColWithConstraintNotSupportedErr())
@@ -343,6 +343,7 @@ func handleGeneralColumnConversion(
 
 	oldComputeExpr, newComputeExpr := getColumnComputeExpressionsForColumnReplacement(b, tbl.TableID, col.ColumnID, newColID)
 	oldColComment, newColComment := getColumnCommentForColumnReplacement(b, tbl.TableID, col.ColumnID)
+	oldCheckConstraints, newCheckConstraints := getCheckConstraintsForColumnReplacement(b, tbl.TableID, col.ColumnID, newColID)
 
 	// First, set the target status of the old column to drop. This column will be
 	// replaced by a new one but remains visible until the new column is ready to be
@@ -365,6 +366,9 @@ func handleGeneralColumnConversion(
 	}
 	if oldColComment != nil {
 		b.Drop(oldColComment)
+	}
+	for i := range oldCheckConstraints {
+		b.Drop(oldCheckConstraints[i])
 	}
 	handleDropColumnPrimaryIndexes(b, tbl, col)
 
@@ -417,6 +421,9 @@ func handleGeneralColumnConversion(
 		fam: nil,
 	}
 	addColumn(b, spec, t)
+	for i := range newCheckConstraints {
+		b.Add(newCheckConstraints[i])
+	}
 }
 
 func updateColumnType(b BuildCtx, oldColType, newColType *scpb.ColumnType) {
@@ -589,6 +596,42 @@ func getColumnCommentForColumnReplacement(
 		// attributes would differ. The drop action on the column comment is only included
 		// to satisfy the call to assertAllColumnElementsAreDropped.
 		newColumnComment = protoutil.Clone(oldColumnComment).(*scpb.ColumnComment)
+	}
+	return
+}
+
+// SPILLY - prolog
+func getCheckConstraintsForColumnReplacement(
+	b BuildCtx, tableID catid.DescID, oldColID, newColID catid.ColumnID,
+) (oldCheckConstraints, newCheckConstraints []*scpb.CheckConstraint) {
+	existing := b.QueryByID(tableID).FilterCheckConstraint().Filter(
+		func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.CheckConstraint) bool {
+			for _, c := range e.ColumnIDs {
+				if c == oldColID {
+					return true
+				}
+			}
+			return false
+		})
+	if existing.Size() == 0 {
+		return
+	}
+	oldCheckConstraints = make([]*scpb.CheckConstraint, existing.Size())
+	newCheckConstraints = make([]*scpb.CheckConstraint, existing.Size())
+	for i := 0; i < existing.Size(); i++ {
+		_, _, e := existing.Get(i)
+		oldCheckConstraints[i] = e.(*scpb.CheckConstraint)
+		newCheckConstraints[i] = protoutil.Clone(e).(*scpb.CheckConstraint)
+		for j, colID := range oldCheckConstraints[i].ReferencedColumnIDs {
+			if colID == oldColID {
+				newCheckConstraints[i].ReferencedColumnIDs[j] = newColID
+			}
+		}
+		for j, colID := range oldCheckConstraints[i].ColumnIDs {
+			if colID == oldColID {
+				newCheckConstraints[i].ColumnIDs[j] = newColID
+			}
+		}
 	}
 	return
 }
