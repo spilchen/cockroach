@@ -107,8 +107,7 @@ func alterTableAlterColumnType(
 	case schemachange.ColumnConversionGeneral:
 		handleGeneralColumnConversion(b, stmt, t, tn, tbl, col, oldColType, &newColType)
 	default:
-		panic(scerrors.NotImplementedErrorf(t,
-			"alter type conversion %v not handled", kind))
+		panic(errors.AssertionFailedf("alter type conversion %v not handled", kind))
 	}
 }
 
@@ -267,6 +266,14 @@ func handleGeneralColumnConversion(
 ) {
 	failIfExperimentalSettingNotSet(b, oldColType, newColType)
 
+	// TODO(#47137): Only support alter statements that only have a single command.
+	switch s := stmt.(type) {
+	case *tree.AlterTable:
+		if len(s.Cmds) > 1 {
+			panic(sqlerrors.NewAlterColTypeInCombinationNotSupportedError())
+		}
+	}
+
 	// To handle the conversion, we remove the old column and add a new one with
 	// the correct type. The new column will temporarily have a computed expression
 	// referring to the old column, used only for the backfill process.
@@ -300,14 +307,6 @@ func handleGeneralColumnConversion(
 	for _, keyCol := range getIndexColumns(b.QueryByID(tbl.TableID), pk.IndexID, scpb.IndexColumn_KEY) {
 		if keyCol.ColumnID == col.ColumnID {
 			panic(sqlerrors.NewAlterColumnTypeColInIndexNotSupportedErr())
-		}
-	}
-
-	// TODO(#47137): Only support alter statements that only have a single command.
-	switch s := stmt.(type) {
-	case *tree.AlterTable:
-		if len(s.Cmds) > 1 {
-			panic(sqlerrors.NewAlterColTypeInCombinationNotSupportedError())
 		}
 	}
 
