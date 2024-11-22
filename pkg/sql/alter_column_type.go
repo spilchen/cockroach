@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/build"
+	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/schemaexpr"
@@ -148,6 +149,14 @@ func alterColumnTypeGeneral(
 	cmds tree.AlterTableCmds,
 	tn *tree.TableName,
 ) error {
+	// In 25.1, support for ALTER COLUMN TYPE was moved out of the experimental phase.
+	// This version gate ensures backward compatibility. The legacy support for ALTER
+	// COLUMN TYPE can be fully removed once 25.1 becomes the minimum supported version.
+	if params.p.execCfg.Settings.Version.IsActive(ctx, clusterversion.V25_1) {
+		return pgerror.New(pgcode.FeatureNotSupported,
+			"ALTER COLUMN TYPE is only implemented in the declarative schema changer")
+	}
+
 	if !params.SessionData().AlterColumnTypeGeneralEnabled {
 		return pgerror.WithCandidateCode(
 			errors.WithHint(

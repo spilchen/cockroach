@@ -2546,8 +2546,7 @@ func (og *operationGenerator) setColumnType(ctx context.Context, tx pgx.Tx) (*op
 		// Some type conversions are allowed, but the values stored with the old column
 		// type are out of range for the new type.
 		stmt.potentialExecErrors.add(pgcode.NumericValueOutOfRange)
-		// TODO(49351): We will remove this when we support alter
-		// type inside a transaction.
+		// This can happen for any attempt to use the legacy schema changer.
 		stmt.potentialExecErrors.add(pgcode.FeatureNotSupported)
 		// We fail if the column we are attempting to alter has a TTL expression.
 		stmt.potentialExecErrors.add(pgcode.InvalidTableDefinition)
@@ -2589,13 +2588,12 @@ func (og *operationGenerator) alterTableAlterPrimaryKey(
 
 	// Primary Keys are backed by a unique index, therefore we can only use
 	// columns that are of an indexable type. This information is only available
-	// via the colinfo package (not SQL) and is subject to change across
-	// versions. To eliminate the chance of flakes, rely on this allow list to do
-	// the filtering. As this list is static and non-exhaustive, we're trading a
-	// bit of coverage for stability. It may be worth while to add index-ability
-	// information to `SHOW COLUMNS` or an internal SQL function in the future.
-	// TODO(sql-foundations): once #130271 is in the latest release of each active
-	// version, we can remove this allow list/the version gate.
+	// via the colinfo package (not SQL) and is subject to change across versions.
+	// To
+	// eliminate the chance of flakes, rely on this allow list to do the filtering. As this list is static and
+	// non-exhaustive, we're trading a bit of coverage for stability. It may be worth while to add index-ability
+	// information to `SHOW COLUMNS` or an internal SQL function in the future. TODO(sql-foundations): once #130271 is in
+	// the latest release of each active version, we can remove this allow list/the version gate.
 	if typeIsIndexableNotSupported {
 		indexableQuery = "COALESCE((col->'type'->>'family') = ANY(ARRAY['DecimalFamily', " +
 			"'IntFamily', 'StringFamily', 'UuidFamily']), false)"
