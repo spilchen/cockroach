@@ -310,6 +310,11 @@ func handleGeneralColumnConversion(
 		}
 	}
 
+	// Disallow ALTER COLUMN TYPE general inside a multi-statement transaction.
+	if !b.EvalCtx().TxnIsSingleStmt {
+		panic(sqlerrors.NewAlterColTypeInTxnNotSupportedErr())
+	}
+
 	// In version 25.1, we introduced the necessary dependency rules to ensure the
 	// general path works. Without these rules, we encounter failures during the
 	// ALTER operation. To avoid this, we revert to legacy handling if not running

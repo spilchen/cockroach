@@ -28,11 +28,6 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-// AlterColTypeInTxnNotSupportedErr is returned when an ALTER COLUMN TYPE
-// is tried in an explicit transaction.
-var AlterColTypeInTxnNotSupportedErr = unimplemented.NewWithIssuef(
-	49351, "ALTER COLUMN TYPE is not supported inside a transaction")
-
 // AlterColumnType takes an AlterTableAlterColumnType, determines
 // which conversion to use and applies the type conversion.
 func AlterColumnType(
@@ -196,7 +191,7 @@ func alterColumnTypeGeneral(
 
 	// Disallow ALTER COLUMN TYPE general inside a multi-statement transaction.
 	if !params.extendedEvalCtx.TxnIsSingleStmt {
-		return AlterColTypeInTxnNotSupportedErr
+		return sqlerrors.NewAlterColTypeInTxnNotSupportedErr()
 	}
 
 	if len(cmds) > 1 {
