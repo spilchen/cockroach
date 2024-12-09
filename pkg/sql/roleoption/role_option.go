@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
 	"github.com/cockroachdb/errors"
 )
 
@@ -75,6 +76,8 @@ const (
 	VIEWCLUSTERSETTING
 	NOVIEWCLUSTERSETTING
 	SUBJECT
+	BYPASSRLS
+	NOBYPASSRLS
 )
 
 // ControlChangefeedDeprecationNoticeMsg is a user friendly notice which should be shown when CONTROLCHANGEFEED is used
@@ -153,6 +156,8 @@ var ByName = map[string]Option{
 	"VIEWCLUSTERSETTING":     VIEWCLUSTERSETTING,
 	"NOVIEWCLUSTERSETTING":   NOVIEWCLUSTERSETTING,
 	"SUBJECT":                SUBJECT,
+	"BYPASSRLS":              BYPASSRLS,
+	"NOBYPASSRLS":            NOBYPASSRLS,
 }
 
 // ToOption takes a string and returns the corresponding Option.
@@ -259,6 +264,10 @@ func (rol List) GetSQLStmts(onRoleOption func(Option)) (map[string]*RoleOption, 
 		// TODO(richardjcai): migrate password to system.role_options
 		if ro.Option == PASSWORD {
 			continue
+		}
+		if ro.Option == BYPASSRLS || ro.Option == NOBYPASSRLS {
+			return nil, unimplemented.NewWithIssuef(
+				136910, "the BYPASSRLS and NOBYPASSRLS options for roles are not currently supported")
 		}
 
 		stmt := toSQLStmts[ro.Option]

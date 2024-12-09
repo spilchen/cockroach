@@ -646,6 +646,21 @@ func (u *sqlSymUnion) indexInvisibility() tree.IndexInvisibility {
 func (u *sqlSymUnion) dropBehavior() tree.DropBehavior {
     return u.val.(tree.DropBehavior)
 }
+func (u *sqlSymUnion) rlsTableAction() tree.RLSTableAction {
+    return u.val.(tree.RLSTableAction)
+}
+func (u *sqlSymUnion) alterPolicy() tree.AlterPolicy {
+    return u.val.(tree.AlterPolicy)
+}
+func (u *sqlSymUnion) createPolicy() tree.CreatePolicy {
+    return u.val.(tree.CreatePolicy)
+}
+func (u *sqlSymUnion) policyType() tree.PolicyType {
+  return u.val.(tree.PolicyType)
+}
+func (u *sqlSymUnion) policyCommand() tree.PolicyCommand {
+  return u.val.(tree.PolicyCommand)
+}
 func (u *sqlSymUnion) validationBehavior() tree.ValidationBehavior {
     return u.val.(tree.ValidationBehavior)
 }
@@ -939,7 +954,7 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 
 %token <str> BACKUP BACKUPS BACKWARD BATCH BEFORE BEGIN BETWEEN BIGINT BIGSERIAL BINARY BIT
 %token <str> BUCKET_COUNT
-%token <str> BOOLEAN BOTH BOX2D BUNDLE BY
+%token <str> BOOLEAN BOTH BOX2D BUNDLE BY BYPASSRLS
 
 %token <str> CACHE CALL CALLED CANCEL CANCELQUERY CAPABILITIES CAPABILITY CASCADE CASE CAST CBRT CHANGEFEED CHAR
 %token <str> CHARACTER CHARACTERISTICS CHECK CHECK_FILES CLOSE
@@ -953,9 +968,9 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 
 %token <str> DATA DATABASE DATABASES DATE DAY DEBUG_IDS DEC DEBUG_DUMP_METADATA_SST DECIMAL DEFAULT DEFAULTS DEFINER
 %token <str> DEALLOCATE DECLARE DEFERRABLE DEFERRED DELETE DELIMITER DEPENDS DESC DESTINATION DETACHED DETAILS
-%token <str> DISCARD DISTANCE DISTINCT DO DOMAIN DOUBLE DROP
+%token <str> DISABLE DISCARD DISTANCE DISTINCT DO DOMAIN DOUBLE DROP
 
-%token <str> EACH ELSE ENCODING ENCRYPTED ENCRYPTION_INFO_DIR ENCRYPTION_PASSPHRASE END ENUM ENUMS ESCAPE EXCEPT EXCLUDE EXCLUDING
+%token <str> EACH ELSE ENABLE ENCODING ENCRYPTED ENCRYPTION_INFO_DIR ENCRYPTION_PASSPHRASE END ENUM ENUMS ESCAPE EXCEPT EXCLUDE EXCLUDING
 %token <str> EXISTS EXECUTE EXECUTION EXPERIMENTAL
 %token <str> EXPERIMENTAL_FINGERPRINTS EXPERIMENTAL_REPLICA
 %token <str> EXPERIMENTAL_AUDIT EXPERIMENTAL_RELOCATE
@@ -996,7 +1011,7 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %token <str> MULTIPOINT MULTIPOINTM MULTIPOINTZ MULTIPOINTZM
 %token <str> MULTIPOLYGON MULTIPOLYGONM MULTIPOLYGONZ MULTIPOLYGONZM
 
-%token <str> NAN NAME NAMES NATURAL NEG_INNER_PRODUCT NEVER NEW NEW_DB_NAME NEW_KMS NEXT NO NOCANCELQUERY NOCONTROLCHANGEFEED
+%token <str> NAN NAME NAMES NATURAL NEG_INNER_PRODUCT NEVER NEW NEW_DB_NAME NEW_KMS NEXT NO NOBYPASSRLS NOCANCELQUERY NOCONTROLCHANGEFEED
 %token <str> NOCONTROLJOB NOCREATEDB NOCREATELOGIN NOCREATEROLE NODE NOLOGIN NOMODIFYCLUSTERSETTING NOREPLICATION
 %token <str> NOSQLLOGIN NO_INDEX_JOIN NO_ZIGZAG_JOIN NO_FULL_SCAN NONE NONVOTERS NORMAL NOT
 %token <str> NOTHING NOTHING_AFTER_RETURNING
@@ -1006,8 +1021,8 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %token <str> OF OFF OFFSET OID OIDS OIDVECTOR OLD OLD_KMS ON ONLY OPT OPTION OPTIONS OR
 %token <str> ORDER ORDINALITY OTHERS OUT OUTER OVER OVERLAPS OVERLAY OWNED OWNER OPERATOR
 
-%token <str> PARALLEL PARENT PARTIAL PARTITION PARTITIONS PASSWORD PAUSE PAUSED PER PHYSICAL PLACEMENT PLACING
-%token <str> PLAN PLANS POINT POINTM POINTZ POINTZM POLYGON POLYGONM POLYGONZ POLYGONZM
+%token <str> PARALLEL PARENT PARTIAL PARTITION PARTITIONS PASSWORD PAUSE PAUSED PER PERMISSIVE PHYSICAL PLACEMENT PLACING
+%token <str> PLAN PLANS POINT POINTM POINTZ POINTZM POLICIES POLICY POLYGON POLYGONM POLYGONZ POLYGONZM
 %token <str> POSITION PRECEDING PRECISION PREPARE PRESERVE PRIMARY PRIOR PRIORITY PRIVILEGES
 %token <str> PROCEDURAL PROCEDURE PROCEDURES PUBLIC PUBLICATION
 
@@ -1016,7 +1031,7 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %token <str> RANGE RANGES READ REAL REASON REASSIGN RECURSIVE RECURRING REDACT REF REFERENCES REFERENCING REFRESH
 %token <str> REGCLASS REGION REGIONAL REGIONS REGNAMESPACE REGPROC REGPROCEDURE REGROLE REGTYPE REINDEX
 %token <str> RELATIVE RELOCATE REMOVE_PATH REMOVE_REGIONS RENAME REPEATABLE REPLACE REPLICATION
-%token <str> RELEASE RESET RESTART RESTORE RESTRICT RESTRICTED RESUME RETENTION RETURNING RETURN RETURNS RETRY REVISION_HISTORY
+%token <str> RELEASE RESET RESTART RESTORE RESTRICT RESTRICTED RESTRICTIVE RESUME RETENTION RETURNING RETURN RETURNS RETRY REVISION_HISTORY
 %token <str> REVOKE RIGHT ROLE ROLES ROLLBACK ROLLUP ROUTINES ROW ROWS RSHIFT RULE RUNNING
 
 %token <str> SAVEPOINT SCANS SCATTER SCHEDULE SCHEDULES SCROLL SCHEMA SCHEMA_ONLY SCHEMAS SCRUB
@@ -1098,6 +1113,7 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %type <tree.Statement> alter_unsupported_stmt
 %type <tree.Statement> alter_func_stmt
 %type <tree.Statement> alter_proc_stmt
+%type <tree.Statement> alter_policy_stmt
 
 // ALTER RANGE
 %type <tree.Statement> alter_zone_range_stmt
@@ -1190,6 +1206,11 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %type <tree.Statement> alter_proc_set_schema_stmt
 %type <tree.Statement> alter_proc_owner_stmt
 
+// ALTER POLICY
+// SPILLY - move these??
+%type <tree.Expr> opt_policy_using_expr
+%type <tree.Expr> opt_policy_check_expr
+
 %type <tree.Statement> backup_stmt
 %type <tree.Statement> begin_stmt
 
@@ -1234,6 +1255,7 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %type <tree.Statement> create_func_stmt
 %type <tree.Statement> create_proc_stmt
 %type <tree.Statement> create_trigger_stmt
+%type <tree.Statement> create_policy_stmt
 
 %type <tree.LogicalReplicationResources> logical_replication_resources, logical_replication_resources_list
 %type <*tree.LogicalReplicationOptions> opt_logical_replication_options logical_replication_options logical_replication_options_list
@@ -1259,6 +1281,7 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %type <tree.Statement> drop_view_stmt
 %type <tree.Statement> drop_sequence_stmt
 %type <tree.Statement> drop_func_stmt
+%type <tree.Statement> drop_policy_stmt
 %type <tree.Statement> drop_proc_stmt
 %type <tree.Statement> drop_trigger_stmt
 %type <tree.Statement> drop_virtual_cluster_stmt
@@ -1357,6 +1380,7 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %type <tree.Statement> show_full_scans_stmt
 %type <tree.Statement> show_completions_stmt
 %type <tree.Statement> show_logical_replication_jobs_stmt opt_show_logical_replication_jobs_options show_logical_replication_jobs_options
+%type <tree.Statement> show_policies_stmt
 
 %type <str> statements_or_queries
 
@@ -1428,6 +1452,8 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %type <tree.AlterIndexCmds> alter_index_cmds
 
 %type <tree.DropBehavior> opt_drop_behavior
+
+%type <tree.RLSTableAction> rls_table_action
 
 %type <tree.ValidationBehavior> opt_validate_behavior
 
@@ -1718,6 +1744,9 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %type <tree.AbbreviatedRevoke> abbreviated_revoke_stmt
 %type <bool> opt_with_grant_option
 %type <tree.NameList> opt_for_roles
+%type <tree.NameList> opt_policy_roles
+%type <tree.PolicyType> opt_policy_type
+%type <tree.PolicyCommand> opt_policy_command
 %type <tree.ObjectNamePrefixList>  opt_in_schemas
 %type <privilege.TargetObjectType> target_object_type
 
@@ -1892,6 +1921,7 @@ alter_ddl_stmt:
 | alter_func_stmt               // EXTEND WITH HELP: ALTER FUNCTION
 | alter_proc_stmt               // EXTEND WITH HELP: ALTER PROCEDURE
 | alter_backup_schedule  // EXTEND WITH HELP: ALTER BACKUP SCHEDULE
+| alter_policy_stmt             // EXTEND WITH HELP: ALTER POLICY
 
 // %Help: ALTER TABLE - change the definition of a table
 // %Category: DDL
@@ -1929,6 +1959,7 @@ alter_ddl_stmt:
 //   ALTER TABLE ... CONFIGURE ZONE <zoneconfig>
 //   ALTER TABLE ... SET SCHEMA <newschemaname>
 //   ALTER TABLE ... SET LOCALITY [REGIONAL BY [TABLE IN <region> | ROW] | GLOBAL]
+//   ALTER TABLE ... {ENABLE | DISABLE | FORCE | NO FORCE} ROW LEVEL SECURITY
 //
 // Column qualifiers:
 //   [CONSTRAINT <constraintname>] {NULL | NOT NULL | UNIQUE | PRIMARY KEY | CHECK (<expr>) | DEFAULT <expr>}
@@ -3000,6 +3031,12 @@ alter_table_cmd:
       Params: $3.storageParamKeys(),
     }
   }
+| rls_table_action ROW LEVEL SECURITY
+  {
+    $$.val = &tree.AlterTableSetRLSAction{
+      Action: $1.rlsTableAction(),
+    }
+  }
 
 audit_mode:
   READ WRITE { $$.val = tree.AuditModeReadWrite }
@@ -3076,6 +3113,25 @@ opt_drop_behavior:
 | /* EMPTY */
   {
     $$.val = tree.DropDefault
+  }
+
+// SPILLY - move me
+rls_table_action:
+  ENABLE
+  {
+    $$.val = tree.RLSTableEnable
+  }
+| DISABLE
+  {
+    $$.val = tree.RLSTableDisable
+  }
+| FORCE
+  {
+    $$.val = tree.RLSTableForce
+  }
+| NO FORCE
+  {
+    $$.val = tree.RLSTableNoForce
   }
 
 opt_validate_behavior:
@@ -3605,6 +3661,160 @@ alter_backup_schedule:
   }
   | ALTER BACKUP SCHEDULE error  // SHOW HELP: ALTER BACKUP SCHEDULE
 
+// %Help: ALTER POLICY - alter an existing row-level security policy
+// %Category: DDL
+// %Text:
+// ALTER POLICY name ON table_name RENAME TO new_policy_name
+//
+// ALTER POLICY name ON table_name
+//       [ TO { role_name | PUBLIC | CURRENT_ROLE | CURRENT_USER | SESSION_USER } [, ...] ]
+//       [ USING ( using_expression ) ]
+//       [ WITH CHECK ( check_expression ) ]
+//
+// %SeeAlso: CREATE POLICY, DROP POLICY
+alter_policy_stmt:
+  ALTER POLICY name ON table_name RENAME TO name
+  {
+    $$.val = &tree.AlterPolicy{
+      Policy: tree.Name($3),
+      Table: $5.unresolvedObjectName().ToTableName(),
+      NewPolicy: tree.Name($8),
+    }
+  }
+| ALTER POLICY name ON table_name opt_policy_roles opt_policy_using_expr opt_policy_check_expr
+  {
+    $$.val = &tree.AlterPolicy{
+      Policy: tree.Name($3),
+      Table: $5.unresolvedObjectName().ToTableName(),
+      Roles: $6.roleSpecList(),
+      Using: $7.expr(),
+      WithCheck: $8.expr(),
+    }
+  }
+| ALTER POLICY error // SHOW HELP: ALTER POLICY
+
+// %Help: CREATE POLICY - define a new row-level security policy for a table
+// %Category: DDL
+// %Text:
+// CREATE POLICY name ON table_name
+//     [ AS { PERMISSIVE | RESTRICTIVE } ]
+//     [ FOR { ALL | SELECT | INSERT | UPDATE | DELETE } ]
+//     [ TO { role_name | PUBLIC | CURRENT_ROLE | CURRENT_USER | SESSION_USER } [, ...] ]
+//     [ USING ( using_expression ) ]
+//     [ WITH CHECK ( check_expression ) ]
+//
+// %SeeAlso: ALTER POLICY, DROP POLICY
+create_policy_stmt:
+  CREATE POLICY name ON table_name opt_policy_type opt_policy_command opt_policy_roles opt_policy_using_expr opt_policy_check_expr
+  {
+    $$.val = &tree.CreatePolicy{
+      Policy: tree.Name($3),
+      Table: $5.unresolvedObjectName().ToTableName(),
+      Type: $6.policyType(),
+      Cmd: $7.policyCommand(),
+      Roles: $8.roleSpecList(),
+      Using: $9.expr(),
+      WithCheck: $10.expr(),
+    }
+  }
+ | CREATE POLICY error // SHOW HELP: CREATE POLICY
+
+// %Help: DROP POLICY - remove an existing row-level security policy from a table
+// %Category: DDL
+// %Text:
+// DROP POLICY [ IF EXISTS ] name ON table_name [ CASCADE | RESTRICT ]
+//
+// %SeeAlso: CREATE POLICY, ALTER POLICY
+drop_policy_stmt:
+  DROP POLICY name ON table_name opt_drop_behavior
+  {
+    $$.val = &tree.DropPolicy{
+      Policy: tree.Name($3),
+      Table: $5.unresolvedObjectName(),
+      DropBehavior: $6.dropBehavior(),
+      IfExists: false,
+    }
+  }
+| DROP POLICY IF EXISTS name ON table_name opt_drop_behavior
+  {
+    $$.val = &tree.DropPolicy{
+      Policy: tree.Name($5),
+      Table: $7.unresolvedObjectName(),
+      DropBehavior: $8.dropBehavior(),
+      IfExists: true,
+    }
+  }
+| DROP POLICY error // SHOW HELP: DROP POLICY
+
+// SPILLY - rolespec doesn't have CURRENT_ROLE and PUBLIC. Should we add it now?
+opt_policy_type:
+  AS PERMISSIVE
+  {
+    $$.val = tree.PolicyTypePermissive
+  }
+| AS RESTRICTIVE
+  {
+    $$.val = tree.PolicyTypeRestrictive
+  }
+| /* EMPTY */
+  {
+    $$.val = tree.PolicyTypeDefault
+  }
+
+opt_policy_command:
+  FOR ALL
+  {
+    $$.val = tree.PolicyCommandAll
+  }
+| FOR SELECT
+  {
+    $$.val = tree.PolicyCommandSelect
+  }
+| FOR INSERT
+  {
+    $$.val = tree.PolicyCommandInsert
+  }
+| FOR UPDATE
+  {
+    $$.val = tree.PolicyCommandUpdate
+  }
+| FOR DELETE
+  {
+    $$.val = tree.PolicyCommandDelete
+  }
+| /* EMPTY */
+  {
+    $$.val = tree.PolicyCommandDefault
+  }
+
+opt_policy_roles:
+ TO role_spec_list
+ {
+   $$.val = $2.roleSpecList()
+ }
+| /* EMPTY */ {
+   $$.val = tree.RoleSpecList(nil)
+}
+
+opt_policy_using_expr:
+  USING '(' a_expr ')'
+  {
+    $$.val = $3.expr()
+  }
+| /* EMPTY */
+  {
+    $$.val = tree.Expr(nil)
+  }
+
+opt_policy_check_expr:
+  WITH CHECK '(' a_expr ')'
+  {
+    $$.val = $4.expr()
+  }
+| /* EMPTY */
+  {
+    $$.val = tree.Expr(nil)
+  }
 
 alter_backup_schedule_cmds:
   alter_backup_schedule_cmd
@@ -5624,6 +5834,7 @@ create_ddl_stmt:
 | create_func_stmt     // EXTEND WITH HELP: CREATE FUNCTION
 | create_proc_stmt     // EXTEND WITH HELP: CREATE PROCEDURE
 | create_trigger_stmt  // EXTEND WITH HELP: CREATE TRIGGER
+| create_policy_stmt   // EXTEND WITH HELP: CREATE POLICY
 
 // %Help: CREATE STATISTICS - create a new table statistic
 // %Category: Misc
@@ -6011,6 +6222,7 @@ drop_ddl_stmt:
 | drop_func_stmt     // EXTEND WITH HELP: DROP FUNCTION
 | drop_proc_stmt     // EXTEND WITH HELP: DROP FUNCTION
 | drop_trigger_stmt  // EXTEND WITH HELP: DROP TRIGGER
+| drop_policy_stmt   // EXTEND WITH HELP: DROP POLICY
 
 // %Help: DROP VIEW - remove a view
 // %Category: DDL
@@ -7850,6 +8062,7 @@ show_stmt:
 | show_users_stmt            // EXTEND WITH HELP: SHOW USERS
 | show_default_session_variables_for_role_stmt // EXTEND WITH HELP: SHOW DEFAULT SESSION VARIABLES FOR ROLE
 | show_zone_stmt             // EXTEND WITH HELP: SHOW ZONE CONFIGURATION
+| show_policies_stmt         // EXTEND WITH HELP: SHOW POLICIES
 | SHOW error                 // SHOW HELP: SHOW
 | show_last_query_stats_stmt
 | show_full_scans_stmt
@@ -9100,6 +9313,18 @@ show_completions_stmt:
         Offset: $5.numVal(),
     }
   }
+
+// %Help: SHOW POLICIES - list row-level security policies defined for a table
+// %Category: DDL
+// %Text: SHOW POLICIES FOR <table_name>
+show_policies_stmt:
+  SHOW POLICIES FOR table_name
+  {
+  	$$.val = &tree.ShowPolicies{
+        Table: $4.unresolvedObjectName(),
+  	}
+  }
+| SHOW POLICIES error // SHOW HELP: SHOW POLICIES
 
 show_last_query_stats_stmt:
   SHOW LAST QUERY STATISTICS query_stats_cols
@@ -11552,6 +11777,14 @@ role_option:
     $$.val = tree.KVOption{Key: tree.Name($1), Value: nil}
   }
 | NOREPLICATION
+  {
+    $$.val = tree.KVOption{Key: tree.Name($1), Value: nil}
+  }
+| BYPASSRLS
+  {
+    $$.val = tree.KVOption{Key: tree.Name($1), Value: nil}
+  }
+| NOBYPASSRLS
   {
     $$.val = tree.KVOption{Key: tree.Name($1), Value: nil}
   }
@@ -17486,6 +17719,7 @@ unreserved_keyword:
 | BUCKET_COUNT
 | BUNDLE
 | BY
+| BYPASSRLS
 | CACHE
 | CALL
 | CALLED
@@ -17546,11 +17780,13 @@ unreserved_keyword:
 | DESTINATION
 | DETACHED
 | DETAILS
+| DISABLE
 | DISCARD
 | DOMAIN
 | DOUBLE
 | DROP
 | EACH
+| ENABLE
 | ENCODING
 | ENCRYPTED
 | ENCRYPTION_PASSPHRASE
@@ -17699,6 +17935,7 @@ unreserved_keyword:
 | NO_INDEX_JOIN
 | NO_ZIGZAG_JOIN
 | NO_FULL_SCAN
+| NOBYPASSRLS
 | NOCREATEDB
 | NOCREATELOGIN
 | NOCANCELQUERY
@@ -17741,6 +17978,7 @@ unreserved_keyword:
 | PAUSE
 | PAUSED
 | PER
+| PERMISSIVE
 | PHYSICAL
 | PLACEMENT
 | PLAN
@@ -17748,6 +17986,8 @@ unreserved_keyword:
 | POINTM
 | POINTZ
 | POINTZM
+| POLICIES
+| POLICY
 | POLYGONM
 | POLYGONZ
 | POLYGONZM
@@ -17792,6 +18032,7 @@ unreserved_keyword:
 | RESTORE
 | RESTRICT
 | RESTRICTED
+| RESTRICTIVE
 | RESUME
 | RETENTION
 | RETRY
@@ -17982,6 +18223,7 @@ bare_label_keywords:
 | BUCKET_COUNT
 | BUNDLE
 | BY
+| BYPASSRLS
 | CACHE
 | CALL
 | CALLED
@@ -18063,6 +18305,7 @@ bare_label_keywords:
 | DESTINATION
 | DETACHED
 | DETAILS
+| DISABLE
 | DISCARD
 | DISTINCT
 | DO
@@ -18071,6 +18314,7 @@ bare_label_keywords:
 | DROP
 | EACH
 | ELSE
+| ENABLE
 | ENCODING
 | ENCRYPTED
 | ENCRYPTION_INFO_DIR
@@ -18250,6 +18494,7 @@ bare_label_keywords:
 | NEW_KMS
 | NEXT
 | NO
+| NOBYPASSRLS
 | NOCANCELQUERY
 | NOCONTROLCHANGEFEED
 | NOCONTROLJOB
@@ -18305,6 +18550,7 @@ bare_label_keywords:
 | PAUSE
 | PAUSED
 | PER
+| PERMISSIVE
 | PHYSICAL
 | PLACEMENT
 | PLACING
@@ -18314,6 +18560,8 @@ bare_label_keywords:
 | POINTM
 | POINTZ
 | POINTZM
+| POLICIES
+| POLICY
 | POLYGON
 | POLYGONM
 | POLYGONZ
@@ -18363,6 +18611,7 @@ bare_label_keywords:
 | RESTORE
 | RESTRICT
 | RESTRICTED
+| RESTRICTIVE
 | RESUME
 | RETENTION
 | RETRY

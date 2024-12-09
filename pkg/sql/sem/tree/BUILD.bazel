@@ -84,6 +84,7 @@ go_library(
         "rename.go",
         "returning.go",
         "revoke.go",
+        "rls.go",
         "role_spec.go",
         "routine.go",
         "run_control.go",
