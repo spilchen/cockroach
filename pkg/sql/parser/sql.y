@@ -3031,6 +3031,7 @@ alter_table_cmd:
   }
 | table_rls_mode ROW LEVEL SECURITY
   {
+    /* SKIP DOC */
     $$.val = &tree.AlterTableSetRLSMode{
       Mode: $1.rlsTableMode(),
     }
@@ -3111,25 +3112,6 @@ opt_drop_behavior:
 | /* EMPTY */
   {
     $$.val = tree.DropDefault
-  }
-
-// SPILLY - move me
-table_rls_mode:
-  ENABLE
-  {
-    $$.val = tree.TableRLSEnable
-  }
-| DISABLE
-  {
-    $$.val = tree.TableRLSDisable
-  }
-| FORCE
-  {
-    $$.val = tree.TableRLSForce
-  }
-| NO FORCE
-  {
-    $$.val = tree.TableRLSNoForce
   }
 
 opt_validate_behavior:
@@ -3658,174 +3640,6 @@ alter_backup_schedule:
     }
   }
   | ALTER BACKUP SCHEDULE error  // SHOW HELP: ALTER BACKUP SCHEDULE
-
-// %Help: ALTER POLICY - alter an existing row-level security policy
-// %Category: DDL
-// %Text:
-// ALTER POLICY name ON table_name RENAME TO new_policy_name
-//
-// ALTER POLICY name ON table_name
-//       [ TO { role_name | PUBLIC | CURRENT_ROLE | CURRENT_USER | SESSION_USER } [, ...] ]
-//       [ USING ( using_expression ) ]
-//       [ WITH CHECK ( check_expression ) ]
-//
-// %SeeAlso: CREATE POLICY, DROP POLICY
-alter_policy_stmt:
-  ALTER POLICY name ON table_name RENAME TO name
-  {
-    /* SKIP DOC */
-    $$.val = &tree.AlterPolicy{
-      Policy: tree.Name($3),
-      Table: $5.unresolvedObjectName().ToTableName(),
-      NewPolicy: tree.Name($8),
-    }
-  }
-| ALTER POLICY name ON table_name opt_policy_roles opt_policy_exprs
-  {
-    /* SKIP DOC */
-    $$.val = &tree.AlterPolicy{
-      Policy: tree.Name($3),
-      Table: $5.unresolvedObjectName().ToTableName(),
-      Roles: $6.roleSpecList(),
-      Exprs: $7.policyExpressions(),
-    }
-  }
-| ALTER POLICY error // SHOW HELP: ALTER POLICY
-
-// %Help: CREATE POLICY - define a new row-level security policy for a table
-// %Category: DDL
-// %Text:
-// CREATE POLICY name ON table_name
-//     [ AS { PERMISSIVE | RESTRICTIVE } ]
-//     [ FOR { ALL | SELECT | INSERT | UPDATE | DELETE } ]
-//     [ TO { role_name | PUBLIC | CURRENT_ROLE | CURRENT_USER | SESSION_USER } [, ...] ]
-//     [ USING ( using_expression ) ]
-//     [ WITH CHECK ( check_expression ) ]
-//
-// %SeeAlso: ALTER POLICY, DROP POLICY
-create_policy_stmt:
-  CREATE POLICY name ON table_name opt_policy_type opt_policy_command opt_policy_roles opt_policy_exprs
-  {
-		/* SKIP DOC */
-    $$.val = &tree.CreatePolicy{
-      Policy: tree.Name($3),
-      Table: $5.unresolvedObjectName().ToTableName(),
-      Type: $6.policyType(),
-      Cmd: $7.policyCommand(),
-      Roles: $8.roleSpecList(),
-      Exprs: $9.policyExpressions(),
-    }
-  }
- | CREATE POLICY error // SHOW HELP: CREATE POLICY
-
-// %Help: DROP POLICY - remove an existing row-level security policy from a table
-// %Category: DDL
-// %Text:
-// DROP POLICY [ IF EXISTS ] name ON table_name [ CASCADE | RESTRICT ]
-//
-// %SeeAlso: CREATE POLICY, ALTER POLICY
-drop_policy_stmt:
-  DROP POLICY name ON table_name opt_drop_behavior
-  {
-    /* SKIP DOC */
-    $$.val = &tree.DropPolicy{
-      Policy: tree.Name($3),
-      Table: $5.unresolvedObjectName(),
-      DropBehavior: $6.dropBehavior(),
-      IfExists: false,
-    }
-  }
-| DROP POLICY IF EXISTS name ON table_name opt_drop_behavior
-  {
-    /* SKIP DOC */
-    $$.val = &tree.DropPolicy{
-      Policy: tree.Name($5),
-      Table: $7.unresolvedObjectName(),
-      DropBehavior: $8.dropBehavior(),
-      IfExists: true,
-    }
-  }
-| DROP POLICY error // SHOW HELP: DROP POLICY
-
-opt_policy_type:
-  AS PERMISSIVE
-  {
-    $$.val = tree.PolicyTypePermissive
-  }
-| AS RESTRICTIVE
-  {
-    $$.val = tree.PolicyTypeRestrictive
-  }
-| /* EMPTY */
-  {
-    $$.val = tree.PolicyTypeDefault
-  }
-
-opt_policy_command:
-  FOR ALL
-  {
-    $$.val = tree.PolicyCommandAll
-  }
-| FOR SELECT
-  {
-    $$.val = tree.PolicyCommandSelect
-  }
-| FOR INSERT
-  {
-    $$.val = tree.PolicyCommandInsert
-  }
-| FOR UPDATE
-  {
-    $$.val = tree.PolicyCommandUpdate
-  }
-| FOR DELETE
-  {
-    $$.val = tree.PolicyCommandDelete
-  }
-| /* EMPTY */
-  {
-    $$.val = tree.PolicyCommandDefault
-  }
-
-opt_policy_roles:
- TO role_spec_list
- {
-   $$.val = $2.roleSpecList()
- }
-| /* EMPTY */ {
-   $$.val = tree.RoleSpecList(nil)
-}
-
-opt_policy_exprs:
-  USING '(' a_expr ')' WITH CHECK '(' a_expr ')'
-  {
-  	$$.val = tree.PolicyExpressions{
-  	  Using: $3.expr(),
-  	  WithCheck: $8.expr(),
-  	}
-  }
-| WITH CHECK '(' a_expr ')' USING '(' a_expr ')'
-  {
-  	$$.val = tree.PolicyExpressions{
-  	  Using: $8.expr(),
-  	  WithCheck: $4.expr(),
-  	}
-  }
-| WITH CHECK '(' a_expr ')'
-  {
-  	$$.val = tree.PolicyExpressions{
-  	  WithCheck: $4.expr(),
-  	}
- 	}
-| USING '(' a_expr ')'
-  {
-  	$$.val = tree.PolicyExpressions{
-  	  Using: $3.expr(),
-  	}
- 	}
-| /* EMPTY */ {
-   $$.val = tree.PolicyExpressions{}
-}
 
 alter_backup_schedule_cmds:
   alter_backup_schedule_cmd
@@ -5060,6 +4874,192 @@ create_extension_stmt:
     return unimplementedWithIssueDetail(sqllex, 74777, "create extension with")
   }
 | CREATE EXTENSION error // SHOW HELP: CREATE EXTENSION
+
+// %Help: ALTER POLICY - alter an existing row-level security policy
+// %Category: DDL
+// %Text:
+// ALTER POLICY name ON table_name RENAME TO new_policy_name
+//
+// ALTER POLICY name ON table_name
+//       [ TO { role_name | PUBLIC | CURRENT_ROLE | CURRENT_USER | SESSION_USER } [, ...] ]
+//       [ USING ( using_expression ) ]
+//       [ WITH CHECK ( check_expression ) ]
+//
+// %SeeAlso: CREATE POLICY, DROP POLICY
+alter_policy_stmt:
+  ALTER POLICY name ON table_name RENAME TO name
+  {
+    /* SKIP DOC */
+    $$.val = &tree.AlterPolicy{
+      Policy: tree.Name($3),
+      Table: $5.unresolvedObjectName().ToTableName(),
+      NewPolicy: tree.Name($8),
+    }
+  }
+| ALTER POLICY name ON table_name opt_policy_roles opt_policy_exprs
+  {
+    /* SKIP DOC */
+    $$.val = &tree.AlterPolicy{
+      Policy: tree.Name($3),
+      Table: $5.unresolvedObjectName().ToTableName(),
+      Roles: $6.roleSpecList(),
+      Exprs: $7.policyExpressions(),
+    }
+  }
+| ALTER POLICY error // SHOW HELP: ALTER POLICY
+
+// %Help: CREATE POLICY - define a new row-level security policy for a table
+// %Category: DDL
+// %Text:
+// CREATE POLICY name ON table_name
+//     [ AS { PERMISSIVE | RESTRICTIVE } ]
+//     [ FOR { ALL | SELECT | INSERT | UPDATE | DELETE } ]
+//     [ TO { role_name | PUBLIC | CURRENT_ROLE | CURRENT_USER | SESSION_USER } [, ...] ]
+//     [ USING ( using_expression ) ]
+//     [ WITH CHECK ( check_expression ) ]
+//
+// %SeeAlso: ALTER POLICY, DROP POLICY
+create_policy_stmt:
+  CREATE POLICY name ON table_name opt_policy_type opt_policy_command opt_policy_roles opt_policy_exprs
+  {
+		/* SKIP DOC */
+    $$.val = &tree.CreatePolicy{
+      Policy: tree.Name($3),
+      Table: $5.unresolvedObjectName().ToTableName(),
+      Type: $6.policyType(),
+      Cmd: $7.policyCommand(),
+      Roles: $8.roleSpecList(),
+      Exprs: $9.policyExpressions(),
+    }
+  }
+ | CREATE POLICY error // SHOW HELP: CREATE POLICY
+
+// %Help: DROP POLICY - remove an existing row-level security policy from a table
+// %Category: DDL
+// %Text:
+// DROP POLICY [ IF EXISTS ] name ON table_name [ CASCADE | RESTRICT ]
+//
+// %SeeAlso: CREATE POLICY, ALTER POLICY
+drop_policy_stmt:
+  DROP POLICY name ON table_name opt_drop_behavior
+  {
+    /* SKIP DOC */
+    $$.val = &tree.DropPolicy{
+      Policy: tree.Name($3),
+      Table: $5.unresolvedObjectName(),
+      DropBehavior: $6.dropBehavior(),
+      IfExists: false,
+    }
+  }
+| DROP POLICY IF EXISTS name ON table_name opt_drop_behavior
+  {
+    /* SKIP DOC */
+    $$.val = &tree.DropPolicy{
+      Policy: tree.Name($5),
+      Table: $7.unresolvedObjectName(),
+      DropBehavior: $8.dropBehavior(),
+      IfExists: true,
+    }
+  }
+| DROP POLICY error // SHOW HELP: DROP POLICY
+
+opt_policy_type:
+  AS PERMISSIVE
+  {
+    $$.val = tree.PolicyTypePermissive
+  }
+| AS RESTRICTIVE
+  {
+    $$.val = tree.PolicyTypeRestrictive
+  }
+| /* EMPTY */
+  {
+    $$.val = tree.PolicyTypeDefault
+  }
+
+opt_policy_command:
+  FOR ALL
+  {
+    $$.val = tree.PolicyCommandAll
+  }
+| FOR SELECT
+  {
+    $$.val = tree.PolicyCommandSelect
+  }
+| FOR INSERT
+  {
+    $$.val = tree.PolicyCommandInsert
+  }
+| FOR UPDATE
+  {
+    $$.val = tree.PolicyCommandUpdate
+  }
+| FOR DELETE
+  {
+    $$.val = tree.PolicyCommandDelete
+  }
+| /* EMPTY */
+  {
+    $$.val = tree.PolicyCommandDefault
+  }
+
+opt_policy_roles:
+ TO role_spec_list
+ {
+   $$.val = $2.roleSpecList()
+ }
+| /* EMPTY */ {
+   $$.val = tree.RoleSpecList(nil)
+}
+
+opt_policy_exprs:
+  USING '(' a_expr ')' WITH CHECK '(' a_expr ')'
+  {
+  	$$.val = tree.PolicyExpressions{
+  	  Using: $3.expr(),
+  	  WithCheck: $8.expr(),
+  	}
+  }
+| WITH CHECK '(' a_expr ')' USING '(' a_expr ')'
+  {
+  	$$.val = tree.PolicyExpressions{
+  	  Using: $8.expr(),
+  	  WithCheck: $4.expr(),
+  	}
+  }
+| WITH CHECK '(' a_expr ')'
+  {
+  	$$.val = tree.PolicyExpressions{
+  	  WithCheck: $4.expr(),
+  	}
+ 	}
+| USING '(' a_expr ')'
+  {
+  	$$.val = tree.PolicyExpressions{
+  	  Using: $3.expr(),
+  	}
+ 	}
+| /* EMPTY */ {
+   $$.val = tree.PolicyExpressions{}
+}
+
+table_rls_mode:
+  ENABLE
+  {
+    $$.val = tree.TableRLSEnable
+  }
+| DISABLE
+  {
+    $$.val = tree.TableRLSDisable
+  }
+| FORCE
+  {
+    $$.val = tree.TableRLSForce
+  }
+| NO FORCE
+  {
+    $$.val = tree.TableRLSNoForce
+  }
 
 // %Help: CREATE FUNCTION - define a new function
 // %Category: DDL
