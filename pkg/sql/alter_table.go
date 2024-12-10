@@ -839,10 +839,10 @@ func (n *alterTableNode) startExec(params runParams) error {
 				return err
 			}
 			descriptorChanged = true
-		case *tree.AlterTableSetRLSAction:
+		case *tree.AlterTableSetRLSMode:
 			return unimplemented.NewWithIssuef(
 				136700,
-				"cannot ALTER TABLE and modify the row-level security attributes")
+				"row-level security mode alteration is not supported")
 		default:
 			return errors.AssertionFailedf("unsupported alter command: %T", cmd)
 		}

@@ -646,8 +646,8 @@ func (u *sqlSymUnion) indexInvisibility() tree.IndexInvisibility {
 func (u *sqlSymUnion) dropBehavior() tree.DropBehavior {
     return u.val.(tree.DropBehavior)
 }
-func (u *sqlSymUnion) rlsTableAction() tree.RLSTableAction {
-    return u.val.(tree.RLSTableAction)
+func (u *sqlSymUnion) rlsTableMode() tree.TableRLSMode {
+    return u.val.(tree.TableRLSMode)
 }
 func (u *sqlSymUnion) alterPolicy() tree.AlterPolicy {
     return u.val.(tree.AlterPolicy)
@@ -1209,10 +1209,6 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %type <tree.Statement> alter_proc_set_schema_stmt
 %type <tree.Statement> alter_proc_owner_stmt
 
-// ALTER POLICY
-// SPILLY - move these??
-%type <tree.PolicyExpressions> opt_policy_exprs
-
 %type <tree.Statement> backup_stmt
 %type <tree.Statement> begin_stmt
 
@@ -1454,8 +1450,6 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %type <tree.AlterIndexCmds> alter_index_cmds
 
 %type <tree.DropBehavior> opt_drop_behavior
-
-%type <tree.RLSTableAction> rls_table_action
 
 %type <tree.ValidationBehavior> opt_validate_behavior
 
@@ -1747,8 +1741,10 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 %type <bool> opt_with_grant_option
 %type <tree.NameList> opt_for_roles
 %type <tree.NameList> opt_policy_roles
+%type <tree.PolicyExpressions> opt_policy_exprs
 %type <tree.PolicyType> opt_policy_type
 %type <tree.PolicyCommand> opt_policy_command
+%type <tree.TableRLSMode> table_rls_mode
 %type <tree.ObjectNamePrefixList>  opt_in_schemas
 %type <privilege.TargetObjectType> target_object_type
 
@@ -3033,10 +3029,10 @@ alter_table_cmd:
       Params: $3.storageParamKeys(),
     }
   }
-| rls_table_action ROW LEVEL SECURITY
+| table_rls_mode ROW LEVEL SECURITY
   {
-    $$.val = &tree.AlterTableSetRLSAction{
-      Action: $1.rlsTableAction(),
+    $$.val = &tree.AlterTableSetRLSMode{
+      Mode: $1.rlsTableMode(),
     }
   }
 
@@ -3118,22 +3114,22 @@ opt_drop_behavior:
   }
 
 // SPILLY - move me
-rls_table_action:
+table_rls_mode:
   ENABLE
   {
-    $$.val = tree.RLSTableEnable
+    $$.val = tree.TableRLSEnable
   }
 | DISABLE
   {
-    $$.val = tree.RLSTableDisable
+    $$.val = tree.TableRLSDisable
   }
 | FORCE
   {
-    $$.val = tree.RLSTableForce
+    $$.val = tree.TableRLSForce
   }
 | NO FORCE
   {
-    $$.val = tree.RLSTableNoForce
+    $$.val = tree.TableRLSNoForce
   }
 
 opt_validate_behavior:

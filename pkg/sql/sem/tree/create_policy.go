@@ -5,38 +5,7 @@
 
 package tree
 
-import "strings"
-
-var _ Statement = &AlterPolicy{}
 var _ Statement = &CreatePolicy{}
-var _ Statement = &DropPolicy{}
-
-// RLSTableAction represents different actions that you can do to the table for
-// row-level security.
-type RLSTableAction int
-
-// RLSTableAction values
-const (
-	RLSTableEnable RLSTableAction = iota
-	RLSTableDisable
-	RLSTableForce
-	RLSTableNoForce
-)
-
-var rlsTableActionName = [...]string{
-	RLSTableEnable:  "ENABLE",
-	RLSTableDisable: "DISABLE",
-	RLSTableForce:   "FORCE",
-	RLSTableNoForce: "NO FORCE",
-}
-
-func (r RLSTableAction) String() string {
-	return rlsTableActionName[r]
-}
-
-func (r RLSTableAction) TelemetryName() string {
-	return strings.ReplaceAll(strings.ToLower(r.String()), " ", "_")
-}
 
 // PolicyCommand represents the type of commands a row-level security policy
 // will apply against.
@@ -101,35 +70,6 @@ func (node *PolicyExpressions) Format(ctx *FmtCtx) {
 	}
 }
 
-// AlterPolicy is a tree struct for the ALTER POLICY DDL statement
-type AlterPolicy struct {
-	Policy    Name
-	Table     TableName
-	NewPolicy Name
-	Roles     RoleSpecList
-	Exprs     PolicyExpressions
-}
-
-// Format implements the NodeFormatter interface.
-func (node *AlterPolicy) Format(ctx *FmtCtx) {
-	ctx.WriteString("ALTER POLICY ")
-	ctx.FormatName(string(node.Policy))
-	ctx.WriteString(" ON ")
-	ctx.FormatNode(&node.Table)
-
-	if node.NewPolicy != "" {
-		ctx.WriteString(" RENAME TO ")
-		ctx.FormatName(string(node.NewPolicy))
-		return
-	}
-
-	if len(node.Roles) > 0 {
-		ctx.WriteString(" TO ")
-		ctx.FormatNode(&node.Roles)
-	}
-	ctx.FormatNode(&node.Exprs)
-}
-
 // CreatePolicy is a tree struct for the CREATE POLICY DDL statement
 type CreatePolicy struct {
 	Policy Name
@@ -160,27 +100,4 @@ func (node *CreatePolicy) Format(ctx *FmtCtx) {
 		ctx.FormatNode(&node.Roles)
 	}
 	ctx.FormatNode(&node.Exprs)
-}
-
-// DropPolicy is a tree struct for the DROP POLICY DDL statement
-type DropPolicy struct {
-	Policy       Name
-	Table        *UnresolvedObjectName
-	DropBehavior DropBehavior
-	IfExists     bool
-}
-
-// Format implements the NodeFormatter interface.
-func (node *DropPolicy) Format(ctx *FmtCtx) {
-	ctx.WriteString("DROP POLICY ")
-	if node.IfExists {
-		ctx.WriteString("IF EXISTS ")
-	}
-	ctx.FormatName(string(node.Policy))
-	ctx.WriteString(" ON ")
-	ctx.FormatNode(node.Table)
-	if node.DropBehavior != DropDefault {
-		ctx.WriteString(" ")
-		ctx.WriteString(node.DropBehavior.String())
-	}
 }

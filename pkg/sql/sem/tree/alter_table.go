@@ -77,7 +77,7 @@ func (*AlterTableAddIdentity) alterTableCmd()        {}
 func (*AlterTableSetIdentity) alterTableCmd()        {}
 func (*AlterTableIdentity) alterTableCmd()           {}
 func (*AlterTableDropIdentity) alterTableCmd()       {}
-func (*AlterTableSetRLSAction) alterTableCmd()       {}
+func (*AlterTableSetRLSMode) alterTableCmd()         {}
 
 var _ AlterTableCmd = &AlterTableAddColumn{}
 var _ AlterTableCmd = &AlterTableAddConstraint{}
@@ -102,7 +102,7 @@ var _ AlterTableCmd = &AlterTableAddIdentity{}
 var _ AlterTableCmd = &AlterTableSetIdentity{}
 var _ AlterTableCmd = &AlterTableIdentity{}
 var _ AlterTableCmd = &AlterTableDropIdentity{}
-var _ AlterTableCmd = &AlterTableSetRLSAction{}
+var _ AlterTableCmd = &AlterTableSetRLSMode{}
 
 // ColumnMutationCmd is the subset of AlterTableCmds that modify an
 // existing column.
@@ -872,21 +872,48 @@ func (node *AlterTableDropIdentity) Format(ctx *FmtCtx) {
 	}
 }
 
-// AlterTableSetRLSAction represents the following alter table command:
+// TableRLSMode represents different modes that the table can be in for
+// row-level security.
+type TableRLSMode int
+
+// TableRLSMode values
+const (
+	TableRLSEnable TableRLSMode = iota
+	TableRLSDisable
+	TableRLSForce
+	TableRLSNoForce
+)
+
+func (r TableRLSMode) String() string {
+	var rlsTableModeName = [...]string{
+		TableRLSEnable:  "ENABLE",
+		TableRLSDisable: "DISABLE",
+		TableRLSForce:   "FORCE",
+		TableRLSNoForce: "NO FORCE",
+	}
+	return rlsTableModeName[r]
+}
+
+// TelemetryName implements the AlterTableCmd interface.
+func (r TableRLSMode) TelemetryName() string {
+	return strings.ReplaceAll(strings.ToLower(r.String()), " ", "_")
+}
+
+// AlterTableSetRLSMode represents the following alter table command:
 // {ENABLE | DISABLE | FORCE | NO FORCE} ROW LEVEL SECURITY
-type AlterTableSetRLSAction struct {
-	Action RLSTableAction
+type AlterTableSetRLSMode struct {
+	Mode TableRLSMode
 }
 
 // TelemetryName implements the AlterTableCmd interface
-func (node *AlterTableSetRLSAction) TelemetryName() string {
-	return fmt.Sprintf("%s_row_level_security", node.Action.TelemetryName())
+func (node *AlterTableSetRLSMode) TelemetryName() string {
+	return fmt.Sprintf("%s_row_level_security", node.Mode.TelemetryName())
 }
 
 // Format implements the NodeFormatter interface
-func (node *AlterTableSetRLSAction) Format(ctx *FmtCtx) {
+func (node *AlterTableSetRLSMode) Format(ctx *FmtCtx) {
 	ctx.WriteString(" ")
-	ctx.WriteString(node.Action.String())
+	ctx.WriteString(node.Mode.String())
 	ctx.WriteString(" ROW LEVEL SECURITY")
 }
 

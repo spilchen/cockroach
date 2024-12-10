@@ -86,6 +86,7 @@ const (
 
 const (
 	AlterTableTag          = "ALTER TABLE"
+	AlterPolicyTag         = "ALTER POLICY"
 	BackupTag              = "BACKUP"
 	CreateIndexTag         = "CREATE INDEX"
 	CreateFunctionTag      = "CREATE FUNCTION"
@@ -94,6 +95,7 @@ const (
 	CreateSchemaTag        = "CREATE SCHEMA"
 	CreateSequenceTag      = "CREATE SEQUENCE"
 	CreateDatabaseTag      = "CREATE DATABASE"
+	CreatePolicyTag        = "CREATE POLICY"
 	CommentOnColumnTag     = "COMMENT ON COLUMN"
 	CommentOnConstraintTag = "COMMENT ON CONSTRAINT"
 	CommentOnDatabaseTag   = "COMMENT ON DATABASE"
@@ -451,7 +453,7 @@ func (*AlterPolicy) StatementReturnType() StatementReturnType { return DDL }
 func (*AlterPolicy) StatementType() StatementType { return TypeDDL }
 
 // StatementTag returns a short string identifying the type of statement.
-func (*AlterPolicy) StatementTag() string { return "ALTER POLICY" }
+func (*AlterPolicy) StatementTag() string { return AlterPolicyTag }
 
 func (*AlterPolicy) hiddenFromShowQueries() {}
 
@@ -974,7 +976,7 @@ func (*CreatePolicy) StatementReturnType() StatementReturnType { return DDL }
 func (*CreatePolicy) StatementType() StatementType { return TypeDDL }
 
 // StatementTag returns a short string identifying the type of statement.
-func (*CreatePolicy) StatementTag() string { return "CREATE POLICY" }
+func (*CreatePolicy) StatementTag() string { return CreatePolicyTag }
 
 func (*CreatePolicy) hiddenFromShowQueries() {}
 
