@@ -54,6 +54,7 @@ ALTER POLICY p1 ON db.schema.t1 TO r1, r2 USING (((tenant_id) = (current_user())
 ALTER POLICY p1 ON db.schema.t1 TO r1, r2 USING (tenant_id = current_user()) WITH CHECK (tenant_id::STRING = current_user()) -- literals removed
 ALTER POLICY _ ON _._._ TO _, _ USING (_ = current_user()) WITH CHECK (_::STRING = current_user()) -- identifiers removed
 
+# Empty policy
 parse
 ALTER POLICY p1 on t1
 ----
@@ -61,6 +62,15 @@ ALTER POLICY p1 ON t1 -- normalized!
 ALTER POLICY p1 ON t1 -- fully parenthesized
 ALTER POLICY p1 ON t1 -- literals removed
 ALTER POLICY _ ON _ -- identifiers removed
+
+# USING and WITH CHECK can be declared in any order
+parse
+ALTER POLICY p1 ON db.schema.t1 TO "r1","r2" WITH CHECK (insert_row = current_user) USING (read_row = current_user);
+----
+ALTER POLICY p1 ON db.schema.t1 TO r1, r2 USING (read_row = current_user()) WITH CHECK (insert_row = current_user()) -- normalized!
+ALTER POLICY p1 ON db.schema.t1 TO r1, r2 USING (((read_row) = (current_user()))) WITH CHECK (((insert_row) = (current_user()))) -- fully parenthesized
+ALTER POLICY p1 ON db.schema.t1 TO r1, r2 USING (read_row = current_user()) WITH CHECK (insert_row = current_user()) -- literals removed
+ALTER POLICY _ ON _._._ TO _, _ USING (_ = current_user()) WITH CHECK (_ = current_user()) -- identifiers removed
 
 # Must include the table name
 error
@@ -109,12 +119,11 @@ DETAIL: source SQL:
 ALTER POLICY p1 on t1 RENAME to p2 WITH CHECK (true)
                                    ^
 
-# SPILLY - we need to allow these options in different orders. postgres does
-# Ensure proper order of options
+# Ensure proper order of TO roles
 error
-ALTER POLICY p1 on t1 WITH CHECK (true) USING (true)
+ALTER POLICY p1 on t1 WITH CHECK (true) USING (true) TO public;
 ----
-at or near "using": syntax error
+at or near "to": syntax error
 DETAIL: source SQL:
-ALTER POLICY p1 on t1 WITH CHECK (true) USING (true)
-                                        ^
+ALTER POLICY p1 on t1 WITH CHECK (true) USING (true) TO public
+                                                     ^

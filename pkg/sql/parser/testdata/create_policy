@@ -78,6 +78,15 @@ CREATE POLICY p1 ON schema.xy FOR DELETE TO SESSION_USER, r1, r2 USING ((true)) 
 CREATE POLICY p1 ON schema.xy FOR DELETE TO SESSION_USER, r1, r2 USING (_) WITH CHECK (crdb_region = "us-east1") -- literals removed
 CREATE POLICY _ ON _._ FOR DELETE TO _, _, _ USING (true) WITH CHECK (_ = _) -- identifiers removed
 
+# Verify WITH CHECK and USING can be specified in any order
+parse
+CREATE POLICY p1 on schema.xy FOR ALL WITH CHECK (with_check is true) USING ('using' is true);
+----
+CREATE POLICY p1 ON schema.xy FOR ALL USING ('using' IS true) WITH CHECK (with_check IS true) -- normalized!
+CREATE POLICY p1 ON schema.xy FOR ALL USING ((('using') IS (true))) WITH CHECK (((with_check) IS (true))) -- fully parenthesized
+CREATE POLICY p1 ON schema.xy FOR ALL USING ('_' IS NOT DISTINCT FROM _) WITH CHECK (with_check IS NOT DISTINCT FROM _) -- literals removed
+CREATE POLICY _ ON _._ FOR ALL USING ('using' IS true) WITH CHECK (_ IS true) -- identifiers removed
+
 # Cannot use dot notation for policy name
 error
 CREATE POLICY a.p1 on xy USING (true);
@@ -107,3 +116,21 @@ DETAIL: source SQL:
 CREATE POLICY p1 on xy WITH CHECK true
                                   ^
 HINT: try \h CREATE POLICY
+
+# Cannot specify expressions before roles
+error
+CREATE POLICY p1 on xy WITH CHECK (true) USING (true) TO public;
+----
+at or near "to": syntax error
+DETAIL: source SQL:
+CREATE POLICY p1 on xy WITH CHECK (true) USING (true) TO public
+                                                      ^
+
+# Cannot specify expressions before commands
+error
+CREATE POLICY p1 on xy WITH CHECK (true) USING (true) FOR SELECT;
+----
+at or near "for": syntax error
+DETAIL: source SQL:
+CREATE POLICY p1 on xy WITH CHECK (true) USING (true) FOR SELECT
+                                                      ^

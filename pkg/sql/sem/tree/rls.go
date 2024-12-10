@@ -81,14 +81,33 @@ var policyTypeName = [...]string{
 
 func (p PolicyType) String() string { return policyTypeName[p] }
 
+type PolicyExpressions struct {
+	Using     Expr
+	WithCheck Expr
+}
+
+// Format implements the NodeFormatter interface
+func (node *PolicyExpressions) Format(ctx *FmtCtx) {
+	if node.Using != nil {
+		ctx.WriteString(" USING (")
+		ctx.FormatNode(node.Using)
+		ctx.WriteString(")")
+	}
+
+	if node.WithCheck != nil {
+		ctx.WriteString(" WITH CHECK (")
+		ctx.FormatNode(node.WithCheck)
+		ctx.WriteString(")")
+	}
+}
+
 // AlterPolicy is a tree struct for the ALTER POLICY DDL statement
 type AlterPolicy struct {
 	Policy    Name
 	Table     TableName
 	NewPolicy Name
 	Roles     RoleSpecList
-	Using     Expr
-	WithCheck Expr
+	Exprs     PolicyExpressions
 }
 
 // Format implements the NodeFormatter interface.
@@ -108,29 +127,17 @@ func (node *AlterPolicy) Format(ctx *FmtCtx) {
 		ctx.WriteString(" TO ")
 		ctx.FormatNode(&node.Roles)
 	}
-
-	if node.Using != nil {
-		ctx.WriteString(" USING (")
-		ctx.FormatNode(node.Using)
-		ctx.WriteString(")")
-	}
-
-	if node.WithCheck != nil {
-		ctx.WriteString(" WITH CHECK (")
-		ctx.FormatNode(node.WithCheck)
-		ctx.WriteString(")")
-	}
+	ctx.FormatNode(&node.Exprs)
 }
 
 // CreatePolicy is a tree struct for the CREATE POLICY DDL statement
 type CreatePolicy struct {
-	Policy    Name
-	Table     TableName
-	Type      PolicyType
-	Cmd       PolicyCommand
-	Roles     RoleSpecList
-	Using     Expr
-	WithCheck Expr
+	Policy Name
+	Table  TableName
+	Type   PolicyType
+	Cmd    PolicyCommand
+	Roles  RoleSpecList
+	Exprs  PolicyExpressions
 }
 
 // Format implements the NodeFormatter interface.
@@ -152,18 +159,7 @@ func (node *CreatePolicy) Format(ctx *FmtCtx) {
 		ctx.WriteString(" TO ")
 		ctx.FormatNode(&node.Roles)
 	}
-
-	if node.Using != nil {
-		ctx.WriteString(" USING (")
-		ctx.FormatNode(node.Using)
-		ctx.WriteString(")")
-	}
-
-	if node.WithCheck != nil {
-		ctx.WriteString(" WITH CHECK (")
-		ctx.FormatNode(node.WithCheck)
-		ctx.WriteString(")")
-	}
+	ctx.FormatNode(&node.Exprs)
 }
 
 // DropPolicy is a tree struct for the DROP POLICY DDL statement

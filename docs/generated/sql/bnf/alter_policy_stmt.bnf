@@ -1,3 +1,0 @@
-alter_policy_stmt ::=
-	'ALTER' 'POLICY' policy_name 'ON' table_name 'RENAME' 'TO' name
-	| 'ALTER' 'POLICY' policy_name 'ON' table_name opt_policy_roles opt_policy_using_expr opt_policy_check_expr

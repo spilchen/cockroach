@@ -1,2 +1,0 @@
-show_policies_stmt ::=
-	'SHOW' 'POLICIES' 'FOR' table_name

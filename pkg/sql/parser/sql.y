@@ -661,6 +661,9 @@ func (u *sqlSymUnion) policyType() tree.PolicyType {
 func (u *sqlSymUnion) policyCommand() tree.PolicyCommand {
   return u.val.(tree.PolicyCommand)
 }
+func (u *sqlSymUnion) policyExpressions() tree.PolicyExpressions {
+	return u.val.(tree.PolicyExpressions)
+}
 func (u *sqlSymUnion) validationBehavior() tree.ValidationBehavior {
     return u.val.(tree.ValidationBehavior)
 }
@@ -1208,8 +1211,7 @@ func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
 
 // ALTER POLICY
 // SPILLY - move these??
-%type <tree.Expr> opt_policy_using_expr
-%type <tree.Expr> opt_policy_check_expr
+%type <tree.PolicyExpressions> opt_policy_exprs
 
 %type <tree.Statement> backup_stmt
 %type <tree.Statement> begin_stmt
@@ -3675,20 +3677,21 @@ alter_backup_schedule:
 alter_policy_stmt:
   ALTER POLICY name ON table_name RENAME TO name
   {
+    /* SKIP DOC */
     $$.val = &tree.AlterPolicy{
       Policy: tree.Name($3),
       Table: $5.unresolvedObjectName().ToTableName(),
       NewPolicy: tree.Name($8),
     }
   }
-| ALTER POLICY name ON table_name opt_policy_roles opt_policy_using_expr opt_policy_check_expr
+| ALTER POLICY name ON table_name opt_policy_roles opt_policy_exprs
   {
+    /* SKIP DOC */
     $$.val = &tree.AlterPolicy{
       Policy: tree.Name($3),
       Table: $5.unresolvedObjectName().ToTableName(),
       Roles: $6.roleSpecList(),
-      Using: $7.expr(),
-      WithCheck: $8.expr(),
+      Exprs: $7.policyExpressions(),
     }
   }
 | ALTER POLICY error // SHOW HELP: ALTER POLICY
@@ -3705,16 +3708,16 @@ alter_policy_stmt:
 //
 // %SeeAlso: ALTER POLICY, DROP POLICY
 create_policy_stmt:
-  CREATE POLICY name ON table_name opt_policy_type opt_policy_command opt_policy_roles opt_policy_using_expr opt_policy_check_expr
+  CREATE POLICY name ON table_name opt_policy_type opt_policy_command opt_policy_roles opt_policy_exprs
   {
+		/* SKIP DOC */
     $$.val = &tree.CreatePolicy{
       Policy: tree.Name($3),
       Table: $5.unresolvedObjectName().ToTableName(),
       Type: $6.policyType(),
       Cmd: $7.policyCommand(),
       Roles: $8.roleSpecList(),
-      Using: $9.expr(),
-      WithCheck: $10.expr(),
+      Exprs: $9.policyExpressions(),
     }
   }
  | CREATE POLICY error // SHOW HELP: CREATE POLICY
@@ -3728,6 +3731,7 @@ create_policy_stmt:
 drop_policy_stmt:
   DROP POLICY name ON table_name opt_drop_behavior
   {
+    /* SKIP DOC */
     $$.val = &tree.DropPolicy{
       Policy: tree.Name($3),
       Table: $5.unresolvedObjectName(),
@@ -3737,6 +3741,7 @@ drop_policy_stmt:
   }
 | DROP POLICY IF EXISTS name ON table_name opt_drop_behavior
   {
+    /* SKIP DOC */
     $$.val = &tree.DropPolicy{
       Policy: tree.Name($5),
       Table: $7.unresolvedObjectName(),
@@ -3746,7 +3751,6 @@ drop_policy_stmt:
   }
 | DROP POLICY error // SHOW HELP: DROP POLICY
 
-// SPILLY - rolespec doesn't have CURRENT_ROLE and PUBLIC. Should we add it now?
 opt_policy_type:
   AS PERMISSIVE
   {
@@ -3796,25 +3800,36 @@ opt_policy_roles:
    $$.val = tree.RoleSpecList(nil)
 }
 
-opt_policy_using_expr:
-  USING '(' a_expr ')'
+opt_policy_exprs:
+  USING '(' a_expr ')' WITH CHECK '(' a_expr ')'
   {
-    $$.val = $3.expr()
+  	$$.val = tree.PolicyExpressions{
+  	  Using: $3.expr(),
+  	  WithCheck: $8.expr(),
+  	}
   }
-| /* EMPTY */
+| WITH CHECK '(' a_expr ')' USING '(' a_expr ')'
   {
-    $$.val = tree.Expr(nil)
+  	$$.val = tree.PolicyExpressions{
+  	  Using: $8.expr(),
+  	  WithCheck: $4.expr(),
+  	}
   }
-
-opt_policy_check_expr:
-  WITH CHECK '(' a_expr ')'
+| WITH CHECK '(' a_expr ')'
   {
-    $$.val = $4.expr()
-  }
-| /* EMPTY */
+  	$$.val = tree.PolicyExpressions{
+  	  WithCheck: $4.expr(),
+  	}
+ 	}
+| USING '(' a_expr ')'
   {
-    $$.val = tree.Expr(nil)
-  }
+  	$$.val = tree.PolicyExpressions{
+  	  Using: $3.expr(),
+  	}
+ 	}
+| /* EMPTY */ {
+   $$.val = tree.PolicyExpressions{}
+}
 
 alter_backup_schedule_cmds:
   alter_backup_schedule_cmd
@@ -9320,6 +9335,7 @@ show_completions_stmt:
 show_policies_stmt:
   SHOW POLICIES FOR table_name
   {
+		/* SKIP DOC */
   	$$.val = &tree.ShowPolicies{
         Table: $4.unresolvedObjectName(),
   	}
