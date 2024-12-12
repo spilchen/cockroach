@@ -304,4 +304,23 @@ func init() {
 			}
 		},
 	)
+
+	registerDepRuleForDrop(
+		"ensure index columns when removed are done so in decreasing ordinal order",
+		scgraph.Precedence,
+		"column-1", "column-2",
+		scpb.Status_ABSENT, scpb.Status_ABSENT,
+		func(from, to NodeVars) rel.Clauses {
+			return rel.Clauses{
+				from.Type((*scpb.IndexColumn)(nil)),
+				// Join first on the target and node to avoid generating the cross
+				// product of all index columns elements.
+				from.JoinTargetNode(),
+				to.Type((*scpb.IndexColumn)(nil)),
+				JoinOnIndexID(from, to, "table-id", "index-id"),
+				FilterElements("LargerOrdinalFirst", from, to, func(from, to *scpb.IndexColumn) bool {
+					return to.OrdinalInKind < from.OrdinalInKind
+				}),
+			}
+		})
 }

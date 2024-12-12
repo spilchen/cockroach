@@ -237,4 +237,23 @@ func init() {
 				}),
 			}
 		})
+
+	registerDepRule(
+		"ensure index columns are added in increasing ordinal order",
+		scgraph.Precedence,
+		"column-1", "column-2",
+		func(from, to NodeVars) rel.Clauses {
+			return rel.Clauses{
+				from.Type((*scpb.IndexColumn)(nil)),
+				// Join first on the target and node to avoid generating the cross
+				// product of all index columns elements.
+				from.JoinTargetNode(),
+				to.Type((*scpb.IndexColumn)(nil)),
+				JoinOnIndexID(from, to, "table-id", "index-id"),
+				StatusesToPublicOrTransient(from, scpb.Status_PUBLIC, to, scpb.Status_PUBLIC),
+				FilterElements("SmallerOrdinalFirst", from, to, func(from, to *scpb.IndexColumn) bool {
+					return from.OrdinalInKind < to.OrdinalInKind
+				}),
+			}
+		})
 }

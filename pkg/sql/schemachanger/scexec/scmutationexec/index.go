@@ -352,41 +352,59 @@ func (i *immediateVisitor) AddColumnToIndex(ctx context.Context, op scop.AddColu
 	if err != nil {
 		return err
 	}
-	// Deal with the fact that we allow the columns to be unordered in how
-	// we add them. We could add a rule to make sure we add the columns in
-	// order, but we'd need a way to express successor or something in rel
-	// rules to add those dependencies efficiently. Instead, we just don't
-	// and sort here.
 	indexDesc := index.IndexDesc()
-	n := int(op.Ordinal + 1)
-	insertIntoNames := func(s *[]string) {
-		for delta := n - len(*s); delta > 0; delta-- {
-			*s = append(*s, "")
+
+	// We have a dependency rule that ensurse columns are added to the index in
+	// ascending ordinal order. Each helper function validates this constraint.
+	insertIntoNames := func(s *[]string) error {
+		if len(*s) != int(op.Ordinal) {
+			return errors.AssertionFailedf(
+				"Expected to add index columns in order: column %s is being added at position %d but array %T has %v",
+				column.GetName(), op.Ordinal, *s, *s)
 		}
-		(*s)[n-1] = column.GetName()
+		*s = append(*s, column.GetName())
+		return nil
 	}
-	insertIntoDirections := func(s *[]catenumpb.IndexColumn_Direction) {
-		for delta := n - len(*s); delta > 0; delta-- {
-			*s = append(*s, 0)
+	insertIntoDirections := func(s *[]catenumpb.IndexColumn_Direction) error {
+		if len(*s) != int(op.Ordinal) {
+			return errors.AssertionFailedf(
+				"Expected to add index columns in order: column %s is being added at position %d but array %T has %v",
+				column.GetName(), op.Ordinal, *s, *s)
 		}
-		(*s)[n-1] = op.Direction
+		*s = append(*s, op.Direction)
+		return nil
 	}
-	insertIntoIDs := func(s *[]descpb.ColumnID) {
-		for delta := n - len(*s); delta > 0; delta-- {
-			*s = append(*s, 0)
+	insertIntoIDs := func(s *[]descpb.ColumnID) error {
+		if len(*s) != int(op.Ordinal) {
+			return errors.AssertionFailedf(
+				"Expected to add index columns in order: column %s is being added at position %d but array %T has %v",
+				column.GetName(), op.Ordinal, *s, *s)
 		}
-		(*s)[n-1] = column.GetID()
+		*s = append(*s, column.GetID())
+		return nil
 	}
 	switch op.Kind {
 	case scpb.IndexColumn_KEY:
-		insertIntoIDs(&indexDesc.KeyColumnIDs)
-		insertIntoNames(&indexDesc.KeyColumnNames)
-		insertIntoDirections(&indexDesc.KeyColumnDirections)
+		if err := insertIntoIDs(&indexDesc.KeyColumnIDs); err != nil {
+			return err
+		}
+		if err := insertIntoNames(&indexDesc.KeyColumnNames); err != nil {
+			return err
+		}
+		if err := insertIntoDirections(&indexDesc.KeyColumnDirections); err != nil {
+			return err
+		}
 	case scpb.IndexColumn_KEY_SUFFIX:
-		insertIntoIDs(&indexDesc.KeySuffixColumnIDs)
+		if err := insertIntoIDs(&indexDesc.KeySuffixColumnIDs); err != nil {
+			return err
+		}
 	case scpb.IndexColumn_STORED:
-		insertIntoIDs(&indexDesc.StoreColumnIDs)
-		insertIntoNames(&indexDesc.StoreColumnNames)
+		if err := insertIntoIDs(&indexDesc.StoreColumnIDs); err != nil {
+			return err
+		}
+		if err := insertIntoNames(&indexDesc.StoreColumnNames); err != nil {
+			return err
+		}
 	}
 	// If this is a composite column, note that.
 	if colinfo.CanHaveCompositeKeyEncoding(column.GetType()) &&
@@ -428,11 +446,11 @@ func (i *immediateVisitor) RemoveColumnFromIndex(
 	if err != nil {
 		return err
 	}
-	// Deal with the fact that we allow the columns to be unordered in how
-	// we add them. We could add a rule to make sure we add the columns in
-	// order, but we'd need a way to express successor or something in rel
-	// rules to add those dependencies efficiently. Instead, we just don't
-	// and sort here.
+
+	// We have a dependency rule when removing index columns, that we always
+	// remove the column with the highest ordinal first. This approach ensures
+	// that the slices are reduced in size incrementally without invalidating the
+	// ordinal of subsequent elements.
 	idx := index.IndexDesc()
 	switch op.Kind {
 	case scpb.IndexColumn_KEY:
@@ -440,8 +458,13 @@ func (i *immediateVisitor) RemoveColumnFromIndex(
 			return errors.AssertionFailedf("invalid ordinal %d for key columns %v",
 				op.Ordinal, idx.KeyColumnNames)
 		}
-		idx.KeyColumnIDs[op.Ordinal] = 0
-		idx.KeyColumnNames[op.Ordinal] = ""
+		idx.KeyColumnIDs = append(idx.KeyColumnIDs[:op.Ordinal], idx.KeyColumnIDs[op.Ordinal+1:]...)
+		idx.KeyColumnNames = append(idx.KeyColumnNames[:op.Ordinal], idx.KeyColumnNames[op.Ordinal+1:]...)
+		idx.KeyColumnDirections = append(idx.KeyColumnDirections[:op.Ordinal], idx.KeyColumnDirections[op.Ordinal+1:]...)
+
+		// SPILLY - need to maintain the InvertedColumnKinds
+		// SPILLY - maybe we can just recompute it from scratch whenever removeing a key from an inverted index
+		// SPILLY - the InvertedColumnKinds is always going to be 1 or 0 in length
 		for i := len(idx.KeyColumnIDs) - 1; i >= 0 && idx.KeyColumnIDs[i] == 0; i-- {
 			idx.KeyColumnNames = idx.KeyColumnNames[:i]
 			idx.KeyColumnIDs = idx.KeyColumnIDs[:i]
@@ -455,21 +478,15 @@ func (i *immediateVisitor) RemoveColumnFromIndex(
 			return errors.AssertionFailedf("invalid ordinal %d for key suffix columns %v",
 				op.Ordinal, idx.KeySuffixColumnIDs)
 		}
-		idx.KeySuffixColumnIDs[op.Ordinal] = 0
-		for i := len(idx.KeySuffixColumnIDs) - 1; i >= 0 && idx.KeySuffixColumnIDs[i] == 0; i-- {
-			idx.KeySuffixColumnIDs = idx.KeySuffixColumnIDs[:i]
-		}
+		idx.KeySuffixColumnIDs = append(idx.KeySuffixColumnIDs[:op.Ordinal], idx.KeySuffixColumnIDs[op.Ordinal+1:]...)
 	case scpb.IndexColumn_STORED:
 		if int(op.Ordinal) >= len(idx.StoreColumnNames) {
 			return errors.AssertionFailedf("invalid ordinal %d for stored columns %v",
 				op.Ordinal, idx.StoreColumnNames)
 		}
-		idx.StoreColumnIDs[op.Ordinal] = 0
-		idx.StoreColumnNames[op.Ordinal] = ""
-		for i := len(idx.StoreColumnIDs) - 1; i >= 0 && idx.StoreColumnIDs[i] == 0; i-- {
-			idx.StoreColumnNames = idx.StoreColumnNames[:i]
-			idx.StoreColumnIDs = idx.StoreColumnIDs[:i]
-		}
+		// Remove the entry at the specified ordinal.
+		idx.StoreColumnIDs = append(idx.StoreColumnIDs[:op.Ordinal], idx.StoreColumnIDs[op.Ordinal+1:]...)
+		idx.StoreColumnNames = append(idx.StoreColumnNames[:op.Ordinal], idx.StoreColumnNames[op.Ordinal+1:]...)
 	}
 	// If this is a composite column, remove it from the list.
 	if colinfo.CanHaveCompositeKeyEncoding(column.GetType()) &&
