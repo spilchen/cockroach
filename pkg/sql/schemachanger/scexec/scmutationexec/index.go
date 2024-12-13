@@ -354,9 +354,20 @@ func (i *immediateVisitor) AddColumnToIndex(ctx context.Context, op scop.AddColu
 	}
 	indexDesc := index.IndexDesc()
 
-	// We have a dependency rule that ensurse columns are added to the index in
+	// We have a dependency rule that ensure columns are added to the index in
 	// ascending ordinal order. Each helper function validates this constraint.
+	// There is one exception to this rule. Rollback of a removal will get in here...
+	// SPILLY - update comment about exception
+	ordIdx := int(op.Ordinal)
 	insertIntoNames := func(s *[]string) error {
+		// Early out if the ordinal is already in the array and matches the exact
+		// value.
+		// SPILLY - disable to fire the assert, I need to understand this more
+		//if len(*s) > ordIdx && (*s)[ordIdx] == column.GetName() {
+		//	return nil
+		//}
+		// Otherwise, grow the array. If columns are being added in order, the array
+		// should grow by one.
 		if len(*s) != int(op.Ordinal) {
 			return errors.AssertionFailedf(
 				"Expected to add index columns in order: column %s is being added at position %d but array %T has %v",
@@ -366,19 +377,35 @@ func (i *immediateVisitor) AddColumnToIndex(ctx context.Context, op scop.AddColu
 		return nil
 	}
 	insertIntoDirections := func(s *[]catenumpb.IndexColumn_Direction) error {
-		if len(*s) != int(op.Ordinal) {
+		// Early out if the ordinal is already in the array and matches the exact
+		// value.
+		// SPILLY
+		//if len(*s) > ordIdx && (*s)[ordIdx] == op.Direction {
+		//	return nil
+		//}
+		// Otherwise, grow the array. If columns are being added in order, the array
+		// should grow by one.
+		if len(*s) != ordIdx {
 			return errors.AssertionFailedf(
-				"Expected to add index columns in order: column %s is being added at position %d but array %T has %v",
-				column.GetName(), op.Ordinal, *s, *s)
+				"Expected to add index columns in order: column %s with direction %v is being added at position %d but array %T has %v",
+				column.GetName(), op.Direction, op.Ordinal, *s, *s)
 		}
 		*s = append(*s, op.Direction)
 		return nil
 	}
 	insertIntoIDs := func(s *[]descpb.ColumnID) error {
+		// Early out if the ordinal is already in the array and matches the exact
+		// value.
+		// SPILLY - not needed
+		//if len(*s) > ordIdx && (*s)[ordIdx] == column.GetID() {
+		//	return nil
+		//}
+		// Otherwise, grow the array. If columns are being added in order, the array
+		// should grow by one.
 		if len(*s) != int(op.Ordinal) {
 			return errors.AssertionFailedf(
-				"Expected to add index columns in order: column %s is being added at position %d but array %T has %v",
-				column.GetName(), op.Ordinal, *s, *s)
+				"Expected to add index columns in order: column %s with ID %d is being added at position %d but array %T has %v",
+				column.GetName(), column.GetID(), op.Ordinal, *s, *s)
 		}
 		*s = append(*s, column.GetID())
 		return nil
@@ -439,7 +466,9 @@ func (i *immediateVisitor) RemoveColumnFromIndex(
 		return err
 	}
 	index, err := catalog.MustFindIndexByID(tbl, op.IndexID)
-	if err != nil || index.Dropped() {
+	// SPILLY - I think supporting index dropped will allow us to simplify the code
+	//if err != nil || index.Dropped() { // SPILLY
+	if err != nil {
 		return err
 	}
 	column, err := catalog.MustFindColumnByID(tbl, op.ColumnID)
@@ -462,16 +491,10 @@ func (i *immediateVisitor) RemoveColumnFromIndex(
 		idx.KeyColumnNames = append(idx.KeyColumnNames[:op.Ordinal], idx.KeyColumnNames[op.Ordinal+1:]...)
 		idx.KeyColumnDirections = append(idx.KeyColumnDirections[:op.Ordinal], idx.KeyColumnDirections[op.Ordinal+1:]...)
 
-		// SPILLY - need to maintain the InvertedColumnKinds
-		// SPILLY - maybe we can just recompute it from scratch whenever removeing a key from an inverted index
-		// SPILLY - the InvertedColumnKinds is always going to be 1 or 0 in length
-		for i := len(idx.KeyColumnIDs) - 1; i >= 0 && idx.KeyColumnIDs[i] == 0; i-- {
-			idx.KeyColumnNames = idx.KeyColumnNames[:i]
-			idx.KeyColumnIDs = idx.KeyColumnIDs[:i]
-			idx.KeyColumnDirections = idx.KeyColumnDirections[:i]
-			if idx.Type == descpb.IndexDescriptor_INVERTED && i == len(idx.KeyColumnIDs)-1 {
-				idx.InvertedColumnKinds = nil
-			}
+		// Clear out the InvertedColumnKinds if we remove the last key from an
+		// inverted index. InvertedColumnKinds is always 0 or 1 entries long.
+		if idx.Type == descpb.IndexDescriptor_INVERTED && len(idx.KeyColumnIDs) == 0 {
+			idx.InvertedColumnKinds = nil
 		}
 	case scpb.IndexColumn_KEY_SUFFIX:
 		if int(op.Ordinal) >= len(idx.KeySuffixColumnIDs) {
@@ -480,6 +503,7 @@ func (i *immediateVisitor) RemoveColumnFromIndex(
 		}
 		idx.KeySuffixColumnIDs = append(idx.KeySuffixColumnIDs[:op.Ordinal], idx.KeySuffixColumnIDs[op.Ordinal+1:]...)
 	case scpb.IndexColumn_STORED:
+		// SPILLY - I suspect we can fail this assert if we undo an add that really didn't get added?
 		if int(op.Ordinal) >= len(idx.StoreColumnNames) {
 			return errors.AssertionFailedf("invalid ordinal %d for stored columns %v",
 				op.Ordinal, idx.StoreColumnNames)
