@@ -6,6 +6,8 @@
 package scbuildstmt
 
 import (
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
@@ -13,19 +15,28 @@ import (
 
 // CreatePolicy implements CREATE POLICY.
 func CreatePolicy(b BuildCtx, n *tree.CreatePolicy) {
-	// SPILLY - use var that Bergin added
+	failIfRLSIsNotEnabled(b)
 	b.IncrementSchemaChangeCreateCounter("policy")
 
-	tableElts := b.ResolveTable(n.TableName, ResolveParams{
+	tableElems := b.ResolveTable(n.TableName, ResolveParams{
 		RequiredPrivilege: privilege.CREATE,
 	})
-	panicIfSchemaChangeIsDisallowed(tableElts, n)
-	// SPILLY - don't use deprecated
-	_, _, tbl := scpb.FindTable(tableElts)
+	panicIfSchemaChangeIsDisallowed(tableElems, n)
+	tbl := tableElems.FilterTable().MustGetOneElement()
+
+	// Resolve the policy name to make sure one doesn't already exist
+	policyElems := b.ResolvePolicy(tbl.TableID, n.PolicyName, ResolveParams{
+		IsExistenceOptional: true,
+		RequiredPrivilege:   privilege.CREATE,
+	})
+	policyElems.FilterPolicyName().ForEachTarget(func(target scpb.TargetStatus, e *scpb.PolicyName) {
+		if target == scpb.ToPublic {
+			panic(pgerror.Newf(pgcode.DuplicateObject, "policy with name %q already exists on table %q",
+				n.PolicyName, n.TableName.String()))
+		}
+	})
+
 	policyID := b.NextTablePolicyID(tbl.TableID)
-
-	// SPILLY - when do I check if the policy name is already used?
-
 	b.Add(&scpb.Policy{
 		TableID:  tbl.TableID,
 		PolicyID: policyID,

@@ -1482,9 +1482,9 @@ func (b *builderState) ResolvePolicy(
 ) scbuildstmt.ElementResultSet {
 	b.ensureDescriptor(tableID)
 	tbl := b.descCache[tableID].desc.(catalog.TableDescriptor)
-	elts := b.QueryByID(tbl.GetID())
+	elems := b.QueryByID(tbl.GetID())
 	var policyID catid.PolicyID
-	elts.ForEach(func(_ scpb.Status, _ scpb.TargetStatus, e scpb.Element) {
+	elems.ForEach(func(_ scpb.Status, _ scpb.TargetStatus, e scpb.Element) {
 		if t, ok := e.(*scpb.PolicyName); ok && t.Name == string(policyName) {
 			policyID = t.PolicyID
 		}
@@ -1495,8 +1495,7 @@ func (b *builderState) ResolvePolicy(
 		}
 		panic(sqlerrors.NewUndefinedPolicyError(string(policyName), tbl.GetName()))
 	}
-	// SPILLY - I feel like we can use the new finders for this.
-	return elts.Filter(func(_ scpb.Status, _ scpb.TargetStatus, e scpb.Element) bool {
+	return elems.Filter(func(_ scpb.Status, _ scpb.TargetStatus, e scpb.Element) bool {
 		id, _ := screl.Schema.GetAttribute(screl.PolicyID, e)
 		return id != nil && id.(catid.PolicyID) == policyID
 	})
