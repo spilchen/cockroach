@@ -6,11 +6,33 @@
 package scbuildstmt
 
 import (
+	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
+	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
-	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
 )
 
 // CreatePolicy implements CREATE POLICY.
 func CreatePolicy(b BuildCtx, n *tree.CreatePolicy) {
-	panic(unimplemented.NewWithIssue(136696, "CREATE POLICY is not yet implemented"))
+	// SPILLY - use var that Bergin added
+	b.IncrementSchemaChangeCreateCounter("policy")
+
+	tableElts := b.ResolveTable(n.TableName, ResolveParams{
+		RequiredPrivilege: privilege.CREATE,
+	})
+	panicIfSchemaChangeIsDisallowed(tableElts, n)
+	// SPILLY - don't use deprecated
+	_, _, tbl := scpb.FindTable(tableElts)
+	policyID := b.NextTablePolicyID(tbl.TableID)
+
+	// SPILLY - when do I check if the policy name is already used?
+
+	b.Add(&scpb.Policy{
+		TableID:  tbl.TableID,
+		PolicyID: policyID,
+	})
+	b.Add(&scpb.PolicyName{
+		TableID:  tbl.TableID,
+		PolicyID: policyID,
+		Name:     string(n.PolicyName),
+	})
 }
