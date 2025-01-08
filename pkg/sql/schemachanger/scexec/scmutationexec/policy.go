@@ -37,8 +37,6 @@ func (i *immediateVisitor) SetPolicyName(ctx context.Context, op scop.SetPolicyN
 }
 
 func (i *immediateVisitor) RemovePolicy(ctx context.Context, op scop.RemovePolicy) error {
-	// NOTE: we must still remove the policy even if the table is being dropped,
-	// in order to ensure that the back-references are cleaned up later.
 	tbl, err := i.checkOutTable(ctx, op.Policy.TableID)
 	if err != nil {
 		return err

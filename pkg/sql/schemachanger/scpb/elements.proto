@@ -363,8 +363,8 @@ message SchemaChild {
 
 // Policy represents a row-level security policy for a table.
 // Note: This struct only stores the immutable parts of a policy. Any mutable
-// components should be stored in separate elements, as they can be altered
-// after the policy is created.
+// components should be stored in separate elements so that an ALTER can update
+// the policy by add/drop new elements.
 message Policy {
   uint32 table_id = 1 [(gogoproto.customname) = "TableID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.DescID"];
   uint32 policy_id = 2 [(gogoproto.customname) = "PolicyID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.PolicyID"];
