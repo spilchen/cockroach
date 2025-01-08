@@ -532,7 +532,7 @@ func (b *builderState) NextTablePolicyID(tableID catid.DescID) (ret catid.Policy
 			ret = 1
 		}
 	}
-	// Consult all present element in case they have a larger TriggerID field.
+	// Consult all present element in case they have a larger PolicyID field.
 	b.QueryByID(tableID).ForEach(func(
 		_ scpb.Status, _ scpb.TargetStatus, e scpb.Element,
 	) {

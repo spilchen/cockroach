@@ -13,16 +13,14 @@ import (
 
 // DropPolicy implements DROP POLICY.
 func DropPolicy(b BuildCtx, n *tree.DropPolicy) {
-	noticeSender := b.EvalCtx().ClientNoticeSender
 	failIfRLSIsNotEnabled(b)
+	noticeSender := b.EvalCtx().ClientNoticeSender
 	tableElems := b.ResolveTable(n.TableName, ResolveParams{
 		IsExistenceOptional: n.IfExists,
 		RequireOwnership:    true,
 	})
-	// SPILLY - add tests to create a policy with an existing name
-	// SPILLY - add tests for If not exist when trigger doesn't exist and when table doesn't exist. Confirm notice.
 	tbl := tableElems.FilterTable().MustGetZeroOrOneElement()
-	if tbl == nil {
+	if tbl == nil { // this can happen IF EXISTS was used with the drop
 		noticeSender.BufferClientNotice(b,
 			pgnotice.Newf("relation %q does not exist, skipping", n.TableName.String()))
 		return
@@ -33,11 +31,11 @@ func DropPolicy(b BuildCtx, n *tree.DropPolicy) {
 		IsExistenceOptional: n.IfExists,
 	})
 	policy := policyElems.FilterPolicy().MustGetZeroOrOneElement()
-	if policy == nil {
+	if policy == nil { // this can happen IF EXISTS was used with the drop
 		noticeSender.BufferClientNotice(b,
 			pgnotice.Newf("policy %q for relation %q does not exist, skipping",
 				n.PolicyName, n.TableName.String()))
-		return // this can happen IF EXISTS was used with the drop
+		return
 	}
 	policyElems.ForEach(func(_ scpb.Status, _ scpb.TargetStatus, e scpb.Element) {
 		switch e.(type) {
