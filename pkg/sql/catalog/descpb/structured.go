@@ -75,6 +75,9 @@ type TriggerID = catid.TriggerID
 // PolicyID is a custom type for TableDescriptor policy IDs.
 type PolicyID = catid.PolicyID
 
+// RoleID is a custom type for TableDescriptor role IDs.
+type RoleID = catid.RoleID
+
 // DescriptorVersion is a custom type for TableDescriptor Versions.
 type DescriptorVersion uint64
 

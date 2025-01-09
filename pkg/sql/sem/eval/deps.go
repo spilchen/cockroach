@@ -288,6 +288,10 @@ type Planner interface {
 	// the `system.users` table
 	UserHasAdminRole(ctx context.Context, user username.SQLUsername) (bool, error)
 
+	// RoleExists checks if the role with the given name exists.
+	// If the role is found, it returns its role ID as a side effect.
+	RoleExists(ctx context.Context, user username.SQLUsername) (bool, descpb.RoleID, error)
+
 	// MemberOfWithAdminOption is used to collect a list of roles (direct and
 	// indirect) that the member is part of. See the comment on the planner
 	// implementation in authorization.go

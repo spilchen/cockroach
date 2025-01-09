@@ -111,6 +111,8 @@ const (
 	// PolicyID is an attribute for row-level security policies to uniquely
 	// identify a policy within a table.
 	PolicyID
+	// RoleID represents the unique identifier of a role or user.
+	RoleID
 
 	// AttrMax is the largest possible Attr value.
 	// Note: add any new enum values before TargetStatus, leave these at the end.
@@ -372,6 +374,11 @@ var elementSchemaOptions = []rel.SchemaOption{
 		rel.EntityAttr(DescID, "TableID"),
 		rel.EntityAttr(PolicyID, "PolicyID"),
 		rel.EntityAttr(Name, "Name"),
+	),
+	rel.EntityMapping(t((*scpb.PolicyRole)(nil)),
+		rel.EntityAttr(DescID, "TableID"),
+		rel.EntityAttr(PolicyID, "PolicyID"),
+		rel.EntityAttr(RoleID, "RoleID"),
 	),
 	// Common elements.
 	rel.EntityMapping(t((*scpb.Namespace)(nil)),

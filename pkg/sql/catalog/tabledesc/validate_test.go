@@ -3111,12 +3111,14 @@ func TestValidateTableDesc(t *testing.T) {
 						Name:    "pol",
 						Type:    catpb.PolicyType_PERMISSIVE,
 						Command: catpb.PolicyCommand_ALL,
+						RoleIDs: []descpb.RoleID{4},
 					},
 					{
 						ID:      2,
 						Name:    "pol",
 						Type:    catpb.PolicyType_RESTRICTIVE,
 						Command: catpb.PolicyCommand_INSERT,
+						RoleIDs: []descpb.RoleID{4},
 					},
 				}
 			}),
@@ -3130,12 +3132,14 @@ func TestValidateTableDesc(t *testing.T) {
 						Name:    "pol_old",
 						Type:    catpb.PolicyType_RESTRICTIVE,
 						Command: catpb.PolicyCommand_UPDATE,
+						RoleIDs: []descpb.RoleID{4},
 					},
 					{
 						ID:      10,
 						Name:    "pol_new",
 						Type:    catpb.PolicyType_PERMISSIVE,
 						Command: catpb.PolicyCommand_DELETE,
+						RoleIDs: []descpb.RoleID{4},
 					},
 				}
 			}),
@@ -3175,6 +3179,20 @@ func TestValidateTableDesc(t *testing.T) {
 						Name:    "pol",
 						Type:    catpb.PolicyType_PERMISSIVE,
 						Command: 0,
+					},
+				}
+			}),
+		},
+		{err: `policy "pol" has no roles defined`,
+			desc: ModifyDescriptor(func(desc *descpb.TableDescriptor) {
+				desc.NextPolicyID = 2
+				desc.Policies = []descpb.PolicyDescriptor{
+					{
+						ID:      1,
+						Name:    "pol",
+						Type:    catpb.PolicyType_PERMISSIVE,
+						Command: catpb.PolicyCommand_DELETE,
+						RoleIDs: nil,
 					},
 				}
 			}),

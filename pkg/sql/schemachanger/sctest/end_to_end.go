@@ -35,6 +35,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scplan"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scrun"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondatapb"
@@ -125,24 +126,35 @@ func EndToEndSideEffects(t *testing.T, relTestCaseDir string, factory TestServer
 					ctx, "test" /* opName */, kv.NewTxn(ctx, s.DB(), s.NodeID()), username.RootUserName(), &execCfg, "defaultdb",
 				)
 				defer refFactoryCleanup()
+				sd := sctestdeps.ReadSessionDataFromDB(t, tdb, func(
+					sd *sessiondata.SessionData, localData sessiondatapb.LocalOnlySessionData,
+				) {
+					// For setting up a builder inside tests we will ensure that the new schema
+					// changer will allow non-fully implemented operations.
+					sd.NewSchemaChangerMode = sessiondatapb.UseNewSchemaChangerUnsafeAlways
+					sd.TempTablesEnabled = true
+					sd.ApplicationName = ""
+					sd.EnableUniqueWithoutIndexConstraints = true // this allows `ADD UNIQUE WITHOUT INDEX` in the testing suite.
+					sd.RowLevelSecurityEnabled = true
+					sd.SerialNormalizationMode = localData.SerialNormalizationMode
+				})
+				ip, cleanup := sql.NewInternalPlanner(
+					"test",
+					kv.NewTxn(ctx, s.DB(), s.NodeID()),
+					username.NodeUserName(),
+					&sql.MemoryMetrics{},
+					&execCfg,
+					&sd,
+				)
+				defer cleanup()
 
 				deps = sctestdeps.NewTestDependencies(
 					sctestdeps.WithDescriptors(sctestdeps.ReadDescriptorsFromDB(ctx, t, tdb).Catalog),
 					sctestdeps.WithSystemDatabaseDescriptor(),
 					sctestdeps.WithNamespace(sctestdeps.ReadNamespaceFromDB(t, tdb).Catalog),
 					sctestdeps.WithCurrentDatabase(sctestdeps.ReadCurrentDatabaseFromDB(t, tdb)),
-					sctestdeps.WithSessionData(sctestdeps.ReadSessionDataFromDB(t, tdb, func(
-						sd *sessiondata.SessionData, localData sessiondatapb.LocalOnlySessionData,
-					) {
-						// For setting up a builder inside tests we will ensure that the new schema
-						// changer will allow non-fully implemented operations.
-						sd.NewSchemaChangerMode = sessiondatapb.UseNewSchemaChangerUnsafeAlways
-						sd.TempTablesEnabled = true
-						sd.ApplicationName = ""
-						sd.EnableUniqueWithoutIndexConstraints = true // this allows `ADD UNIQUE WITHOUT INDEX` in the testing suite.
-						sd.RowLevelSecurityEnabled = true
-						sd.SerialNormalizationMode = localData.SerialNormalizationMode
-					})),
+					sctestdeps.WithSessionData(sd),
+					sctestdeps.WithPlanner(ip.(eval.Planner)),
 					sctestdeps.WithTestingKnobs(&scexec.TestingKnobs{
 						BeforeStage: func(p scplan.Plan, stageIdx int) error {
 							deps.LogSideEffectf("## %s", p.Stages[stageIdx].String())

@@ -132,8 +132,9 @@ var roleNameToID = map[SQLUsername]catid.RoleID{
 }
 
 // GetDefaultRoleNameToID returns a role id for default roles.
-func GetDefaultRoleNameToID(username SQLUsername) catid.RoleID {
-	return roleNameToID[username]
+func (s SQLUsername) GetDefaultRoleNameToID() (catid.RoleID, bool) {
+	id, found := roleNameToID[s]
+	return id, found
 }
 
 // NoneRole is a special role.

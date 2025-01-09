@@ -39,7 +39,8 @@ func _() {
 	_ = x[PartitionName-24]
 	_ = x[Usage-25]
 	_ = x[PolicyID-26]
-	_ = x[AttrMax-26]
+	_ = x[RoleID-27]
+	_ = x[AttrMax-27]
 }
 
 func (i Attr) String() string {
@@ -96,6 +97,8 @@ func (i Attr) String() string {
 		return "Usage"
 	case PolicyID:
 		return "PolicyID"
+	case RoleID:
+		return "RoleID"
 	default:
 		return "Attr(" + strconv.FormatInt(int64(i), 10) + ")"
 	}

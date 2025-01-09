@@ -712,6 +712,9 @@ message PolicyDescriptor {
 
   // Command specifies the SQL commands to which the policy applies.
   optional cockroach.sql.catalog.catpb.PolicyCommand command = 4 [(gogoproto.nullable) = false];
+
+  // RoleIDs is a list of roles that this policy applies to.
+  repeated uint32 role_ids = 6 [(gogoproto.customname) = 'RoleIDs', (gogoproto.casttype) = "RoleID"];
 }
 
 // A DescriptorMutation represents a column or an index that

@@ -96,7 +96,7 @@ func CreateUserDefinedSchemaDescriptor(
 
 	owner := user
 	if !n.AuthRole.Undefined() {
-		exists, err := RoleExists(ctx, txn, authRole)
+		exists, _, err := RoleExists(ctx, txn, authRole)
 		if err != nil {
 			return nil, nil, err
 		}

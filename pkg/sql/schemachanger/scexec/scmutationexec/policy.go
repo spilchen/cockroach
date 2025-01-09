@@ -57,3 +57,38 @@ func (i *immediateVisitor) RemovePolicy(ctx context.Context, op scop.RemovePolic
 	}
 	return nil
 }
+
+func (i *immediateVisitor) AddPolicyRole(ctx context.Context, op scop.AddPolicyRole) error {
+	policy, err := i.checkOutPolicy(ctx, op.Role.TableID, op.Role.PolicyID)
+	if err != nil {
+		return err
+	}
+
+	// Verify that the role doesn't already exist in the policy.
+	for _, r := range policy.RoleIDs {
+		if r == op.Role.RoleID {
+			return errors.AssertionFailedf(
+				"role with ID %q already exists in policy %d on table %d",
+				op.Role.RoleID, op.Role.PolicyID, op.Role.TableID)
+		}
+	}
+	policy.RoleIDs = append(policy.RoleIDs, op.Role.RoleID)
+	return nil
+}
+
+func (i *immediateVisitor) RemovePolicyRole(ctx context.Context, op scop.RemovePolicyRole) error {
+	policy, err := i.checkOutPolicy(ctx, op.Role.TableID, op.Role.PolicyID)
+	if err != nil {
+		return err
+	}
+
+	for inx, r := range policy.RoleIDs {
+		if r == op.Role.RoleID {
+			policy.RoleIDs = append(policy.RoleIDs[:inx], policy.RoleIDs[inx+1:]...)
+			return nil
+		}
+	}
+	return errors.AssertionFailedf(
+		"role with ID %q does not exist in policy %d on table %d",
+		op.Role.RoleID, op.Role.PolicyID, op.Role.TableID)
+}

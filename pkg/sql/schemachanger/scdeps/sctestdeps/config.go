@@ -166,6 +166,12 @@ func WithReferenceProviderFactory(f scbuild.ReferenceProviderFactory) Option {
 	})
 }
 
+func WithPlanner(p eval.Planner) Option {
+	return optionFunc(func(state *TestState) {
+		state.EvalCtx().Planner = p
+	})
+}
+
 var (
 	// defaultOverriddenCreatedAt is used to populate the CreatedAt timestamp for
 	// all descriptors injected into the catalog. We inject this to make the

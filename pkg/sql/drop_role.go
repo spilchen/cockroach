@@ -14,6 +14,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/decodeusername"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
@@ -100,6 +101,7 @@ func (n *DropRoleNode) startExec(params runParams) error {
 	// object in the database.
 
 	userNames := make(map[username.SQLUsername][]objectAndType)
+	droppedIDsToNames := make(map[descpb.RoleID]username.SQLUsername, len(n.roleNames))
 	for i, name := range n.roleNames {
 		// userNames maps users to the objects they own
 		userNames[n.roleNames[i]] = make([]objectAndType, 0)
@@ -107,19 +109,22 @@ func (n *DropRoleNode) startExec(params runParams) error {
 			return pgerror.Newf(pgcode.ReservedName, "role name %q is reserved", name.Normalized())
 		}
 
+		roleExists, roleID, err := params.p.RoleExists(params.ctx, name)
+		if err != nil {
+			return err
+		}
+
+		if roleExists {
+			droppedIDsToNames[roleID] = name
+		}
+
 		// Non-admin users cannot drop admins.
+		// If `IF EXISTS` was specified, then a non-existing role should be
+		// skipped without causing any error.
 		if !hasAdmin {
-			if n.ifExists {
-				// If `IF EXISTS` was specified, then a non-existing role should be
-				// skipped without causing any error.
-				roleExists, err := RoleExists(params.ctx, params.p.InternalSQLTxn(), name)
-				if err != nil {
-					return err
-				}
-				if !roleExists {
-					// If the role does not exist, we can skip the check for targetIsAdmin.
-					continue
-				}
+			if n.ifExists && !roleExists {
+				// If the role does not exist, we can skip the check for targetIsAdmin.
+				continue
 			}
 
 			targetIsAdmin, err := params.p.UserHasAdminRole(params.ctx, name)
@@ -130,7 +135,6 @@ func (n *DropRoleNode) startExec(params runParams) error {
 				return pgerror.New(pgcode.InsufficientPrivilege, "must be superuser to drop superusers")
 			}
 		}
-
 	}
 
 	privilegeObjectFormatter := tree.NewFmtCtx(tree.FmtSimple)
@@ -201,6 +205,19 @@ func (n *DropRoleNode) startExec(params runParams) error {
 				tn := tree.MakeTableNameWithSchema(tree.Name(parentName), tree.Name(schemaName), tree.Name(tableDescriptor.GetName()))
 				privilegeObjectFormatter.FormatNode(&tn)
 				break
+			}
+		}
+		// Check that any of the roles we are dropping aren't referenced in any of
+		// the row-level security policies defined on this table.
+		for _, p := range tableDescriptor.GetPolicies() {
+			for _, roleID := range p.RoleIDs {
+				if name, ok := droppedIDsToNames[roleID]; ok {
+					return errors.WithDetailf(
+						pgerror.Newf(pgcode.DependentObjectsStillExist,
+							"role %q cannot be dropped because some objects depend on it",
+							name),
+						"target of policy %q on table %q", p.Name, tableDescriptor.GetName())
+				}
 			}
 		}
 	}

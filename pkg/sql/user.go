@@ -514,21 +514,44 @@ func (p *planner) CheckRoleExists(ctx context.Context, role username.SQLUsername
 
 // RoleExists returns true if the role exists. This function does not use
 // any cache.
-func RoleExists(ctx context.Context, txn isql.Txn, role username.SQLUsername) (bool, error) {
+func RoleExists(
+	ctx context.Context, txn isql.Txn, role username.SQLUsername,
+) (bool, descpb.RoleID, error) {
 	if role.IsNodeUser() || role.IsRootUser() || role.IsAdminRole() || role.IsPublicRole() {
-		return true, nil
+		id, found := role.GetDefaultRoleNameToID()
+		if !found {
+			return false, 0, errors.AssertionFailedf("could not determine default role ID: %v", role)
+		}
+		return true, id, nil
 	}
-	query := `SELECT username FROM system.users WHERE username = $1`
+	query := `SELECT user_id FROM system.users WHERE username = $1`
 	row, err := txn.QueryRowEx(
 		ctx, "read-users", txn.KV(),
 		sessiondata.NodeUserSessionDataOverride,
 		query, role,
 	)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 
-	return row != nil, nil
+	if row == nil {
+		return false, 0, nil
+	}
+	userID, ok := row[0].(*tree.DOid)
+	if !ok {
+		return false, 0, errors.AssertionFailedf("failed to read user_id as DInt (was %T)", row[0])
+	}
+	return true, descpb.RoleID(userID.Oid), nil
+}
+
+// RoleExists checks if the role with the given name exists. If the role is
+// found, it returns its role ID as a side effect.
+//
+// Note: this function does not use any cache.
+func (p *planner) RoleExists(
+	ctx context.Context, role username.SQLUsername,
+) (bool, descpb.RoleID, error) {
+	return RoleExists(ctx, p.InternalSQLTxn(), role)
 }
 
 // BumpRoleMembershipTableVersion increases the table version for the

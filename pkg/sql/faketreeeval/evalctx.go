@@ -234,6 +234,11 @@ func (ep *DummyEvalPlanner) UserHasAdminRole(
 	return false, errors.WithStack(errEvalPlanner)
 }
 
+// RoleExists is part of the Planner interface.
+func (ep *DummyEvalPlanner) RoleExists(ctx context.Context, user username.SQLUsername) (bool, descpb.RoleID, error) {
+	return false, 0, errors.WithStack(errEvalPlanner)
+}
+
 // MemberOfWithAdminOption is part of the Planner interface.
 func (ep *DummyEvalPlanner) MemberOfWithAdminOption(
 	ctx context.Context, member username.SQLUsername,

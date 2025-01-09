@@ -584,7 +584,7 @@ func EnsureUserOnlyBelongsToRoles(
 			grantStmt.WriteString("GRANT ")
 			addComma := false
 			for _, role := range rolesToGrant {
-				if roleExists, _ := RoleExists(ctx, txn, role); roleExists {
+				if roleExists, _, _ := RoleExists(ctx, txn, role); roleExists {
 					if addComma {
 						grantStmt.WriteString(", ")
 					}
