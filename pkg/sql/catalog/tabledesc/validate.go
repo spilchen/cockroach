@@ -2089,6 +2089,18 @@ func (desc *wrapper) validatePolicies() error {
 			return errors.AssertionFailedf(
 				"policy %q has an unknown policy command %v", p.Name, p.Command)
 		}
+		if len(p.RoleNames) == 0 {
+			return errors.AssertionFailedf(
+				"policy %q has no roles defined", p.Name)
+		}
+		rolesInUse := make(map[string]struct{}, len(p.RoleNames))
+		for _, roleName := range p.RoleNames {
+			if _, found := rolesInUse[roleName]; found {
+				return errors.AssertionFailedf(
+					"policy %q contains duplicate role name %q", p.Name, roleName)
+			}
+			rolesInUse[roleName] = struct{}{}
+		}
 	}
 	return nil
 }
