@@ -7,13 +7,20 @@ package scbuildstmt
 
 import (
 	"github.com/cockroachdb/cockroach/pkg/security/username"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/schemaexpr"
+	"github.com/cockroachdb/cockroach/pkg/sql/parser"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/volatility"
+	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/errors"
 )
 
@@ -53,6 +60,7 @@ func CreatePolicy(b BuildCtx, n *tree.CreatePolicy) {
 		Name:     string(n.PolicyName),
 	})
 	addRoleElements(b, n, tbl.TableID, policyID)
+	addPolicyExpressions(b, n, tbl.TableID, policyID)
 }
 
 // convertPolicyType will convert from a tree.PolicyType to a catpb.PolicyType
@@ -126,4 +134,75 @@ func addRoleElement(
 		PolicyID: policyID,
 		RoleName: username.Normalized(),
 	})
+}
+
+// addPolicyExpressions will add elements for the WITH CHECK and USING expressions.
+func addPolicyExpressions(
+	b BuildCtx, n *tree.CreatePolicy, tableID descpb.ID, policyID descpb.PolicyID,
+) {
+	tn := n.TableName.ToTableName()
+
+	// We maintain the forward references for both expressions in a single
+	// PolicyDeps elements. These vars are used to manage that.
+	var usesTypeIDs catalog.DescriptorIDSet
+
+	if n.Exprs.Using != nil {
+		expr := validateAndResolveTypesInExpr(b, &tn, tableID, n.Exprs.Using, tree.PolicyUsingExpr)
+		b.Add(&scpb.PolicyUsingExpr{
+			TableID:    tableID,
+			PolicyID:   policyID,
+			Expression: *expr,
+		})
+		usesTypeIDs = catalog.MakeDescriptorIDSet(expr.UsesTypeIDs...)
+	}
+	if n.Exprs.WithCheck != nil {
+		expr := validateAndResolveTypesInExpr(b, &tn, tableID, n.Exprs.WithCheck, tree.PolicyWithCheckExpr)
+		b.Add(&scpb.PolicyWithCheckExpr{
+			TableID:    tableID,
+			PolicyID:   policyID,
+			Expression: *expr,
+		})
+		usesTypeIDs = usesTypeIDs.Union(catalog.MakeDescriptorIDSet(expr.UsesTypeIDs...))
+	}
+
+	// If we had at least one expression then we need to add the policy deps.
+	if n.Exprs.Using != nil || n.Exprs.WithCheck != nil {
+		b.Add(&scpb.PolicyDeps{
+			TableID:  tableID,
+			PolicyID: policyID,
+			SeqNum:   1,
+			// SPILLY: I think we can have attributes for all of the things and remove the sequence number
+			UsesTypeIDs: usesTypeIDs.Ordered(),
+		})
+	}
+}
+
+// validateAndResolveTypesInExpr is a helper that will properly validate the
+// expression and return a suitable scpb.Expression. This should be used in
+// place of bare calls to WrapExpression since it properly handles setting
+// types.
+func validateAndResolveTypesInExpr(
+	b BuildCtx,
+	tn *tree.TableName,
+	tableID descpb.ID,
+	inExpr tree.Expr,
+	context tree.SchemaExprContext,
+) *scpb.Expression {
+	validExpr, _, _, err := schemaexpr.DequalifyAndValidateExprImpl(b, inExpr, types.Bool,
+		context, b.SemaCtx(), volatility.Volatile, tn, b.ClusterSettings().Version.ActiveVersion(b),
+		func() colinfo.ResultColumns {
+			return getNonDropResultColumns(b, tableID)
+		},
+		func(columnName tree.Name) (exists bool, accessible bool, id catid.ColumnID, typ *types.T) {
+			return columnLookupFn(b, tableID, columnName)
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+	typedExpr, err := parser.ParseExpr(validExpr)
+	if err != nil {
+		panic(err)
+	}
+	return b.WrapExpression(tableID, typedExpr)
 }

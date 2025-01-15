@@ -620,6 +620,33 @@ type RemovePolicyRole struct {
 	Role scpb.PolicyRole
 }
 
+// SPILLY - comment
+type AddPolicyExpression struct {
+	immediateMutationOp
+	TableID  descpb.ID
+	PolicyID descpb.PolicyID
+	Expr     catpb.Expression
+	// SPILLY - use an enum?? If not exist what the value means
+	IsWithCheckExpression bool
+}
+
+// SPILLY - comment
+type RemovePolicyExpression struct {
+	immediateMutationOp
+	TableID  descpb.ID
+	PolicyID descpb.PolicyID
+	Expr     catpb.Expression
+	// SPILLY - use an enum?? If not exist what the value means
+	IsWithCheckExpression bool
+}
+
+// SetPolicyForwardReferences sets new forward references to relations, types,
+// and routines for the expressions in a policy.
+type SetPolicyForwardReferences struct {
+	immediateMutationOp
+	Deps scpb.PolicyDeps
+}
+
 // UpdateTableBackReferencesInTypes updates back references to a table
 // in the specified types.
 type UpdateTableBackReferencesInTypes struct {

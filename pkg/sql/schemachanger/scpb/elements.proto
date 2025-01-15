@@ -170,6 +170,9 @@ message ElementProto {
     // Policy elements.
     PolicyName policy_name = 240 [(gogoproto.moretags) = "parent:\"Policy\""];
     PolicyRole policy_role = 241 [(gogoproto.moretags) = "parent:\"Policy\""];
+    PolicyUsingExpr policy_using_expr = 242 [(gogoproto.moretags) = "parent:\"Policy\""];
+    PolicyWithCheckExpr policy_with_check_expr = 243 [(gogoproto.moretags) = "parent:\"Policy\""];
+    PolicyDeps policy_deps = 244 [(gogoproto.moretags) = "parent:\"Policy\""];
 
     // Next element group start id: 250
   }
@@ -385,6 +388,35 @@ message PolicyRole {
   uint32 table_id = 1 [(gogoproto.customname) = "TableID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.DescID"];
   uint32 policy_id = 2 [(gogoproto.customname) = "PolicyID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.PolicyID"];
   string role_name = 3;
+}
+
+// PolicyUsingExpression is the expression used in the policies USING clause.
+message PolicyUsingExpr {
+  uint32 table_id = 1 [(gogoproto.customname) = "TableID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.DescID"];
+  uint32 policy_id = 2 [(gogoproto.customname) = "PolicyID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.PolicyID"];
+  Expression embedded_expr = 3 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
+}
+
+// PolicyWithCheckExpression is the expression used in the policies WITH CHECK clause.
+message PolicyWithCheckExpr {
+  uint32 table_id = 1 [(gogoproto.customname) = "TableID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.DescID"];
+  uint32 policy_id = 2 [(gogoproto.customname) = "PolicyID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.PolicyID"];
+  Expression embedded_expr = 3 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
+}
+
+// PolicyDeps includes the dependencies for types, sequences, or functions referenced
+// by both the USING and WITH CHECK expressions in the policy.
+message PolicyDeps {
+  uint32 table_id = 1 [(gogoproto.customname) = "TableID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.DescID"];
+  uint32 policy_id = 2 [(gogoproto.customname) = "PolicyID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.PolicyID"];
+  // SeqNum differentiates dependencies across different sets of expressions.
+  // When new expressions are introduced, their dependencies may change. This field
+  // helps track and manage updates by enabling the removal of old dependencies
+  // and the addition of new ones.
+  uint32 seq_num = 3;
+
+  // UsesTypeIDs is the list of referenced type IDs for the expressions.
+  repeated uint32 uses_type_ids = 4 [(gogoproto.customname) = "UsesTypeIDs", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.DescID"];
 }
 
 message Sequence {

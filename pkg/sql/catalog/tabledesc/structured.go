@@ -400,6 +400,11 @@ func (desc *wrapper) GetAllReferencedTypeIDs(
 		ids = ids.Union(catalog.MakeDescriptorIDSet(desc.Triggers[i].DependsOnTypes...))
 	}
 
+	// Add type dependencies from policies.
+	for i := range desc.Policies {
+		ids = ids.Union(catalog.MakeDescriptorIDSet(desc.Policies[i].DependsOnTypes...))
+	}
+
 	// Add any other type dependencies that are not
 	// used in a column (specifically for views).
 	for _, id := range desc.DependsOnTypes {
@@ -428,6 +433,7 @@ func (desc *wrapper) GetAllReferencedFunctionIDs() (catalog.DescriptorIDSet, err
 	for i := range desc.Triggers {
 		ret = ret.Union(catalog.MakeDescriptorIDSet(desc.Triggers[i].DependsOnRoutines...))
 	}
+	// SPILLY - add check for policies
 	// TODO(chengxiong): add logic to extract references from indexes when UDFs
 	// are allowed in them.
 	return ret.Union(catalog.MakeDescriptorIDSet(desc.DependsOnFunctions...)), nil

@@ -96,6 +96,9 @@ type ImmediateMutationVisitor interface {
 	SetPolicyName(context.Context, SetPolicyName) error
 	AddPolicyRole(context.Context, AddPolicyRole) error
 	RemovePolicyRole(context.Context, RemovePolicyRole) error
+	AddPolicyExpression(context.Context, AddPolicyExpression) error
+	RemovePolicyExpression(context.Context, RemovePolicyExpression) error
+	SetPolicyForwardReferences(context.Context, SetPolicyForwardReferences) error
 	UpdateTableBackReferencesInTypes(context.Context, UpdateTableBackReferencesInTypes) error
 	UpdateTypeBackReferencesInTypes(context.Context, UpdateTypeBackReferencesInTypes) error
 	RemoveBackReferenceInTypes(context.Context, RemoveBackReferenceInTypes) error
@@ -554,6 +557,21 @@ func (op AddPolicyRole) Visit(ctx context.Context, v ImmediateMutationVisitor) e
 // Visit is part of the ImmediateMutationOp interface.
 func (op RemovePolicyRole) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
 	return v.RemovePolicyRole(ctx, op)
+}
+
+// Visit is part of the ImmediateMutationOp interface.
+func (op AddPolicyExpression) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
+	return v.AddPolicyExpression(ctx, op)
+}
+
+// Visit is part of the ImmediateMutationOp interface.
+func (op RemovePolicyExpression) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
+	return v.RemovePolicyExpression(ctx, op)
+}
+
+// Visit is part of the ImmediateMutationOp interface.
+func (op SetPolicyForwardReferences) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
+	return v.SetPolicyForwardReferences(ctx, op)
 }
 
 // Visit is part of the ImmediateMutationOp interface.

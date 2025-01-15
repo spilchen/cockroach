@@ -2,6 +2,9 @@
 
 subtest setup
 
+let $use_decl_sc
+SHOW use_declarative_schema_changer
+
 statement ok
 CREATE DATABASE db1;
 
@@ -20,9 +23,6 @@ show session enable_row_level_security;
 on
 
 subtest legacy_fail
-
-let $use_decl_sc
-SHOW use_declarative_schema_changer
 
 statement ok
 SET use_declarative_schema_changer = 'off';
@@ -78,9 +78,6 @@ subtest explicit_txn
 
 statement ok
 CREATE TABLE explicit1();
-
-let $use_decl_sc
-SHOW use_declarative_schema_changer
 
 statement ok
 SET use_declarative_schema_changer = 'unsafe_always';
@@ -292,5 +289,40 @@ DROP TABLE target;
 
 statement ok
 DROP ROLE john;
+
+subtest udt_ref
+
+statement ok
+CREATE TYPE greeting AS ENUM ('hello', 'hi', 'howdy');
+
+statement ok
+CREATE TABLE z1 (c1 text);
+
+statement ok
+CREATE POLICY p1 on z1 WITH CHECK (c1::greeting = 'hi'::greeting);
+
+statement error pq: cannot drop type "greeting" because other objects \(\[db1\.public\.z1\]\) still depend on it
+DROP TYPE greeting;
+
+statement ok
+SET use_declarative_schema_changer = 'off';
+
+statement error pq: cannot drop type "greeting" because other objects \(\[db1\.public\.z1\]\) still depend on it
+DROP TYPE greeting;
+
+statement ok
+SET use_declarative_schema_changer = $use_decl_sc;
+
+statement ok
+DROP POLICY p1 on z1;
+
+statement ok
+DROP TYPE greeting;
+
+statement error pq: type "greeting" does not exist
+CREATE POLICY p1 on z1 WITH CHECK (c1::greeting = 'hi'::greeting);
+
+statement ok
+DROP TABLE z1;
 
 subtest end

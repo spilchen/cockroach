@@ -715,6 +715,40 @@ message PolicyDescriptor {
 
   // RoleNames is a list of roles that this policy applies to.
   repeated string role_names = 5;
+
+  // SPILLY - double check postgres behaviour when omitting exprs. Is it
+  // possible to omit the using expression and not the with check. In that case
+  // having no using expression is virable. So, maybe downplay this part of the
+  // comment??
+
+  // The next two fields are the expressions to use for the policy. It is not
+  // correct to use either expression as output to display to a user. User
+  // defined types within the expressions have been serialized in a internal
+  // format. Instead, use one of the schemaexpr.FormatExpr* functions.
+
+  // UsingExpr is the expression applied for reading existing rows. If omitted,
+  // the policy will not be enforced. While this behavior may seem counterintuitive
+  // since it effectively renders the policy inactive, it aligns with postgres's
+  // implementation and is therefore permitted here.
+  optional string using_expr = 6 [(gogoproto.nullable) = true];
+
+  // WithCheck is the expression applied when writing new rows. If omitted,
+  // the UsingExpr will be used as a fallback.
+  optional string with_check_expr = 7 [(gogoproto.nullable) = true];
+
+  // DependsOnTypes are the IDs of all user defined types that the policy
+  // expressions depend on.
+  repeated uint32 depends_on_types = 8 [(gogoproto.casttype) = "ID"];
+
+  // DependsOnFunctions are the IDs of the function that the policy expressions
+  // depend on.
+  repeated uint32 depends_on_functions = 9 [(gogoproto.casttype) = "ID"];
+
+  // DependsOnRelations are the IDs of the relations that the policy expressions
+  // depend on.
+  repeated uint32 depends_on_relations = 10 [(gogoproto.casttype) = "ID"];
+
+  // SPILLY - what about columes?
 }
 
 // A DescriptorMutation represents a column or an index that
@@ -1792,6 +1826,7 @@ message FunctionDescriptor {
       (gogoproto.casttype) = "ConstraintID"];
     repeated uint32 trigger_ids = 5 [(gogoproto.customname) = "TriggerIDs",
       (gogoproto.casttype) = "TriggerID"];
+    // SPILLY - do I need to put a policy ID here? But the PolicyID isn't unique across tables.
   }
 
   optional string name = 1 [(gogoproto.nullable) = false];

@@ -90,3 +90,48 @@ func (i *immediateVisitor) RemovePolicyRole(ctx context.Context, op scop.RemoveP
 		"role %q does not exist in policy %d on table %d",
 		op.Role.RoleName, op.Role.PolicyID, op.Role.TableID)
 }
+
+func (i *immediateVisitor) AddPolicyExpression(
+	ctx context.Context, op scop.AddPolicyExpression,
+) error {
+	policy, err := i.checkOutPolicy(ctx, op.TableID, op.PolicyID)
+	if err != nil {
+		return err
+	}
+
+	expr := string(op.Expr)
+	if op.IsWithCheckExpression {
+		policy.WithCheckExpr = &expr
+	} else {
+		policy.UsingExpr = &expr
+	}
+	return nil
+}
+
+func (i *immediateVisitor) RemovePolicyExpression(
+	ctx context.Context, op scop.RemovePolicyExpression,
+) error {
+	policy, err := i.checkOutPolicy(ctx, op.TableID, op.PolicyID)
+	if err != nil {
+		return err
+	}
+	if op.IsWithCheckExpression {
+		policy.WithCheckExpr = nil
+	} else {
+		policy.UsingExpr = nil
+	}
+	return nil
+}
+
+func (i *immediateVisitor) SetPolicyForwardReferences(
+	ctx context.Context, op scop.SetPolicyForwardReferences,
+) error {
+	policy, err := i.checkOutPolicy(ctx, op.Deps.TableID, op.Deps.PolicyID)
+	if err != nil {
+		return err
+	}
+
+	// SPILLY - consistency around names of parameters. dependsOnTypes vs UsesTypeIDs?
+	policy.DependsOnTypes = op.Deps.UsesTypeIDs
+	return nil
+}
