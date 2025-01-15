@@ -423,6 +423,25 @@ func (desc *immutable) validateInboundTableRef(
 			triggerID, backRefTbl.GetName(), backRefTbl.GetID(), desc.GetName(), desc.GetID(),
 		)
 	}
+
+	for _, policyID := range by.PolicyIDs {
+		if catalog.FindPolicyByID(backRefTbl, policyID) == nil {
+			return errors.AssertionFailedf(
+				"depended-on-by relation %q (%d) does not have a policy with ID %d",
+				backRefTbl.GetName(), by.ID, policyID,
+			)
+		}
+		fnIDs := backRefTbl.GetAllReferencedFunctionIDsInPolicy(policyID)
+		if fnIDs.Contains(desc.GetID()) {
+			foundInTable = true
+			continue
+		}
+		return errors.AssertionFailedf(
+			"policy %d in depended-on-by relation %q (%d) does not have reference to function %q (%d)",
+			policyID, backRefTbl.GetName(), backRefTbl.GetID(), desc.GetName(), desc.GetID(),
+		)
+	}
+
 	if foundInTable {
 		return nil
 	}

@@ -663,6 +663,10 @@ type TableDescriptor interface {
 	// function as well as any functions it references transitively.
 	GetAllReferencedFunctionIDsInTrigger(triggerID descpb.TriggerID) DescriptorIDSet
 
+	// GetAllReferencedFunctionIDsInPolicy returns descriptor IDs of all user
+	// defined functions referenced in this policy.
+	GetAllReferencedFunctionIDsInPolicy(policyID descpb.PolicyID) DescriptorIDSet
+
 	// GetAllReferencedFunctionIDsInColumnExprs returns descriptor IDs of all user
 	// defined functions referenced by expressions in this column.
 	// Note: it extracts ids from expression strings, not from the UsesFunctionIDs

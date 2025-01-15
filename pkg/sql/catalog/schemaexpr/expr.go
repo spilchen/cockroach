@@ -80,8 +80,13 @@ func DequalifyAndValidateExprImpl(
 		return "", nil, colIDs, err
 	}
 
-	if err := funcdesc.MaybeFailOnUDFUsage(typedExpr, context, version); err != nil {
-		return "", nil, colIDs, unimplemented.NewWithIssue(83234, "usage of user-defined function from relations not supported")
+	// TODO(87699): We can remove this once we have forward/backward references to
+	// functions. We skip this for policies because we have those references in
+	// place already.
+	if context != tree.PolicyUsingExpr && context != tree.PolicyWithCheckExpr {
+		if err := funcdesc.MaybeFailOnUDFUsage(typedExpr, context, version); err != nil {
+			return "", nil, colIDs, unimplemented.NewWithIssue(87699, "usage of user-defined function from relations not supported")
+		}
 	}
 
 	// We need to do the rewrite here before the expression is serialized because
