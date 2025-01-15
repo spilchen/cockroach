@@ -921,7 +921,6 @@ func (w *walkCtx) walkPolicy(tbl catalog.TableDescriptor, p *descpb.PolicyDescri
 		w.ev(scpb.Status_PUBLIC, &scpb.PolicyDeps{
 			TableID:     tbl.GetID(),
 			PolicyID:    p.ID,
-			SeqNum:      1,
 			UsesTypeIDs: p.DependsOnTypes,
 			// SPILLY - should we just rename DependsOnRelations to DependsOnSequences for clarity?
 			UsesSequenceIDs: p.DependsOnRelations,

@@ -174,10 +174,8 @@ func addPolicyExpressions(
 	// If we had at least one expression then we need to add the policy deps.
 	if n.Exprs.Using != nil || n.Exprs.WithCheck != nil {
 		b.Add(&scpb.PolicyDeps{
-			TableID:  tableID,
-			PolicyID: policyID,
-			SeqNum:   1,
-			// SPILLY: I think we can have attributes for all of the things and remove the sequence number
+			TableID:         tableID,
+			PolicyID:        policyID,
 			UsesTypeIDs:     usesTypeIDs.Ordered(),
 			UsesSequenceIDs: usesSequenceIDs.Ordered(),
 			UsesFunctionIDs: usesFunctionIDs.Ordered(),
