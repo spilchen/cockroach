@@ -49,6 +49,16 @@ func init() {
 						BackReferencedTableID: this.TableID,
 					}
 				}),
+				emit(func(this *scpb.PolicyDeps) *scop.AddPolicyBackReferenceInFunctions {
+					if len(this.UsesFunctionIDs) == 0 {
+						return nil
+					}
+					return &scop.AddPolicyBackReferenceInFunctions{
+						BackReferencedTableID:  this.TableID,
+						BackReferencedPolicyID: this.PolicyID,
+						FunctionIDs:            this.UsesFunctionIDs,
+					}
+				}),
 			),
 		),
 		toAbsent(
@@ -72,6 +82,16 @@ func init() {
 						BackReferencedTableID: this.TableID,
 					}
 				}),
+				emit(func(this *scpb.PolicyDeps) *scop.RemovePolicyBackReferenceInFunctions {
+					if len(this.UsesFunctionIDs) == 0 {
+						return nil
+					}
+					return &scop.RemovePolicyBackReferenceInFunctions{
+						BackReferencedTableID:  this.TableID,
+						BackReferencedPolicyID: this.PolicyID,
+						FunctionIDs:            this.UsesFunctionIDs,
+					}
+				}),
 			),
 		),
 	)
@@ -83,7 +103,6 @@ func init() {
 				emit(func(this *scpb.PolicyWithCheckExpr) *scop.AddPolicyExpression {
 					return emitAddPolicyExpression(this.TableID, this.PolicyID, this.Expr, true)
 				}),
-				// SPILLY - emit backreferences for functions
 			),
 		),
 		toAbsent(
@@ -92,7 +111,6 @@ func init() {
 				emit(func(this *scpb.PolicyWithCheckExpr) *scop.RemovePolicyExpression {
 					return emitRemovePolicyExpression(this.TableID, this.PolicyID, this.Expr, true)
 				}),
-				// SPILLY - emit backreferences for functions
 			),
 		),
 	)
@@ -104,7 +122,6 @@ func init() {
 				emit(func(this *scpb.PolicyUsingExpr) *scop.AddPolicyExpression {
 					return emitAddPolicyExpression(this.TableID, this.PolicyID, this.Expr, false)
 				}),
-				// SPILLY - emit backreferences for functions
 			),
 		),
 		toAbsent(
@@ -113,12 +130,13 @@ func init() {
 				emit(func(this *scpb.PolicyUsingExpr) *scop.RemovePolicyExpression {
 					return emitRemovePolicyExpression(this.TableID, this.PolicyID, this.Expr, false)
 				}),
-				// SPILLY - emit backreferences for functions
 			),
 		),
 	)
 }
 
+// SPILLY - collapse these helpers
+// SPILLY - should we have two versions of AddPolicyExpression. It makes the explain more readable.
 func emitAddPolicyExpression(
 	tableID descpb.ID, policyID descpb.PolicyID, expr catpb.Expression, isWithCheckExpr bool,
 ) *scop.AddPolicyExpression {

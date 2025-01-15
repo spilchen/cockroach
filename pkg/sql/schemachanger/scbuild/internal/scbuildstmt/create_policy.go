@@ -146,6 +146,7 @@ func addPolicyExpressions(
 	// PolicyDeps elements. These vars are used to manage that.
 	var usesTypeIDs catalog.DescriptorIDSet
 	var usesSequenceIDs catalog.DescriptorIDSet
+	var usesFunctionIDs catalog.DescriptorIDSet
 
 	if n.Exprs.Using != nil {
 		expr := validateAndResolveTypesInExpr(b, &tn, tableID, n.Exprs.Using, tree.PolicyUsingExpr)
@@ -156,6 +157,7 @@ func addPolicyExpressions(
 		})
 		usesTypeIDs = catalog.MakeDescriptorIDSet(expr.UsesTypeIDs...)
 		usesSequenceIDs = catalog.MakeDescriptorIDSet(expr.UsesSequenceIDs...)
+		usesFunctionIDs = catalog.MakeDescriptorIDSet(expr.UsesFunctionIDs...)
 	}
 	if n.Exprs.WithCheck != nil {
 		expr := validateAndResolveTypesInExpr(b, &tn, tableID, n.Exprs.WithCheck, tree.PolicyWithCheckExpr)
@@ -166,6 +168,7 @@ func addPolicyExpressions(
 		})
 		usesTypeIDs = usesTypeIDs.Union(catalog.MakeDescriptorIDSet(expr.UsesTypeIDs...))
 		usesSequenceIDs = usesSequenceIDs.Union(catalog.MakeDescriptorIDSet(expr.UsesSequenceIDs...))
+		usesFunctionIDs = usesFunctionIDs.Union(catalog.MakeDescriptorIDSet(expr.UsesFunctionIDs...))
 	}
 
 	// If we had at least one expression then we need to add the policy deps.
@@ -177,6 +180,7 @@ func addPolicyExpressions(
 			// SPILLY: I think we can have attributes for all of the things and remove the sequence number
 			UsesTypeIDs:     usesTypeIDs.Ordered(),
 			UsesSequenceIDs: usesSequenceIDs.Ordered(),
+			UsesFunctionIDs: usesFunctionIDs.Ordered(),
 		})
 	}
 }

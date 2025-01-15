@@ -1826,7 +1826,8 @@ message FunctionDescriptor {
       (gogoproto.casttype) = "ConstraintID"];
     repeated uint32 trigger_ids = 5 [(gogoproto.customname) = "TriggerIDs",
       (gogoproto.casttype) = "TriggerID"];
-    // SPILLY - do I need to put a policy ID here? But the PolicyID isn't unique across tables.
+    repeated uint32 policy_ids = 6 [(gogoproto.customname) = "PolicyIDs",
+      (gogoproto.casttype) = "PolicyID"];
   }
 
   optional string name = 1 [(gogoproto.nullable) = false];

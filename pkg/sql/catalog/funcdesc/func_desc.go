@@ -787,6 +787,51 @@ func (desc *Mutable) RemoveTriggerReference(id descpb.ID, triggerID descpb.Trigg
 	}
 }
 
+// AddPolicyReference adds back reference to a policy to the function.
+func (desc *Mutable) AddPolicyReference(id descpb.ID, policyID descpb.PolicyID) error {
+	for _, dep := range desc.DependsOn {
+		if dep == id {
+			return pgerror.Newf(pgcode.InvalidFunctionDefinition,
+				"cannot add dependency from descriptor %d to function %s (%d) because there will be a dependency cycle", id, desc.GetName(), desc.GetID(),
+			)
+		}
+	}
+	defer sort.Slice(desc.DependedOnBy, func(i, j int) bool {
+		return desc.DependedOnBy[i].ID < desc.DependedOnBy[j].ID
+	})
+	for i := range desc.DependedOnBy {
+		if desc.DependedOnBy[i].ID == id {
+			for _, prevID := range desc.DependedOnBy[i].PolicyIDs {
+				if prevID == policyID {
+					return nil
+				}
+			}
+			desc.DependedOnBy[i].PolicyIDs = append(desc.DependedOnBy[i].PolicyIDs, policyID)
+			return nil
+		}
+	}
+	desc.DependedOnBy = append(desc.DependedOnBy,
+		descpb.FunctionDescriptor_Reference{ID: id, PolicyIDs: []descpb.PolicyID{policyID}},
+	)
+	return nil
+}
+
+// RemovePolicyReference removes back reference to a table's policy from the function.
+func (desc *Mutable) RemovePolicyReference(id descpb.ID, policyID descpb.PolicyID) {
+	for i := range desc.DependedOnBy {
+		if desc.DependedOnBy[i].ID == id {
+			dep := &desc.DependedOnBy[i]
+			for j := range dep.PolicyIDs {
+				if dep.PolicyIDs[j] == policyID {
+					dep.PolicyIDs = append(dep.PolicyIDs[:j], dep.PolicyIDs[j+1:]...)
+					desc.maybeRemoveTableReference(id)
+					return
+				}
+			}
+		}
+	}
+}
+
 // maybeRemoveTableReference removes a table's references from the function if
 // the column, index and constraint references are all empty. This function is
 // only used internally when removing an individual column, index or constraint

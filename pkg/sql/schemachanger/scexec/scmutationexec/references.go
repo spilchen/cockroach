@@ -428,6 +428,34 @@ func (i *immediateVisitor) RemoveTriggerBackReferencesInRoutines(
 	return nil
 }
 
+func (i *immediateVisitor) AddPolicyBackReferenceInFunctions(
+	ctx context.Context, op scop.AddPolicyBackReferenceInFunctions,
+) error {
+	for _, id := range op.FunctionIDs {
+		fnDesc, err := i.checkOutFunction(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := fnDesc.AddPolicyReference(op.BackReferencedTableID, op.BackReferencedPolicyID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (i *immediateVisitor) RemovePolicyBackReferenceInFunctions(
+	ctx context.Context, op scop.RemovePolicyBackReferenceInFunctions,
+) error {
+	for _, id := range op.FunctionIDs {
+		fnDesc, err := i.checkOutFunction(ctx, id)
+		if err != nil {
+			return err
+		}
+		fnDesc.RemovePolicyReference(op.BackReferencedTableID, op.BackReferencedPolicyID)
+	}
+	return nil
+}
+
 // Look through `seqID`'s dependedOnBy slice, find the back-reference to `tblID`,
 // and update it to either
 //   - upsert `colID` to ColumnIDs field of that back-reference, if `forwardRefs` contains `seqID`; or

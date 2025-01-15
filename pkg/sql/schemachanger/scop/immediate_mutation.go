@@ -751,6 +751,24 @@ type RemoveTriggerBackReferencesInRoutines struct {
 	RoutineIDs              []descpb.ID
 }
 
+// AddPolicyBackReferenceInFunctions adds back references to a policy from
+// referenced functions.
+type AddPolicyBackReferenceInFunctions struct {
+	immediateMutationOp
+	BackReferencedTableID  descpb.ID
+	BackReferencedPolicyID descpb.PolicyID
+	FunctionIDs            []descpb.ID
+}
+
+// RemovePolicyBackReferenceInFunctions removes back-references to a policy
+// from referenced functions.
+type RemovePolicyBackReferenceInFunctions struct {
+	immediateMutationOp
+	BackReferencedTableID  descpb.ID
+	BackReferencedPolicyID descpb.PolicyID
+	FunctionIDs            []descpb.ID
+}
+
 // SetColumnName renames a column.
 type SetColumnName struct {
 	immediateMutationOp

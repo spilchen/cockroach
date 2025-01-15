@@ -925,6 +925,7 @@ func (w *walkCtx) walkPolicy(tbl catalog.TableDescriptor, p *descpb.PolicyDescri
 			UsesTypeIDs: p.DependsOnTypes,
 			// SPILLY - should we just rename DependsOnRelations to DependsOnSequences for clarity?
 			UsesSequenceIDs: p.DependsOnRelations,
+			UsesFunctionIDs: p.DependsOnFunctions,
 		})
 	}
 }

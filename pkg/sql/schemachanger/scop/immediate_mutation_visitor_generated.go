@@ -111,6 +111,8 @@ type ImmediateMutationVisitor interface {
 	RemoveTableColumnBackReferencesInFunctions(context.Context, RemoveTableColumnBackReferencesInFunctions) error
 	AddTriggerBackReferencesInRoutines(context.Context, AddTriggerBackReferencesInRoutines) error
 	RemoveTriggerBackReferencesInRoutines(context.Context, RemoveTriggerBackReferencesInRoutines) error
+	AddPolicyBackReferenceInFunctions(context.Context, AddPolicyBackReferenceInFunctions) error
+	RemovePolicyBackReferenceInFunctions(context.Context, RemovePolicyBackReferenceInFunctions) error
 	SetColumnName(context.Context, SetColumnName) error
 	SetIndexName(context.Context, SetIndexName) error
 	SetConstraintName(context.Context, SetConstraintName) error
@@ -632,6 +634,16 @@ func (op AddTriggerBackReferencesInRoutines) Visit(ctx context.Context, v Immedi
 // Visit is part of the ImmediateMutationOp interface.
 func (op RemoveTriggerBackReferencesInRoutines) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
 	return v.RemoveTriggerBackReferencesInRoutines(ctx, op)
+}
+
+// Visit is part of the ImmediateMutationOp interface.
+func (op AddPolicyBackReferenceInFunctions) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
+	return v.AddPolicyBackReferenceInFunctions(ctx, op)
+}
+
+// Visit is part of the ImmediateMutationOp interface.
+func (op RemovePolicyBackReferenceInFunctions) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
+	return v.RemovePolicyBackReferenceInFunctions(ctx, op)
 }
 
 // Visit is part of the ImmediateMutationOp interface.

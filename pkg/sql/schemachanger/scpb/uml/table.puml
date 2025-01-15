@@ -312,6 +312,7 @@ PolicyDeps :  PolicyID
 PolicyDeps :  SeqNum
 PolicyDeps : []UsesTypeIDs
 PolicyDeps : []UsesSequenceIDs
+PolicyDeps : []UsesFunctionIDs
 
 object PolicyName
 
