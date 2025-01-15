@@ -25,7 +25,7 @@ StatementPhase stage 1 of 1 with 8 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyUsingExpr:{DescID: 106, Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8), PolicyID: 1}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyWithCheckExpr:{DescID: 106, Expr: nextval(107:::REGCLASS) < 10:::INT8, PolicyID: 1}, ABSENT], PUBLIC] -> ABSENT
-    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1, SeqNum: 1}, ABSENT], PUBLIC] -> ABSENT
+    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1}, ABSENT], PUBLIC] -> ABSENT
   ops:
     *scop.SetPolicyName
       Name: crdb_internal_policy_1_name_placeholder
@@ -46,13 +46,10 @@ StatementPhase stage 1 of 1 with 8 MutationType ops
         PolicyID: 1
         RoleName: public
         TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8)
+    *scop.RemovePolicyUsingExpression
       PolicyID: 1
       TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: nextval(107:::REGCLASS) < 10:::INT8
-      IsWithCheckExpression: true
+    *scop.RemovePolicyWithCheckExpression
       PolicyID: 1
       TableID: 106
     *scop.UpdateTableBackReferencesInSequences
@@ -74,7 +71,7 @@ PreCommitPhase stage 1 of 2 with 1 MutationType op
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, ABSENT], ABSENT] -> PUBLIC
     [[PolicyUsingExpr:{DescID: 106, Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8), PolicyID: 1}, ABSENT], ABSENT] -> PUBLIC
     [[PolicyWithCheckExpr:{DescID: 106, Expr: nextval(107:::REGCLASS) < 10:::INT8, PolicyID: 1}, ABSENT], ABSENT] -> PUBLIC
-    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1, SeqNum: 1}, ABSENT], ABSENT] -> PUBLIC
+    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1}, ABSENT], ABSENT] -> PUBLIC
   ops:
     *scop.UndoAllInTxnImmediateMutationOpSideEffects
       {}
@@ -87,7 +84,7 @@ PreCommitPhase stage 2 of 2 with 8 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyUsingExpr:{DescID: 106, Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8), PolicyID: 1}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyWithCheckExpr:{DescID: 106, Expr: nextval(107:::REGCLASS) < 10:::INT8, PolicyID: 1}, ABSENT], PUBLIC] -> ABSENT
-    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1, SeqNum: 1}, ABSENT], PUBLIC] -> ABSENT
+    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1}, ABSENT], PUBLIC] -> ABSENT
   ops:
     *scop.SetPolicyName
       Name: crdb_internal_policy_1_name_placeholder
@@ -108,13 +105,10 @@ PreCommitPhase stage 2 of 2 with 8 MutationType ops
         PolicyID: 1
         RoleName: public
         TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8)
+    *scop.RemovePolicyUsingExpression
       PolicyID: 1
       TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: nextval(107:::REGCLASS) < 10:::INT8
-      IsWithCheckExpression: true
+    *scop.RemovePolicyWithCheckExpression
       PolicyID: 1
       TableID: 106
     *scop.UpdateTableBackReferencesInSequences
@@ -138,7 +132,7 @@ StatementPhase stage 1 of 1 with 6 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 2}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyUsingExpr:{DescID: 106, Expr: c2::@100108 = b'\xc0':::@100108, PolicyID: 2}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyWithCheckExpr:{DescID: 106, Expr: c2::@100108 = b'@':::@100108, PolicyID: 2}, ABSENT], PUBLIC] -> ABSENT
-    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 2, SeqNum: 1}, ABSENT], PUBLIC] -> ABSENT
+    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 2}, ABSENT], PUBLIC] -> ABSENT
   ops:
     *scop.SetPolicyName
       Name: crdb_internal_policy_2_name_placeholder
@@ -149,13 +143,10 @@ StatementPhase stage 1 of 1 with 6 MutationType ops
         PolicyID: 2
         RoleName: public
         TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: c2::@100108 = b'\xc0':::@100108
+    *scop.RemovePolicyUsingExpression
       PolicyID: 2
       TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: c2::@100108 = b'@':::@100108
-      IsWithCheckExpression: true
+    *scop.RemovePolicyWithCheckExpression
       PolicyID: 2
       TableID: 106
     *scop.UpdateTableBackReferencesInTypes
@@ -176,7 +167,7 @@ PreCommitPhase stage 1 of 2 with 1 MutationType op
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 2}, ABSENT], ABSENT] -> PUBLIC
     [[PolicyUsingExpr:{DescID: 106, Expr: c2::@100108 = b'\xc0':::@100108, PolicyID: 2}, ABSENT], ABSENT] -> PUBLIC
     [[PolicyWithCheckExpr:{DescID: 106, Expr: c2::@100108 = b'@':::@100108, PolicyID: 2}, ABSENT], ABSENT] -> PUBLIC
-    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 2, SeqNum: 1}, ABSENT], ABSENT] -> PUBLIC
+    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 2}, ABSENT], ABSENT] -> PUBLIC
   ops:
     *scop.UndoAllInTxnImmediateMutationOpSideEffects
       {}
@@ -187,7 +178,7 @@ PreCommitPhase stage 2 of 2 with 6 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 2}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyUsingExpr:{DescID: 106, Expr: c2::@100108 = b'\xc0':::@100108, PolicyID: 2}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyWithCheckExpr:{DescID: 106, Expr: c2::@100108 = b'@':::@100108, PolicyID: 2}, ABSENT], PUBLIC] -> ABSENT
-    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 2, SeqNum: 1}, ABSENT], PUBLIC] -> ABSENT
+    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 2}, ABSENT], PUBLIC] -> ABSENT
   ops:
     *scop.SetPolicyName
       Name: crdb_internal_policy_2_name_placeholder
@@ -198,13 +189,10 @@ PreCommitPhase stage 2 of 2 with 6 MutationType ops
         PolicyID: 2
         RoleName: public
         TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: c2::@100108 = b'\xc0':::@100108
+    *scop.RemovePolicyUsingExpression
       PolicyID: 2
       TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: c2::@100108 = b'@':::@100108
-      IsWithCheckExpression: true
+    *scop.RemovePolicyWithCheckExpression
       PolicyID: 2
       TableID: 106
     *scop.UpdateTableBackReferencesInTypes
@@ -229,7 +217,7 @@ StatementPhase stage 1 of 1 with 6 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 3}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyUsingExpr:{DescID: 106, Expr: [FUNCTION 100110]((c1).x), PolicyID: 3}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyWithCheckExpr:{DescID: 106, Expr: [FUNCTION 100111]((c1).y), PolicyID: 3}, ABSENT], PUBLIC] -> ABSENT
-    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 3, SeqNum: 1}, ABSENT], PUBLIC] -> ABSENT
+    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 3}, ABSENT], PUBLIC] -> ABSENT
   ops:
     *scop.SetPolicyName
       Name: crdb_internal_policy_3_name_placeholder
@@ -240,13 +228,10 @@ StatementPhase stage 1 of 1 with 6 MutationType ops
         PolicyID: 3
         RoleName: public
         TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: '[FUNCTION 100110]((c1).x)'
+    *scop.RemovePolicyUsingExpression
       PolicyID: 3
       TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: '[FUNCTION 100111]((c1).y)'
-      IsWithCheckExpression: true
+    *scop.RemovePolicyWithCheckExpression
       PolicyID: 3
       TableID: 106
     *scop.RemovePolicyBackReferenceInFunctions
@@ -268,7 +253,7 @@ PreCommitPhase stage 1 of 2 with 1 MutationType op
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 3}, ABSENT], ABSENT] -> PUBLIC
     [[PolicyUsingExpr:{DescID: 106, Expr: [FUNCTION 100110]((c1).x), PolicyID: 3}, ABSENT], ABSENT] -> PUBLIC
     [[PolicyWithCheckExpr:{DescID: 106, Expr: [FUNCTION 100111]((c1).y), PolicyID: 3}, ABSENT], ABSENT] -> PUBLIC
-    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 3, SeqNum: 1}, ABSENT], ABSENT] -> PUBLIC
+    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 3}, ABSENT], ABSENT] -> PUBLIC
   ops:
     *scop.UndoAllInTxnImmediateMutationOpSideEffects
       {}
@@ -279,7 +264,7 @@ PreCommitPhase stage 2 of 2 with 6 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 3}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyUsingExpr:{DescID: 106, Expr: [FUNCTION 100110]((c1).x), PolicyID: 3}, ABSENT], PUBLIC] -> ABSENT
     [[PolicyWithCheckExpr:{DescID: 106, Expr: [FUNCTION 100111]((c1).y), PolicyID: 3}, ABSENT], PUBLIC] -> ABSENT
-    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 3, SeqNum: 1}, ABSENT], PUBLIC] -> ABSENT
+    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 3}, ABSENT], PUBLIC] -> ABSENT
   ops:
     *scop.SetPolicyName
       Name: crdb_internal_policy_3_name_placeholder
@@ -290,13 +275,10 @@ PreCommitPhase stage 2 of 2 with 6 MutationType ops
         PolicyID: 3
         RoleName: public
         TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: '[FUNCTION 100110]((c1).x)'
+    *scop.RemovePolicyUsingExpression
       PolicyID: 3
       TableID: 106
-    *scop.RemovePolicyExpression
-      Expr: '[FUNCTION 100111]((c1).y)'
-      IsWithCheckExpression: true
+    *scop.RemovePolicyWithCheckExpression
       PolicyID: 3
       TableID: 106
     *scop.RemovePolicyBackReferenceInFunctions

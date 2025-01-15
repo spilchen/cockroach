@@ -21,7 +21,7 @@ StatementPhase stage 1 of 1 with 9 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyUsingExpr:{DescID: 106, Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8), PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyWithCheckExpr:{DescID: 106, Expr: nextval(107:::REGCLASS) < 10:::INT8, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
-    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1, SeqNum: 1}, PUBLIC], ABSENT] -> PUBLIC
+    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
   ops:
     *scop.AddPolicy
       Policy:
@@ -48,19 +48,26 @@ StatementPhase stage 1 of 1 with 9 MutationType ops
         PolicyID: 1
         RoleName: public
         TableID: 106
-    *scop.AddPolicyExpression
-      Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8)
-      PolicyID: 1
-      TableID: 106
-    *scop.AddPolicyExpression
-      Expr: nextval(107:::REGCLASS) < 10:::INT8
-      IsWithCheckExpression: true
-      PolicyID: 1
-      TableID: 106
+    *scop.AddPolicyUsingExpression
+      El:
+        Expression:
+          Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8)
+          ReferencedColumnIDs:
+          - 1
+          - 2
+        PolicyID: 1
+        TableID: 106
+    *scop.AddPolicyWithCheckExpression
+      El:
+        Expression:
+          Expr: nextval(107:::REGCLASS) < 10:::INT8
+          UsesSequenceIDs:
+          - 107
+        PolicyID: 1
+        TableID: 106
     *scop.SetPolicyForwardReferences
       Deps:
         PolicyID: 1
-        SeqNum: 1
         TableID: 106
         UsesSequenceIDs:
         - 107
@@ -77,7 +84,7 @@ PreCommitPhase stage 1 of 2 with 1 MutationType op
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
     [[PolicyUsingExpr:{DescID: 106, Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8), PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
     [[PolicyWithCheckExpr:{DescID: 106, Expr: nextval(107:::REGCLASS) < 10:::INT8, PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
-    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1, SeqNum: 1}, PUBLIC], PUBLIC] -> ABSENT
+    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
   ops:
     *scop.UndoAllInTxnImmediateMutationOpSideEffects
       {}
@@ -90,7 +97,7 @@ PreCommitPhase stage 2 of 2 with 9 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyUsingExpr:{DescID: 106, Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8), PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyWithCheckExpr:{DescID: 106, Expr: nextval(107:::REGCLASS) < 10:::INT8, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
-    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1, SeqNum: 1}, PUBLIC], ABSENT] -> PUBLIC
+    [[PolicyDeps:{DescID: 106, ReferencedSequenceIDs: [107], PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
   ops:
     *scop.AddPolicy
       Policy:
@@ -117,19 +124,26 @@ PreCommitPhase stage 2 of 2 with 9 MutationType ops
         PolicyID: 1
         RoleName: public
         TableID: 106
-    *scop.AddPolicyExpression
-      Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8)
-      PolicyID: 1
-      TableID: 106
-    *scop.AddPolicyExpression
-      Expr: nextval(107:::REGCLASS) < 10:::INT8
-      IsWithCheckExpression: true
-      PolicyID: 1
-      TableID: 106
+    *scop.AddPolicyUsingExpression
+      El:
+        Expression:
+          Expr: (tenant_id = '01538898-f55c-44db-a306-89078e2c430e':::UUID) AND ((c1).x > 0:::INT8)
+          ReferencedColumnIDs:
+          - 1
+          - 2
+        PolicyID: 1
+        TableID: 106
+    *scop.AddPolicyWithCheckExpression
+      El:
+        Expression:
+          Expr: nextval(107:::REGCLASS) < 10:::INT8
+          UsesSequenceIDs:
+          - 107
+        PolicyID: 1
+        TableID: 106
     *scop.SetPolicyForwardReferences
       Deps:
         PolicyID: 1
-        SeqNum: 1
         TableID: 106
         UsesSequenceIDs:
         - 107
@@ -148,7 +162,7 @@ StatementPhase stage 1 of 1 with 7 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyUsingExpr:{DescID: 106, Expr: c2::@100108 = b'\xc0':::@100108, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyWithCheckExpr:{DescID: 106, Expr: c2::@100108 = b'@':::@100108, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
-    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 1, SeqNum: 1}, PUBLIC], ABSENT] -> PUBLIC
+    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
   ops:
     *scop.AddPolicy
       Policy:
@@ -165,19 +179,31 @@ StatementPhase stage 1 of 1 with 7 MutationType ops
         PolicyID: 1
         RoleName: public
         TableID: 106
-    *scop.AddPolicyExpression
-      Expr: c2::@100108 = b'\xc0':::@100108
-      PolicyID: 1
-      TableID: 106
-    *scop.AddPolicyExpression
-      Expr: c2::@100108 = b'@':::@100108
-      IsWithCheckExpression: true
-      PolicyID: 1
-      TableID: 106
+    *scop.AddPolicyUsingExpression
+      El:
+        Expression:
+          Expr: c2::@100108 = b'\xc0':::@100108
+          ReferencedColumnIDs:
+          - 3
+          UsesTypeIDs:
+          - 108
+          - 109
+        PolicyID: 1
+        TableID: 106
+    *scop.AddPolicyWithCheckExpression
+      El:
+        Expression:
+          Expr: c2::@100108 = b'@':::@100108
+          ReferencedColumnIDs:
+          - 3
+          UsesTypeIDs:
+          - 108
+          - 109
+        PolicyID: 1
+        TableID: 106
     *scop.SetPolicyForwardReferences
       Deps:
         PolicyID: 1
-        SeqNum: 1
         TableID: 106
         UsesTypeIDs:
         - 108
@@ -194,7 +220,7 @@ PreCommitPhase stage 1 of 2 with 1 MutationType op
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
     [[PolicyUsingExpr:{DescID: 106, Expr: c2::@100108 = b'\xc0':::@100108, PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
     [[PolicyWithCheckExpr:{DescID: 106, Expr: c2::@100108 = b'@':::@100108, PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
-    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 1, SeqNum: 1}, PUBLIC], PUBLIC] -> ABSENT
+    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
   ops:
     *scop.UndoAllInTxnImmediateMutationOpSideEffects
       {}
@@ -205,7 +231,7 @@ PreCommitPhase stage 2 of 2 with 7 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyUsingExpr:{DescID: 106, Expr: c2::@100108 = b'\xc0':::@100108, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyWithCheckExpr:{DescID: 106, Expr: c2::@100108 = b'@':::@100108, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
-    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 1, SeqNum: 1}, PUBLIC], ABSENT] -> PUBLIC
+    [[PolicyDeps:{DescID: 106, ReferencedTypeIDs: [108 109], PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
   ops:
     *scop.AddPolicy
       Policy:
@@ -222,19 +248,31 @@ PreCommitPhase stage 2 of 2 with 7 MutationType ops
         PolicyID: 1
         RoleName: public
         TableID: 106
-    *scop.AddPolicyExpression
-      Expr: c2::@100108 = b'\xc0':::@100108
-      PolicyID: 1
-      TableID: 106
-    *scop.AddPolicyExpression
-      Expr: c2::@100108 = b'@':::@100108
-      IsWithCheckExpression: true
-      PolicyID: 1
-      TableID: 106
+    *scop.AddPolicyUsingExpression
+      El:
+        Expression:
+          Expr: c2::@100108 = b'\xc0':::@100108
+          ReferencedColumnIDs:
+          - 3
+          UsesTypeIDs:
+          - 108
+          - 109
+        PolicyID: 1
+        TableID: 106
+    *scop.AddPolicyWithCheckExpression
+      El:
+        Expression:
+          Expr: c2::@100108 = b'@':::@100108
+          ReferencedColumnIDs:
+          - 3
+          UsesTypeIDs:
+          - 108
+          - 109
+        PolicyID: 1
+        TableID: 106
     *scop.SetPolicyForwardReferences
       Deps:
         PolicyID: 1
-        SeqNum: 1
         TableID: 106
         UsesTypeIDs:
         - 108
@@ -255,7 +293,7 @@ StatementPhase stage 1 of 1 with 7 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyUsingExpr:{DescID: 106, Expr: [FUNCTION 100110]((c1).x), PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyWithCheckExpr:{DescID: 106, Expr: [FUNCTION 100111]((c1).y), PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
-    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 1, SeqNum: 1}, PUBLIC], ABSENT] -> PUBLIC
+    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
   ops:
     *scop.AddPolicy
       Policy:
@@ -272,19 +310,29 @@ StatementPhase stage 1 of 1 with 7 MutationType ops
         PolicyID: 1
         RoleName: public
         TableID: 106
-    *scop.AddPolicyExpression
-      Expr: '[FUNCTION 100110]((c1).x)'
-      PolicyID: 1
-      TableID: 106
-    *scop.AddPolicyExpression
-      Expr: '[FUNCTION 100111]((c1).y)'
-      IsWithCheckExpression: true
-      PolicyID: 1
-      TableID: 106
+    *scop.AddPolicyUsingExpression
+      El:
+        Expression:
+          Expr: '[FUNCTION 100110]((c1).x)'
+          ReferencedColumnIDs:
+          - 2
+          UsesFunctionIDs:
+          - 110
+        PolicyID: 1
+        TableID: 106
+    *scop.AddPolicyWithCheckExpression
+      El:
+        Expression:
+          Expr: '[FUNCTION 100111]((c1).y)'
+          ReferencedColumnIDs:
+          - 2
+          UsesFunctionIDs:
+          - 111
+        PolicyID: 1
+        TableID: 106
     *scop.SetPolicyForwardReferences
       Deps:
         PolicyID: 1
-        SeqNum: 1
         TableID: 106
         UsesFunctionIDs:
         - 110
@@ -302,7 +350,7 @@ PreCommitPhase stage 1 of 2 with 1 MutationType op
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
     [[PolicyUsingExpr:{DescID: 106, Expr: [FUNCTION 100110]((c1).x), PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
     [[PolicyWithCheckExpr:{DescID: 106, Expr: [FUNCTION 100111]((c1).y), PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
-    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 1, SeqNum: 1}, PUBLIC], PUBLIC] -> ABSENT
+    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
   ops:
     *scop.UndoAllInTxnImmediateMutationOpSideEffects
       {}
@@ -313,7 +361,7 @@ PreCommitPhase stage 2 of 2 with 7 MutationType ops
     [[PolicyRole:{DescID: 106, Name: public, PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyUsingExpr:{DescID: 106, Expr: [FUNCTION 100110]((c1).x), PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
     [[PolicyWithCheckExpr:{DescID: 106, Expr: [FUNCTION 100111]((c1).y), PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
-    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 1, SeqNum: 1}, PUBLIC], ABSENT] -> PUBLIC
+    [[PolicyDeps:{DescID: 106, ReferencedFunctionIDs: [110 111], PolicyID: 1}, PUBLIC], ABSENT] -> PUBLIC
   ops:
     *scop.AddPolicy
       Policy:
@@ -330,19 +378,29 @@ PreCommitPhase stage 2 of 2 with 7 MutationType ops
         PolicyID: 1
         RoleName: public
         TableID: 106
-    *scop.AddPolicyExpression
-      Expr: '[FUNCTION 100110]((c1).x)'
-      PolicyID: 1
-      TableID: 106
-    *scop.AddPolicyExpression
-      Expr: '[FUNCTION 100111]((c1).y)'
-      IsWithCheckExpression: true
-      PolicyID: 1
-      TableID: 106
+    *scop.AddPolicyUsingExpression
+      El:
+        Expression:
+          Expr: '[FUNCTION 100110]((c1).x)'
+          ReferencedColumnIDs:
+          - 2
+          UsesFunctionIDs:
+          - 110
+        PolicyID: 1
+        TableID: 106
+    *scop.AddPolicyWithCheckExpression
+      El:
+        Expression:
+          Expr: '[FUNCTION 100111]((c1).y)'
+          ReferencedColumnIDs:
+          - 2
+          UsesFunctionIDs:
+          - 111
+        PolicyID: 1
+        TableID: 106
     *scop.SetPolicyForwardReferences
       Deps:
         PolicyID: 1
-        SeqNum: 1
         TableID: 106
         UsesFunctionIDs:
         - 110
