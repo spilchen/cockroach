@@ -6,19 +6,10 @@
 package opgen
 
 import (
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scop"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 )
-
-// SPILLY - split this file into 3
-
-// SPILLY - do we need an opgen rule  to ensure ordering of policydeps with the
-// expressions? At the least, for drop we want to call
-// UpdateTableBackReferenceInTypes after we have added a new PolicyDeps (if
-// replacing) or the policy has been completely removed.
 
 func init() {
 	opRegistry.register((*scpb.PolicyDeps)(nil),
@@ -95,66 +86,4 @@ func init() {
 			),
 		),
 	)
-
-	opRegistry.register((*scpb.PolicyWithCheckExpr)(nil),
-		toPublic(
-			scpb.Status_ABSENT,
-			to(scpb.Status_PUBLIC,
-				emit(func(this *scpb.PolicyWithCheckExpr) *scop.AddPolicyExpression {
-					return emitAddPolicyExpression(this.TableID, this.PolicyID, this.Expr, true)
-				}),
-			),
-		),
-		toAbsent(
-			scpb.Status_PUBLIC,
-			to(scpb.Status_ABSENT,
-				emit(func(this *scpb.PolicyWithCheckExpr) *scop.RemovePolicyExpression {
-					return emitRemovePolicyExpression(this.TableID, this.PolicyID, this.Expr, true)
-				}),
-			),
-		),
-	)
-
-	opRegistry.register((*scpb.PolicyUsingExpr)(nil),
-		toPublic(
-			scpb.Status_ABSENT,
-			to(scpb.Status_PUBLIC,
-				emit(func(this *scpb.PolicyUsingExpr) *scop.AddPolicyExpression {
-					return emitAddPolicyExpression(this.TableID, this.PolicyID, this.Expr, false)
-				}),
-			),
-		),
-		toAbsent(
-			scpb.Status_PUBLIC,
-			to(scpb.Status_ABSENT,
-				emit(func(this *scpb.PolicyUsingExpr) *scop.RemovePolicyExpression {
-					return emitRemovePolicyExpression(this.TableID, this.PolicyID, this.Expr, false)
-				}),
-			),
-		),
-	)
-}
-
-// SPILLY - collapse these helpers
-// SPILLY - should we have two versions of AddPolicyExpression. It makes the explain more readable.
-func emitAddPolicyExpression(
-	tableID descpb.ID, policyID descpb.PolicyID, expr catpb.Expression, isWithCheckExpr bool,
-) *scop.AddPolicyExpression {
-	return &scop.AddPolicyExpression{
-		TableID:               tableID,
-		PolicyID:              policyID,
-		Expr:                  expr,
-		IsWithCheckExpression: isWithCheckExpr,
-	}
-}
-
-func emitRemovePolicyExpression(
-	tableID descpb.ID, policyID descpb.PolicyID, expr catpb.Expression, isWithCheckExpr bool,
-) *scop.RemovePolicyExpression {
-	return &scop.RemovePolicyExpression{
-		TableID:               tableID,
-		PolicyID:              policyID,
-		Expr:                  expr,
-		IsWithCheckExpression: isWithCheckExpr,
-	}
 }

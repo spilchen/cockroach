@@ -91,35 +91,49 @@ func (i *immediateVisitor) RemovePolicyRole(ctx context.Context, op scop.RemoveP
 		op.Role.RoleName, op.Role.PolicyID, op.Role.TableID)
 }
 
-func (i *immediateVisitor) AddPolicyExpression(
-	ctx context.Context, op scop.AddPolicyExpression,
+func (i *immediateVisitor) AddPolicyWithCheckExpression(
+	ctx context.Context, op scop.AddPolicyWithCheckExpression,
 ) error {
-	policy, err := i.checkOutPolicy(ctx, op.TableID, op.PolicyID)
+	policy, err := i.checkOutPolicy(ctx, op.El.TableID, op.El.PolicyID)
 	if err != nil {
 		return err
 	}
-
-	expr := string(op.Expr)
-	if op.IsWithCheckExpression {
-		policy.WithCheckExpr = &expr
-	} else {
-		policy.UsingExpr = &expr
-	}
+	expr := string(op.El.Expr)
+	policy.WithCheckExpr = &expr
 	return nil
 }
 
-func (i *immediateVisitor) RemovePolicyExpression(
-	ctx context.Context, op scop.RemovePolicyExpression,
+func (i *immediateVisitor) RemovePolicyWithCheckExpression(
+	ctx context.Context, op scop.RemovePolicyWithCheckExpression,
 ) error {
 	policy, err := i.checkOutPolicy(ctx, op.TableID, op.PolicyID)
 	if err != nil {
 		return err
 	}
-	if op.IsWithCheckExpression {
-		policy.WithCheckExpr = nil
-	} else {
-		policy.UsingExpr = nil
+	policy.WithCheckExpr = nil
+	return nil
+}
+
+func (i *immediateVisitor) AddPolicyUsingExpression(
+	ctx context.Context, op scop.AddPolicyUsingExpression,
+) error {
+	policy, err := i.checkOutPolicy(ctx, op.El.TableID, op.El.PolicyID)
+	if err != nil {
+		return err
 	}
+	expr := string(op.El.Expr)
+	policy.UsingExpr = &expr
+	return nil
+}
+
+func (i *immediateVisitor) RemovePolicyUsingExpression(
+	ctx context.Context, op scop.RemovePolicyUsingExpression,
+) error {
+	policy, err := i.checkOutPolicy(ctx, op.TableID, op.PolicyID)
+	if err != nil {
+		return err
+	}
+	policy.UsingExpr = nil
 	return nil
 }
 

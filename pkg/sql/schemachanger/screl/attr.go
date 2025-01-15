@@ -391,7 +391,6 @@ var elementSchemaOptions = []rel.SchemaOption{
 	rel.EntityMapping(t((*scpb.PolicyDeps)(nil)),
 		rel.EntityAttr(DescID, "TableID"),
 		rel.EntityAttr(PolicyID, "PolicyID"),
-		rel.EntityAttr(SeqNum, "SeqNum"),
 		rel.EntityAttr(ReferencedTypeIDs, "UsesTypeIDs"),
 		rel.EntityAttr(ReferencedSequenceIDs, "UsesSequenceIDs"),
 		rel.EntityAttr(ReferencedFunctionIDs, "UsesFunctionIDs"),

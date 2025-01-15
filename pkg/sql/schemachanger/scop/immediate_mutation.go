@@ -621,23 +621,27 @@ type RemovePolicyRole struct {
 }
 
 // SPILLY - comment
-type AddPolicyExpression struct {
+type AddPolicyUsingExpression struct {
 	immediateMutationOp
-	TableID  descpb.ID
-	PolicyID descpb.PolicyID
-	Expr     catpb.Expression
-	// SPILLY - use an enum?? If not exist what the value means
-	IsWithCheckExpression bool
+	El scpb.PolicyUsingExpr
+}
+
+type AddPolicyWithCheckExpression struct {
+	immediateMutationOp
+	El scpb.PolicyWithCheckExpr
 }
 
 // SPILLY - comment
-type RemovePolicyExpression struct {
+type RemovePolicyUsingExpression struct {
 	immediateMutationOp
 	TableID  descpb.ID
 	PolicyID descpb.PolicyID
-	Expr     catpb.Expression
-	// SPILLY - use an enum?? If not exist what the value means
-	IsWithCheckExpression bool
+}
+
+type RemovePolicyWithCheckExpression struct {
+	immediateMutationOp
+	TableID  descpb.ID
+	PolicyID descpb.PolicyID
 }
 
 // SetPolicyForwardReferences sets new forward references to relations, types,

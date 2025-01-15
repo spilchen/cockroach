@@ -309,7 +309,6 @@ object PolicyDeps
 
 PolicyDeps :  TableID
 PolicyDeps :  PolicyID
-PolicyDeps :  SeqNum
 PolicyDeps : []UsesTypeIDs
 PolicyDeps : []UsesSequenceIDs
 PolicyDeps : []UsesFunctionIDs
