@@ -744,9 +744,9 @@ message PolicyDescriptor {
   // depend on.
   repeated uint32 depends_on_functions = 9 [(gogoproto.casttype) = "ID"];
 
-  // DependsOnRelations are the IDs of the relations that the policy expressions
+  // DependsOnRelations are the IDs of the sequences that the policy expressions
   // depend on.
-  repeated uint32 depends_on_relations = 10 [(gogoproto.casttype) = "ID"];
+  repeated uint32 depends_on_sequences = 10 [(gogoproto.casttype) = "ID"];
 
   // SPILLY - what about columes?
 }

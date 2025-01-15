@@ -919,11 +919,10 @@ func (w *walkCtx) walkPolicy(tbl catalog.TableDescriptor, p *descpb.PolicyDescri
 	}
 	if p.UsingExpr != nil || p.WithCheckExpr != nil {
 		w.ev(scpb.Status_PUBLIC, &scpb.PolicyDeps{
-			TableID:     tbl.GetID(),
-			PolicyID:    p.ID,
-			UsesTypeIDs: p.DependsOnTypes,
-			// SPILLY - should we just rename DependsOnRelations to DependsOnSequences for clarity?
-			UsesSequenceIDs: p.DependsOnRelations,
+			TableID:         tbl.GetID(),
+			PolicyID:        p.ID,
+			UsesTypeIDs:     p.DependsOnTypes,
+			UsesSequenceIDs: p.DependsOnSequences,
 			UsesFunctionIDs: p.DependsOnFunctions,
 		})
 	}

@@ -144,10 +144,8 @@ func (i *immediateVisitor) SetPolicyForwardReferences(
 	if err != nil {
 		return err
 	}
-
-	// SPILLY - consistency around names of parameters. dependsOnTypes vs UsesTypeIDs? Also Relations and Sequences?
 	policy.DependsOnTypes = op.Deps.UsesTypeIDs
-	policy.DependsOnRelations = op.Deps.UsesSequenceIDs
+	policy.DependsOnSequences = op.Deps.UsesSequenceIDs
 	policy.DependsOnFunctions = op.Deps.UsesFunctionIDs
 	return nil
 }
