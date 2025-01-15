@@ -55,15 +55,17 @@ StatementPhase stage 1 of 1 with 9 MutationType ops
       IsWithCheckExpression: true
       PolicyID: 1
       TableID: 106
-    *scop.UpdateTableBackReferencesInSequences
-      BackReferencedTableID: 106
-      SequenceIDs:
-      - 107
     *scop.SetPolicyForwardReferences
       Deps:
         PolicyID: 1
         SeqNum: 1
         TableID: 106
+        UsesSequenceIDs:
+        - 107
+    *scop.UpdateTableBackReferencesInSequences
+      BackReferencedTableID: 106
+      SequenceIDs:
+      - 107
 PreCommitPhase stage 1 of 2 with 1 MutationType op
   transitions:
     [[Policy:{DescID: 106, PolicyID: 1}, PUBLIC], PUBLIC] -> ABSENT
@@ -122,15 +124,17 @@ PreCommitPhase stage 2 of 2 with 9 MutationType ops
       IsWithCheckExpression: true
       PolicyID: 1
       TableID: 106
-    *scop.UpdateTableBackReferencesInSequences
-      BackReferencedTableID: 106
-      SequenceIDs:
-      - 107
     *scop.SetPolicyForwardReferences
       Deps:
         PolicyID: 1
         SeqNum: 1
         TableID: 106
+        UsesSequenceIDs:
+        - 107
+    *scop.UpdateTableBackReferencesInSequences
+      BackReferencedTableID: 106
+      SequenceIDs:
+      - 107
 
 ops
 CREATE POLICY "policy 2" on t1 USING (c2::greeting = 'hello'::greeting) WITH CHECK (c2::greeting = 'hi'::greeting);

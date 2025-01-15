@@ -145,6 +145,7 @@ func addPolicyExpressions(
 	// We maintain the forward references for both expressions in a single
 	// PolicyDeps elements. These vars are used to manage that.
 	var usesTypeIDs catalog.DescriptorIDSet
+	var usesSequenceIDs catalog.DescriptorIDSet
 
 	if n.Exprs.Using != nil {
 		expr := validateAndResolveTypesInExpr(b, &tn, tableID, n.Exprs.Using, tree.PolicyUsingExpr)
@@ -154,6 +155,7 @@ func addPolicyExpressions(
 			Expression: *expr,
 		})
 		usesTypeIDs = catalog.MakeDescriptorIDSet(expr.UsesTypeIDs...)
+		usesSequenceIDs = catalog.MakeDescriptorIDSet(expr.UsesSequenceIDs...)
 	}
 	if n.Exprs.WithCheck != nil {
 		expr := validateAndResolveTypesInExpr(b, &tn, tableID, n.Exprs.WithCheck, tree.PolicyWithCheckExpr)
@@ -163,6 +165,7 @@ func addPolicyExpressions(
 			Expression: *expr,
 		})
 		usesTypeIDs = usesTypeIDs.Union(catalog.MakeDescriptorIDSet(expr.UsesTypeIDs...))
+		usesSequenceIDs = usesSequenceIDs.Union(catalog.MakeDescriptorIDSet(expr.UsesSequenceIDs...))
 	}
 
 	// If we had at least one expression then we need to add the policy deps.
@@ -172,7 +175,8 @@ func addPolicyExpressions(
 			PolicyID: policyID,
 			SeqNum:   1,
 			// SPILLY: I think we can have attributes for all of the things and remove the sequence number
-			UsesTypeIDs: usesTypeIDs.Ordered(),
+			UsesTypeIDs:     usesTypeIDs.Ordered(),
+			UsesSequenceIDs: usesSequenceIDs.Ordered(),
 		})
 	}
 }

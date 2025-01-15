@@ -290,6 +290,17 @@ func (i *immediateVisitor) UpdateTableBackReferencesInSequences(
 				}
 				ids.ForEach(forwardRefs.Add)
 			}
+			for _, p := range tbl.GetPolicies() {
+				for _, pexpr := range []*string{p.WithCheckExpr, p.UsingExpr} {
+					if pexpr != nil {
+						ids, err := sequenceIDsInExpr(*pexpr)
+						if err != nil {
+							return err
+						}
+						ids.ForEach(forwardRefs.Add)
+					}
+				}
+			}
 		}
 	}
 	for _, seqID := range op.SequenceIDs {

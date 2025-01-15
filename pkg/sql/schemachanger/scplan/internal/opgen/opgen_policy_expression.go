@@ -40,6 +40,15 @@ func init() {
 						BackReferencedTableID: this.TableID,
 					}
 				}),
+				emit(func(this *scpb.PolicyDeps) *scop.UpdateTableBackReferencesInSequences {
+					if len(this.UsesSequenceIDs) == 0 {
+						return nil
+					}
+					return &scop.UpdateTableBackReferencesInSequences{
+						SequenceIDs:           this.UsesSequenceIDs,
+						BackReferencedTableID: this.TableID,
+					}
+				}),
 			),
 		),
 		toAbsent(
@@ -54,6 +63,15 @@ func init() {
 						BackReferencedTableID: this.TableID,
 					}
 				}),
+				emit(func(this *scpb.PolicyDeps) *scop.UpdateTableBackReferencesInSequences {
+					if len(this.UsesSequenceIDs) == 0 {
+						return nil
+					}
+					return &scop.UpdateTableBackReferencesInSequences{
+						SequenceIDs:           this.UsesSequenceIDs,
+						BackReferencedTableID: this.TableID,
+					}
+				}),
 			),
 		),
 	)
@@ -65,15 +83,6 @@ func init() {
 				emit(func(this *scpb.PolicyWithCheckExpr) *scop.AddPolicyExpression {
 					return emitAddPolicyExpression(this.TableID, this.PolicyID, this.Expr, true)
 				}),
-				emit(func(this *scpb.PolicyWithCheckExpr) *scop.UpdateTableBackReferencesInSequences {
-					if len(this.UsesSequenceIDs) == 0 {
-						return nil
-					}
-					return &scop.UpdateTableBackReferencesInSequences{
-						SequenceIDs:           this.UsesSequenceIDs,
-						BackReferencedTableID: this.TableID,
-					}
-				}),
 				// SPILLY - emit backreferences for functions
 			),
 		),
@@ -82,15 +91,6 @@ func init() {
 			to(scpb.Status_ABSENT,
 				emit(func(this *scpb.PolicyWithCheckExpr) *scop.RemovePolicyExpression {
 					return emitRemovePolicyExpression(this.TableID, this.PolicyID, this.Expr, true)
-				}),
-				emit(func(this *scpb.PolicyWithCheckExpr) *scop.UpdateTableBackReferencesInSequences {
-					if len(this.UsesSequenceIDs) == 0 {
-						return nil
-					}
-					return &scop.UpdateTableBackReferencesInSequences{
-						SequenceIDs:           this.UsesSequenceIDs,
-						BackReferencedTableID: this.TableID,
-					}
 				}),
 				// SPILLY - emit backreferences for functions
 			),
@@ -104,15 +104,6 @@ func init() {
 				emit(func(this *scpb.PolicyUsingExpr) *scop.AddPolicyExpression {
 					return emitAddPolicyExpression(this.TableID, this.PolicyID, this.Expr, false)
 				}),
-				emit(func(this *scpb.PolicyUsingExpr) *scop.UpdateTableBackReferencesInSequences {
-					if len(this.UsesSequenceIDs) == 0 {
-						return nil
-					}
-					return &scop.UpdateTableBackReferencesInSequences{
-						SequenceIDs:           this.UsesSequenceIDs,
-						BackReferencedTableID: this.TableID,
-					}
-				}),
 				// SPILLY - emit backreferences for functions
 			),
 		),
@@ -121,15 +112,6 @@ func init() {
 			to(scpb.Status_ABSENT,
 				emit(func(this *scpb.PolicyUsingExpr) *scop.RemovePolicyExpression {
 					return emitRemovePolicyExpression(this.TableID, this.PolicyID, this.Expr, false)
-				}),
-				emit(func(this *scpb.PolicyUsingExpr) *scop.UpdateTableBackReferencesInSequences {
-					if len(this.UsesSequenceIDs) == 0 {
-						return nil
-					}
-					return &scop.UpdateTableBackReferencesInSequences{
-						SequenceIDs:           this.UsesSequenceIDs,
-						BackReferencedTableID: this.TableID,
-					}
 				}),
 				// SPILLY - emit backreferences for functions
 			),

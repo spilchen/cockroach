@@ -325,4 +325,27 @@ CREATE POLICY p1 on z1 WITH CHECK (c1::greeting = 'hi'::greeting);
 statement ok
 DROP TABLE z1;
 
+subtest seq_ref
+
+statement ok
+CREATE SEQUENCE seq1;
+
+statement ok
+CREATE TABLE pws ();
+
+statement ok
+CREATE POLICY p1 on pws AS RESTRICTIVE WITH CHECK (nextval('seq1') < 100);
+
+statement error pq: cannot drop sequence seq1 because other objects depend on it
+DROP SEQUENCE seq1;
+
+statement ok
+DROP POLICY p1 on pws;
+
+statement ok
+DROP SEQUENCE seq1;
+
+statement ok
+DROP TABLE pws;
+
 subtest end
