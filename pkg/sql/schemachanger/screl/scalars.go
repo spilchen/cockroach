@@ -131,7 +131,7 @@ func VersionSupportsElementUse(el scpb.Element, version clusterversion.ClusterVe
 		// These elements need v24.3 so they can be used without checking any version gates.
 		return true
 	case *scpb.NamedRangeZoneConfig, *scpb.Policy, *scpb.PolicyName, *scpb.PolicyRole,
-		*scpb.PolicyUsingExpr, *scpb.PolicyWithCheckExpr:
+		*scpb.PolicyUsingExpr, *scpb.PolicyWithCheckExpr, *scpb.PolicyDeps: // SPILLY - need to use a new version
 		return version.IsActive(clusterversion.V25_1)
 	default:
 		panic(errors.AssertionFailedf("unknown element %T", el))
