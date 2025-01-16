@@ -557,6 +557,35 @@ func ValidateComputedColumnExpressionDoesNotDependOnColumn(
 	return nil
 }
 
+// ValidatePolicyExpressionsDoNotDependOnColumn will check if the dependendCol
+// has a dependency on any expressions defined for row-level security policies.
+func ValidatePolicyExpressionsDoNotDependOnColumn(
+	tableDesc catalog.TableDescriptor, dependentCol catalog.Column, objType, op string,
+) error {
+	for _, p := range tableDesc.GetPolicies() {
+		checkExpr := func(expr string) error {
+			if hasRef, err := validateExpressionDoesNotDependOnColumn(tableDesc, expr, dependentCol.GetID()); err != nil {
+				return err
+			} else if hasRef {
+				return sqlerrors.NewAlterDependsOnPolicyExprError(op, objType,
+					string(dependentCol.ColName()))
+			}
+			return nil
+		}
+		if p.UsingExpr != nil {
+			if err := checkExpr(*p.UsingExpr); err != nil {
+				return err
+			}
+		}
+		if p.WithCheckExpr != nil {
+			if err := checkExpr(*p.WithCheckExpr); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // ValidatePartialIndex verifies that we have no partial indexes
 // that reference the column through the partial index's predicate.
 func ValidatePartialIndex(

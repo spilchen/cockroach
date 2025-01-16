@@ -375,4 +375,68 @@ DROP FUNCTION is_valid;
 statement ok
 DROP TABLE funcref;
 
+subtest col_ref
+
+statement ok
+CREATE TABLE colref (C1 INT, C2 INT, C3 INT);
+
+statement ok
+CREATE POLICY p1 ON colref USING (c1 < 10);
+
+statement ok
+CREATE POLICY p2 ON colref WITH CHECK (c2 < 100);
+
+# Attempt to alter/drop column referenced in USING expression
+statement error pq: cannot drop column "c1" because it is referenced in a policy expression
+ALTER TABLE colref DROP COLUMN c1;
+
+statement ok
+SET use_declarative_schema_changer = 'off';
+
+statement error pq: cannot drop column "c1" because it is referenced in a policy expression
+ALTER TABLE colref DROP COLUMN c1;
+
+statement ok
+SET use_declarative_schema_changer = $use_decl_sc;
+
+statement error pq: cannot alter type of column "c1" because it is referenced in a policy expression
+ALTER TABLE colref ALTER COLUMN c1 SET DATA TYPE TEXT USING c1::text;
+
+statement ok
+DROP POLICY p1 ON colref;
+
+statement ok
+ALTER TABLE colref ALTER COLUMN c1 SET DATA TYPE TEXT USING c1::text;
+
+statement ok
+ALTER TABLE colref DROP COLUMN c1;
+
+# Repeat for a column referenced with WITH CHECK expression
+statement error pq: cannot drop column "c2" because it is referenced in a policy expression
+ALTER TABLE colref DROP COLUMN c2;
+
+statement ok
+SET use_declarative_schema_changer = 'off';
+
+statement error pq: cannot drop column "c2" because it is referenced in a policy expression
+ALTER TABLE colref DROP COLUMN c2;
+
+statement ok
+SET use_declarative_schema_changer = $use_decl_sc;
+
+statement error pq: cannot alter type of column "c2" because it is referenced in a policy expression
+ALTER TABLE colref ALTER COLUMN c2 SET DATA TYPE TEXT USING c2::text;
+
+statement ok
+DROP POLICY p2 ON colref;
+
+statement ok
+ALTER TABLE colref ALTER COLUMN c2 SET DATA TYPE TEXT USING c2::text;
+
+statement ok
+ALTER TABLE colref DROP COLUMN c2;
+
+statement ok
+DROP TABLE colref;
+
 subtest end
