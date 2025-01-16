@@ -716,24 +716,18 @@ message PolicyDescriptor {
   // RoleNames is a list of roles that this policy applies to.
   repeated string role_names = 5;
 
-  // SPILLY - double check postgres behaviour when omitting exprs. Is it
-  // possible to omit the using expression and not the with check. In that case
-  // having no using expression is virable. So, maybe downplay this part of the
-  // comment??
-
   // The next two fields are the expressions to use for the policy. It is not
   // correct to use either expression as output to display to a user. User
   // defined types within the expressions have been serialized in a internal
   // format. Instead, use one of the schemaexpr.FormatExpr* functions.
 
-  // UsingExpr is the expression applied for reading existing rows. If omitted,
-  // the policy will not be enforced. While this behavior may seem counterintuitive
-  // since it effectively renders the policy inactive, it aligns with postgres's
-  // implementation and is therefore permitted here.
+  // UsingExpr defines the condition applied to read existing rows. If this
+  // field is omitted, the policy will not be used for reads.
   optional string using_expr = 6 [(gogoproto.nullable) = true];
 
-  // WithCheck is the expression applied when writing new rows. If omitted,
-  // the UsingExpr will be used as a fallback.
+  // WithCheck defines the condition applied to validate new rows during
+  // write operations (e.g., INSERT or UPDATE). If omitted, the UsingExpr
+  // will serve as a fallback, provided it is defined.
   optional string with_check_expr = 7 [(gogoproto.nullable) = true];
 
   // DependsOnTypes are the IDs of all user defined types that the policy
