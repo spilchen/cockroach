@@ -11,11 +11,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 )
 
-// SPILLY - do we need an opgen rule  to ensure ordering of policydeps with the
-// expressions? At the least, for drop we want to call
-// UpdateTableBackReferenceInTypes after we have added a new PolicyDeps (if
-// replacing) or the policy has been completely removed.
-
 func init() {
 	opRegistry.register((*scpb.PolicyUsingExpr)(nil),
 		toPublic(

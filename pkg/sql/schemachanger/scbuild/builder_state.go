@@ -910,7 +910,6 @@ func (b *builderState) BackReferences(id catid.DescID) scbuildstmt.ElementResult
 			if es.current == scpb.Status_PUBLIC || es.target != scpb.ToPublic {
 				continue
 			}
-			// SPILLY - do we need an attribute?
 			descID := screl.GetDescID(es.element)
 			if ids.Contains(descID) || descID == id {
 				continue

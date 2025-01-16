@@ -133,7 +133,13 @@ func (desc *wrapper) GetReferencedDescIDs() (catalog.DescriptorIDSet, error) {
 		for _, id := range p.DependsOnTypes {
 			ids.Add(id)
 		}
-		// SPILLY - add more dependencies here
+		for _, id := range p.DependsOnSequences {
+			ids.Add(id)
+		}
+		// SPILLY - think about renaming DependsOnSequences to DependsOnRelations
+		for _, id := range p.DependsOnFunctions {
+			ids.Add(id)
+		}
 	}
 	return ids, nil
 }
@@ -255,7 +261,12 @@ func (desc *wrapper) ValidateForwardReferences(
 		for _, id := range policy.DependsOnTypes {
 			vea.Report(catalog.ValidateOutboundTypeRef(id, vdg))
 		}
-		// SPILLY - add validation for forward references in policies for other things
+		for _, id := range policy.DependsOnSequences {
+			vea.Report(catalog.ValidateOutboundTableRef(id, vdg))
+		}
+		for _, id := range policy.DependsOnFunctions {
+			vea.Report(catalog.ValidateOutboundFunctionRef(id, vdg))
+		}
 	}
 }
 

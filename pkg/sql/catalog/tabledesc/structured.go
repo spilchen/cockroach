@@ -293,6 +293,19 @@ func ForEachExprStringInTableDesc(
 		}
 		return f(&t.FuncBody, catalog.PLpgSQLStmt)
 	}
+	doPolicy := func(p *descpb.PolicyDescriptor) error {
+		if p.UsingExpr != nil {
+			if err := f(p.UsingExpr, catalog.SQLExpr); err != nil {
+				return err
+			}
+		}
+		if p.WithCheckExpr != nil {
+			if err := f(p.WithCheckExpr, catalog.SQLExpr); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	// Process columns.
 	for i := range desc.Columns {
@@ -351,6 +364,13 @@ func ForEachExprStringInTableDesc(
 			return err
 		}
 	}
+
+	// Process all policies.
+	for i := range desc.Policies {
+		if err := doPolicy(&desc.Policies[i]); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -368,6 +388,10 @@ func (desc *wrapper) GetAllReferencedTableIDs() descpb.IDs {
 	// Add trigger dependencies.
 	for i := range desc.Triggers {
 		ids = ids.Union(catalog.MakeDescriptorIDSet(desc.Triggers[i].DependsOn...))
+	}
+	// Add policy dependencies.
+	for i := range desc.Policies {
+		ids = ids.Union(catalog.MakeDescriptorIDSet(desc.Policies[i].DependsOnSequences...))
 	}
 	// Add view dependencies.
 	ids = ids.Union(catalog.MakeDescriptorIDSet(desc.DependsOn...))

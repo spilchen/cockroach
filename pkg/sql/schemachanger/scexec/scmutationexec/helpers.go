@@ -269,7 +269,6 @@ func enqueueIndexMutation(
 
 func updateColumnExprSequenceUsage(d *descpb.ColumnDescriptor) error {
 	var all catalog.DescriptorIDSet
-	// SPILLY - this is interesting. We have 3 expressions, we generate the sequence IDs used in all of them. Does this code need to now look at all policies get the expressions from there?
 	for _, expr := range [3]*string{d.ComputeExpr, d.DefaultExpr, d.OnUpdateExpr} {
 		if expr == nil {
 			continue

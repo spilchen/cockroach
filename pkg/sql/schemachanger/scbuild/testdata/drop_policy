@@ -26,8 +26,8 @@ DROP POLICY "first policy" on defaultdb.foo;
   {expr: 'i > 0:::INT8', policyId: 1, referencedColumnIds: [1], tableId: 105}
 - [[PolicyWithCheckExpr:{DescID: 105, Expr: (i % 2:::INT8) = 0:::INT8, PolicyID: 1}, ABSENT], PUBLIC]
   {expr: '(i % 2:::INT8) = 0:::INT8', policyId: 1, referencedColumnIds: [1], tableId: 105}
-- [[PolicyDeps:{DescID: 105, PolicyID: 1, SeqNum: 1}, ABSENT], PUBLIC]
-  {policyId: 1, seqNum: 1, tableId: 105}
+- [[PolicyDeps:{DescID: 105, PolicyID: 1}, ABSENT], PUBLIC]
+  {policyId: 1, tableId: 105}
 - [[TableData:{DescID: 105, ReferencedDescID: 100}, PUBLIC], PUBLIC]
   {databaseId: 100, tableId: 105}
 
@@ -44,8 +44,8 @@ DROP POLICY "second policy" on defaultdb.foo CASCADE;
   {policyId: 2, roleName: public, tableId: 105}
 - [[PolicyUsingExpr:{DescID: 105, Expr: false, PolicyID: 2}, ABSENT], PUBLIC]
   {expr: "false", policyId: 2, tableId: 105}
-- [[PolicyDeps:{DescID: 105, PolicyID: 2, SeqNum: 1}, ABSENT], PUBLIC]
-  {policyId: 2, seqNum: 1, tableId: 105}
+- [[PolicyDeps:{DescID: 105, PolicyID: 2}, ABSENT], PUBLIC]
+  {policyId: 2, tableId: 105}
 - [[TableData:{DescID: 105, ReferencedDescID: 100}, PUBLIC], PUBLIC]
   {databaseId: 100, tableId: 105}
 
@@ -64,8 +64,8 @@ DROP POLICY "third policy" on defaultdb.foo RESTRICT;
   {policyId: 3, roleName: fred, tableId: 105}
 - [[PolicyWithCheckExpr:{DescID: 105, Expr: i < 0:::INT8, PolicyID: 3}, ABSENT], PUBLIC]
   {expr: 'i < 0:::INT8', policyId: 3, referencedColumnIds: [1], tableId: 105}
-- [[PolicyDeps:{DescID: 105, PolicyID: 3, SeqNum: 1}, ABSENT], PUBLIC]
-  {policyId: 3, seqNum: 1, tableId: 105}
+- [[PolicyDeps:{DescID: 105, PolicyID: 3}, ABSENT], PUBLIC]
+  {policyId: 3, tableId: 105}
 - [[TableData:{DescID: 105, ReferencedDescID: 100}, PUBLIC], PUBLIC]
   {databaseId: 100, tableId: 105}
 
@@ -98,8 +98,8 @@ DROP POLICY "fifth policy" on defaultdb.foo;
   {policyId: 5, roleName: public, tableId: 105}
 - [[PolicyUsingExpr:{DescID: 105, Expr: [FUNCTION 100104](i), PolicyID: 5}, ABSENT], PUBLIC]
   {expr: '[FUNCTION 100104](i)', policyId: 5, referencedColumnIds: [1], tableId: 105, usesFunctionIds: [104]}
-- [[PolicyDeps:{DescID: 105, ReferencedFunctionIDs: [104], PolicyID: 5, SeqNum: 1}, ABSENT], PUBLIC]
-  {policyId: 5, seqNum: 1, tableId: 105, usesFunctionIds: [104]}
+- [[PolicyDeps:{DescID: 105, ReferencedFunctionIDs: [104], PolicyID: 5}, ABSENT], PUBLIC]
+  {policyId: 5, tableId: 105, usesFunctionIds: [104]}
 - [[TableData:{DescID: 105, ReferencedDescID: 100}, PUBLIC], PUBLIC]
   {databaseId: 100, tableId: 105}
 
@@ -116,7 +116,7 @@ DROP POLICY "sixth policy" on defaultdb.foo;
   {policyId: 6, roleName: public, tableId: 105}
 - [[PolicyWithCheckExpr:{DescID: 105, Expr: [FUNCTION 100104](i), PolicyID: 6}, ABSENT], PUBLIC]
   {expr: '[FUNCTION 100104](i)', policyId: 6, referencedColumnIds: [1], tableId: 105, usesFunctionIds: [104]}
-- [[PolicyDeps:{DescID: 105, ReferencedFunctionIDs: [104], PolicyID: 6, SeqNum: 1}, ABSENT], PUBLIC]
-  {policyId: 6, seqNum: 1, tableId: 105, usesFunctionIds: [104]}
+- [[PolicyDeps:{DescID: 105, ReferencedFunctionIDs: [104], PolicyID: 6}, ABSENT], PUBLIC]
+  {policyId: 6, tableId: 105, usesFunctionIds: [104]}
 - [[TableData:{DescID: 105, ReferencedDescID: 100}, PUBLIC], PUBLIC]
   {databaseId: 100, tableId: 105}

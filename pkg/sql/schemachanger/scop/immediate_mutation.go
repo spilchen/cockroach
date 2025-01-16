@@ -620,24 +620,26 @@ type RemovePolicyRole struct {
 	Role scpb.PolicyRole
 }
 
-// SPILLY - comment
+// AddPolicyUsingExpression adds a USING expression to a policy.
 type AddPolicyUsingExpression struct {
 	immediateMutationOp
 	El scpb.PolicyUsingExpr
 }
 
+// AddPolicyWithCheckExpression adds a WITH CHECK expression to a policy.
 type AddPolicyWithCheckExpression struct {
 	immediateMutationOp
 	El scpb.PolicyWithCheckExpr
 }
 
-// SPILLY - comment
+// RemovePolicyUsingExpression removes a USING expression from a policy.
 type RemovePolicyUsingExpression struct {
 	immediateMutationOp
 	TableID  descpb.ID
 	PolicyID descpb.PolicyID
 }
 
+// RemovePolicyWithCheckExpression removes a WITH CHECK expression from a policy.
 type RemovePolicyWithCheckExpression struct {
 	immediateMutationOp
 	TableID  descpb.ID
