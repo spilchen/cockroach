@@ -32,11 +32,11 @@ func init() {
 					}
 				}),
 				emit(func(this *scpb.PolicyDeps) *scop.UpdateTableBackReferencesInSequences {
-					if len(this.UsesSequenceIDs) == 0 {
+					if len(this.UsesRelationIDs) == 0 {
 						return nil
 					}
 					return &scop.UpdateTableBackReferencesInSequences{
-						SequenceIDs:           this.UsesSequenceIDs,
+						SequenceIDs:           this.UsesRelationIDs,
 						BackReferencedTableID: this.TableID,
 					}
 				}),
@@ -65,11 +65,11 @@ func init() {
 					}
 				}),
 				emit(func(this *scpb.PolicyDeps) *scop.UpdateTableBackReferencesInSequences {
-					if len(this.UsesSequenceIDs) == 0 {
+					if len(this.UsesRelationIDs) == 0 {
 						return nil
 					}
 					return &scop.UpdateTableBackReferencesInSequences{
-						SequenceIDs:           this.UsesSequenceIDs,
+						SequenceIDs:           this.UsesRelationIDs,
 						BackReferencedTableID: this.TableID,
 					}
 				}),

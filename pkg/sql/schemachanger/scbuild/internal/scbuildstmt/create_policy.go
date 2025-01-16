@@ -145,7 +145,7 @@ func addPolicyExpressions(
 	// We maintain the forward references for both expressions in a single
 	// PolicyDeps elements. These vars are used to manage that.
 	var usesTypeIDs catalog.DescriptorIDSet
-	var usesSequenceIDs catalog.DescriptorIDSet
+	var usesRelationIDs catalog.DescriptorIDSet
 	var usesFunctionIDs catalog.DescriptorIDSet
 
 	if n.Exprs.Using != nil {
@@ -156,7 +156,7 @@ func addPolicyExpressions(
 			Expression: *expr,
 		})
 		usesTypeIDs = catalog.MakeDescriptorIDSet(expr.UsesTypeIDs...)
-		usesSequenceIDs = catalog.MakeDescriptorIDSet(expr.UsesSequenceIDs...)
+		usesRelationIDs = catalog.MakeDescriptorIDSet(expr.UsesSequenceIDs...)
 		usesFunctionIDs = catalog.MakeDescriptorIDSet(expr.UsesFunctionIDs...)
 	}
 	if n.Exprs.WithCheck != nil {
@@ -167,7 +167,7 @@ func addPolicyExpressions(
 			Expression: *expr,
 		})
 		usesTypeIDs = usesTypeIDs.Union(catalog.MakeDescriptorIDSet(expr.UsesTypeIDs...))
-		usesSequenceIDs = usesSequenceIDs.Union(catalog.MakeDescriptorIDSet(expr.UsesSequenceIDs...))
+		usesRelationIDs = usesRelationIDs.Union(catalog.MakeDescriptorIDSet(expr.UsesSequenceIDs...))
 		usesFunctionIDs = usesFunctionIDs.Union(catalog.MakeDescriptorIDSet(expr.UsesFunctionIDs...))
 	}
 
@@ -177,7 +177,7 @@ func addPolicyExpressions(
 			TableID:         tableID,
 			PolicyID:        policyID,
 			UsesTypeIDs:     usesTypeIDs.Ordered(),
-			UsesSequenceIDs: usesSequenceIDs.Ordered(),
+			UsesRelationIDs: usesRelationIDs.Ordered(),
 			UsesFunctionIDs: usesFunctionIDs.Ordered(),
 		})
 	}

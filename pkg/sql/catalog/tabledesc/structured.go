@@ -391,7 +391,7 @@ func (desc *wrapper) GetAllReferencedTableIDs() descpb.IDs {
 	}
 	// Add policy dependencies.
 	for i := range desc.Policies {
-		ids = ids.Union(catalog.MakeDescriptorIDSet(desc.Policies[i].DependsOnSequences...))
+		ids = ids.Union(catalog.MakeDescriptorIDSet(desc.Policies[i].DependsOnRelations...))
 	}
 	// Add view dependencies.
 	ids = ids.Union(catalog.MakeDescriptorIDSet(desc.DependsOn...))

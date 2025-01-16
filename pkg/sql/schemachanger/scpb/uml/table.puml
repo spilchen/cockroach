@@ -310,7 +310,7 @@ object PolicyDeps
 PolicyDeps :  TableID
 PolicyDeps :  PolicyID
 PolicyDeps : []UsesTypeIDs
-PolicyDeps : []UsesSequenceIDs
+PolicyDeps : []UsesRelationIDs
 PolicyDeps : []UsesFunctionIDs
 
 object PolicyName

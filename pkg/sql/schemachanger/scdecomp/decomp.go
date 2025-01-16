@@ -922,7 +922,7 @@ func (w *walkCtx) walkPolicy(tbl catalog.TableDescriptor, p *descpb.PolicyDescri
 			TableID:         tbl.GetID(),
 			PolicyID:        p.ID,
 			UsesTypeIDs:     p.DependsOnTypes,
-			UsesSequenceIDs: p.DependsOnSequences,
+			UsesRelationIDs: p.DependsOnRelations,
 			UsesFunctionIDs: p.DependsOnFunctions,
 		})
 	}

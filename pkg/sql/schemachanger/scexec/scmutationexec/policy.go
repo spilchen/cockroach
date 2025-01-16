@@ -145,7 +145,7 @@ func (i *immediateVisitor) SetPolicyForwardReferences(
 		return err
 	}
 	policy.DependsOnTypes = op.Deps.UsesTypeIDs
-	policy.DependsOnSequences = op.Deps.UsesSequenceIDs
+	policy.DependsOnRelations = op.Deps.UsesRelationIDs
 	policy.DependsOnFunctions = op.Deps.UsesFunctionIDs
 	return nil
 }
