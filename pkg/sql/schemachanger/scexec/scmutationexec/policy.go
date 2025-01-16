@@ -100,3 +100,49 @@ func (i *immediateVisitor) RemovePolicyRole(ctx context.Context, op scop.RemoveP
 		"role %q does not exist in policy %d on table %d",
 		op.Role.RoleName, op.Role.PolicyID, op.Role.TableID)
 }
+
+func (i *immediateVisitor) AddPolicyWithCheckExpression(
+	ctx context.Context, op scop.AddPolicyWithCheckExpression,
+) error {
+	policy, err := i.checkOutPolicy(ctx, op.El.TableID, op.El.PolicyID)
+	if err != nil {
+		return err
+	}
+	expr := string(op.El.Expr)
+	policy.WithCheckExpr = &expr
+	return nil
+}
+
+func (i *immediateVisitor) RemovePolicyWithCheckExpression(
+	ctx context.Context, op scop.RemovePolicyWithCheckExpression,
+) error {
+	policy, err := i.checkOutPolicy(ctx, op.TableID, op.PolicyID)
+	if err != nil {
+		return err
+	}
+	policy.WithCheckExpr = nil
+	return nil
+}
+
+func (i *immediateVisitor) AddPolicyUsingExpression(
+	ctx context.Context, op scop.AddPolicyUsingExpression,
+) error {
+	policy, err := i.checkOutPolicy(ctx, op.El.TableID, op.El.PolicyID)
+	if err != nil {
+		return err
+	}
+	expr := string(op.El.Expr)
+	policy.UsingExpr = &expr
+	return nil
+}
+
+func (i *immediateVisitor) RemovePolicyUsingExpression(
+	ctx context.Context, op scop.RemovePolicyUsingExpression,
+) error {
+	policy, err := i.checkOutPolicy(ctx, op.TableID, op.PolicyID)
+	if err != nil {
+		return err
+	}
+	policy.UsingExpr = nil
+	return nil
+}
