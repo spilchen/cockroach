@@ -9,6 +9,7 @@ go_library(
         "family.go",
         "index.go",
         "object.go",
+        "policy.go",
         "schema.go",
         "sequence.go",
         "table.go",

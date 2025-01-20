@@ -1466,6 +1466,17 @@ func (ot *optTable) Trigger(i int) cat.Trigger {
 	return &ot.triggers[i]
 }
 
+// IsRowLevelSecurityEnabled is part of the cat.Table interface.
+func (ot *optTable) IsRowLevelSecurityEnabled() bool { return false }
+
+// PolicyCount is part of the cat.Table interface
+func (ot *optTable) PolicyCount(polType tree.PolicyType) int { return 0 }
+
+// Policy is part of the cat.Table interface
+func (ot *optTable) Policy(polType tree.PolicyType, i int) cat.Policy {
+	panic(errors.AssertionFailedf("not implemented"))
+}
+
 // lookupColumnOrdinal returns the ordinal of the column with the given ID. A
 // cache makes the lookup O(1).
 func (ot *optTable) lookupColumnOrdinal(colID descpb.ColumnID) (int, error) {
@@ -2571,6 +2582,17 @@ func (ot *optVirtualTable) TriggerCount() int {
 
 // Trigger is part of the cat.Table interface.
 func (ot *optVirtualTable) Trigger(i int) cat.Trigger {
+	panic(errors.AssertionFailedf("no triggers"))
+}
+
+// IsRowLevelSecurityEnabled is part of the cat.Table interface.
+func (ot *optVirtualTable) IsRowLevelSecurityEnabled() bool { return false }
+
+// PolicyCount is part of the cat.Table interface
+func (ot *optVirtualTable) PolicyCount(polType tree.PolicyType) int { return 0 }
+
+// Policy is part of the cat.Table interface
+func (ot *optVirtualTable) Policy(polType tree.PolicyType, i int) cat.Policy {
 	panic(errors.AssertionFailedf("no triggers"))
 }
 

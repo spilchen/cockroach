@@ -582,6 +582,14 @@ func (tc *Catalog) executeDDLStmtWithIndexVersion(
 		tc.DropTrigger(stmt)
 		return "", nil
 
+	case *tree.CreatePolicy:
+		tc.CreatePolicy(stmt)
+		return "", nil
+
+	case *tree.DropPolicy:
+		tc.DropPolicy(stmt)
+		return "", nil
+
 	default:
 		return "", errors.AssertionFailedf("unsupported statement: %v", stmt)
 	}
@@ -799,6 +807,9 @@ type Table struct {
 	implicitRBRIndexElem *tree.IndexElem
 
 	homeRegion string
+
+	rlsEnabled bool
+	policies   map[tree.PolicyType][]cat.Policy
 }
 
 var _ cat.Table = &Table{}
@@ -1072,6 +1083,39 @@ func (tt *Table) TriggerCount() int {
 // Trigger is a part of the cat.Table interface.
 func (tt *Table) Trigger(i int) cat.Trigger {
 	return &tt.Triggers[i]
+}
+
+// IsRowLevelSecurityEnabled is part of the cat.Table interface.
+func (tt *Table) IsRowLevelSecurityEnabled() bool { return tt.rlsEnabled }
+
+// PolicyCount is part of the cat.Table interface
+func (tt *Table) PolicyCount(polType tree.PolicyType) int {
+	pols := tt.policies[polType]
+	return len(pols)
+}
+
+// Policy is part of the cat.Table interface
+func (tt *Table) Policy(policyType tree.PolicyType, index int) cat.Policy {
+	policies, exists := tt.policies[policyType]
+	if !exists || index >= len(policies) {
+		panic(errors.AssertionFailedf("policy of type %v at index %d not found", policyType, index))
+	}
+	return policies[index]
+}
+
+// findPolicyByName will lookup the policy by its name. It returns it's policy
+// type and index within that policy type slice so that callers can do removal
+// if needed.
+func (tt *Table) findPolicyByName(policyName tree.Name) (cat.Policy, tree.PolicyType, int) {
+	for _, pt := range []tree.PolicyType{tree.PolicyTypePermissive, tree.PolicyTypeRestrictive} {
+		for i := range tt.PolicyCount(pt) {
+			p := tt.Policy(pt, i)
+			if p.Name() == policyName {
+				return p, pt, i
+			}
+		}
+	}
+	return nil, tree.PolicyTypeDefault, 0
 }
 
 // Index implements the cat.Index interface for testing purposes.
@@ -1822,4 +1866,40 @@ func (t *Trigger) FuncBody() string {
 
 func (t *Trigger) Enabled() bool {
 	return t.TriggerEnabled
+}
+
+// Policy implements the cat.Policy interface
+type Policy struct {
+	name          tree.Name
+	usingExpr     string
+	withCheckExpr string
+	command       tree.PolicyCommand
+	roles         map[string]struct{}
+}
+
+// Name implements the cat.Policy interface
+func (p *Policy) Name() tree.Name {
+	return p.name
+}
+
+// GetUsingExpr implements the cat.Policy interface
+func (p *Policy) GetUsingExpr() string {
+	return p.usingExpr
+}
+
+// GetWithCheckExpr implements the cat.Policy interface
+func (p *Policy) GetWithCheckExpr() string {
+	return p.withCheckExpr
+}
+
+// AppliesTo implements the cat.Policy interface
+func (p *Policy) AppliesTo(user username.SQLUsername, cmd tree.PolicyCommand) bool {
+	// If no roles are specified, assume the policy applies to all users (public role).
+	if p.roles != nil {
+		if _, found := p.roles[user.Normalized()]; !found {
+			return false
+		}
+	}
+
+	return p.command == tree.PolicyCommandAll || p.command == cmd
 }
