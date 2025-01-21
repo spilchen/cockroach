@@ -3015,7 +3015,7 @@ func getOptPolicies(descPolicies []descpb.PolicyDescriptor) map[tree.PolicyType]
 	policies := make(map[tree.PolicyType][]optPolicy, 2)
 	policies[tree.PolicyTypePermissive] = make([]optPolicy, 0, len(descPolicies))
 	policies[tree.PolicyTypeRestrictive] = make([]optPolicy, 0, len(descPolicies))
-	for i := range policies {
+	for i := range descPolicies {
 		descPolicy := &descPolicies[i]
 		roles := make(map[string]struct{})
 		for _, r := range descPolicy.RoleNames {
@@ -3033,13 +3033,11 @@ func getOptPolicies(descPolicies []descpb.PolicyDescriptor) map[tree.PolicyType]
 			targetPolicyType = tree.PolicyTypeRestrictive
 		}
 		policies[targetPolicyType] = append(policies[targetPolicyType], optPolicy{
-			name: tree.Name(descPolicy.Name),
-			// SPILLY - this needs by change
-			//usingExpr:     descPolicy.UsingExpr,
-			//withCheckExpr: descPolicy.WithCheckExpr,
-			usingExpr: "c1 < 5", // SPILLY - hack
-			command:   descPolicy.Command,
-			roles:     roles,
+			name:          tree.Name(descPolicy.Name),
+			usingExpr:     descPolicy.UsingExpr,
+			withCheckExpr: descPolicy.WithCheckExpr,
+			command:       descPolicy.Command,
+			roles:         roles,
 		})
 	}
 	return policies

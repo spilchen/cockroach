@@ -37,7 +37,6 @@ func (tc *Catalog) CreatePolicy(n *tree.CreatePolicy) {
 		roles:   make(map[string]struct{}),
 		command: n.Cmd,
 	}
-	// SPILLY - we need to map the tree.PolicyType to catpb.PolicyType. We have those functions available. Should be move to catpb and externalized?
 	if n.Cmd == tree.PolicyCommandDefault {
 		policy.command = tree.PolicyCommandAll
 	}
@@ -48,7 +47,7 @@ func (tc *Catalog) CreatePolicy(n *tree.CreatePolicy) {
 		policy.withCheckExpr = n.Exprs.WithCheck.String()
 	}
 	// If all roles are omitted, we default to adding the PUBLIC role so that it
-	// applies to everyone.
+	// applies to everyone. We set roles to nil to indicate that.
 	if len(n.Roles) == 0 {
 		policy.roles = nil
 	}
