@@ -1,0 +1,19 @@
+exec-ddl
+CREATE TABLE t1 (c1 INT);
+----
+
+exec-ddl
+CREATE POLICY p1 on t1 USING (c1 % 2 = 0);
+----
+
+exec-ddl
+ALTER TABLE t1 ENABLE ROW LEVEL SECURITY;
+----
+
+build
+SELECT c1 FROM T1;
+----
+project
+ ├── columns: c1:1
+ └── scan t1
+      └── columns: c1:1 rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4

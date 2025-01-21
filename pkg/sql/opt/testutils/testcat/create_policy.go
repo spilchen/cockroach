@@ -7,6 +7,7 @@ package testcat
 
 import (
 	"context"
+
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
@@ -36,6 +37,7 @@ func (tc *Catalog) CreatePolicy(n *tree.CreatePolicy) {
 		roles:   make(map[string]struct{}),
 		command: n.Cmd,
 	}
+	// SPILLY - we need to map the tree.PolicyType to catpb.PolicyType. We have those functions available. Should be move to catpb and externalized?
 	if n.Cmd == tree.PolicyCommandDefault {
 		policy.command = tree.PolicyCommandAll
 	}

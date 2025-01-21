@@ -335,6 +335,7 @@ func (mb *mutationBuilder) buildAntiJoinForDoNothingArbiter(
 		locking,
 		inScope,
 		true, /* disableNotVisibleIndex */
+		cat.PolicyScopeInsert,
 	)
 
 	// If the index is a unique partial index, then rows that are not in the
@@ -473,7 +474,8 @@ func (mb *mutationBuilder) buildLeftJoinForUpsertArbiter(
 		indexFlags,
 		locking,
 		inScope,
-		true, /* disableNotVisibleIndex */
+		true,                  /* disableNotVisibleIndex */
+		cat.PolicyScopeUpdate, // SPILLY this is UPSERT, is that INSERT or UPDATE or either??
 	)
 	// Set fetchColIDs to reference the columns created for the fetch values.
 	mb.setFetchColIDs(mb.fetchScope.cols)
@@ -690,7 +692,8 @@ func (h *arbiterPredicateHelper) tableScope() *scope {
 			nil, /* indexFlags */
 			noRowLocking,
 			h.mb.b.allocScope(),
-			false, /* disableNotVisibleIndex */
+			false,                 /* disableNotVisibleIndex */
+			cat.PolicyScopeSelect, // SPILLY - this feels wrong
 		)
 	}
 	return h.tableScopeLazy

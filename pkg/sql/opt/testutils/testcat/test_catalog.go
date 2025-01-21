@@ -1893,7 +1893,11 @@ func (p *Policy) GetWithCheckExpr() string {
 }
 
 // AppliesTo implements the cat.Policy interface
-func (p *Policy) AppliesTo(user username.SQLUsername, cmd tree.PolicyCommand) bool {
+func (p *Policy) AppliesTo(user username.SQLUsername, cmdScope cat.PolicyCommandScope) bool {
+	if cmdScope == cat.PolicyScopeExempt {
+		return false
+	}
+
 	// If no roles are specified, assume the policy applies to all users (public role).
 	if p.roles != nil {
 		if _, found := p.roles[user.Normalized()]; !found {
@@ -1901,5 +1905,18 @@ func (p *Policy) AppliesTo(user username.SQLUsername, cmd tree.PolicyCommand) bo
 		}
 	}
 
-	return p.command == tree.PolicyCommandAll || p.command == cmd
+	switch p.command {
+	case tree.PolicyCommandAll:
+		return true
+	case tree.PolicyCommandSelect:
+		return cmdScope == cat.PolicyScopeSelect
+	case tree.PolicyCommandInsert:
+		return cmdScope == cat.PolicyScopeInsert
+	case tree.PolicyCommandUpdate:
+		return cmdScope == cat.PolicyScopeUpdate
+	case tree.PolicyCommandDelete:
+		return cmdScope == cat.PolicyScopeDelete
+	default:
+		panic(errors.AssertionFailedf("unknown policy command %v", p.command))
+	}
 }

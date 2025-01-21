@@ -10,6 +10,24 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 )
 
+// PolicyCommandScope defines the scope of commands to which a policy is applied.
+// It specifies whether a policy applies to specific SQL operations or if an operation
+// is exempt from row-level security policies.
+type PolicyCommandScope int
+
+const (
+	// PolicyScopeSelect indicates that the policy applies to SELECT operations.
+	PolicyScopeSelect PolicyCommandScope = iota
+	// PolicyScopeInsert indicates that the policy applies to INSERT operations.
+	PolicyScopeInsert
+	// PolicyScopeUpdate indicates that the policy applies to UPDATE operations.
+	PolicyScopeUpdate
+	// PolicyScopeDelete indicates that the policy applies to DELETE operations.
+	PolicyScopeDelete
+	// PolicyScopeExempt indicates that the operation is exempt from row-level security policies.
+	PolicyScopeExempt
+)
+
 // Policy defines an interface for a row-level security (RLS) policy on a table.
 // Policies use expressions to filter rows during read operations and/or restrict
 // new rows during write operations.
@@ -29,5 +47,5 @@ type Policy interface {
 	GetWithCheckExpr() string
 
 	// AppliesTo checks whether the policy applies to the given usage.
-	AppliesTo(user username.SQLUsername, cmd tree.PolicyCommand) bool
+	AppliesTo(user username.SQLUsername, commandScope PolicyCommandScope) bool
 }
