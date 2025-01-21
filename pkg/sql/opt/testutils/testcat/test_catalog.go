@@ -8,6 +8,7 @@ package testcat
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"sort"
 	"time"
 
@@ -23,7 +24,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/parser/statements"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
-	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/roleoption"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
@@ -54,6 +54,13 @@ type Catalog struct {
 
 	udfs           map[string]*tree.ResolvedFunctionDefinition
 	revokedUDFOids intsets.Fast
+
+	users       map[username.SQLUsername]roleMembership
+	currentUser username.SQLUsername
+}
+
+type roleMembership struct {
+	isMemberOfAdminRole bool
 }
 
 type dataSource interface {
@@ -65,6 +72,9 @@ var _ cat.Catalog = &Catalog{}
 
 // New creates a new empty instance of the test catalog.
 func New() *Catalog {
+	users := make(map[username.SQLUsername]roleMembership)
+	users[username.RootUserName()] = roleMembership{isMemberOfAdminRole: true}
+
 	return &Catalog{
 		testSchema: Schema{
 			SchemaID: 1,
@@ -76,6 +86,8 @@ func New() *Catalog {
 			},
 			dataSources: make(map[string]dataSource),
 		},
+		users:       users,
+		currentUser: username.RootUserName(),
 	}
 }
 
@@ -306,7 +318,11 @@ func (tc *Catalog) CheckExecutionPrivilege(
 
 // HasAdminRole is part of the cat.Catalog interface.
 func (tc *Catalog) HasAdminRole(ctx context.Context) (bool, error) {
-	return true, nil
+	roleMembership, found := tc.users[tc.currentUser]
+	if !found {
+		return false, errors.AssertionFailedf("user %s not found", tc.currentUser)
+	}
+	return roleMembership.isMemberOfAdminRole, nil
 }
 
 // HasRoleOption is part of the cat.Catalog interface.
@@ -333,7 +349,7 @@ func (tc *Catalog) Optimizer() interface{} {
 
 // GetCurrentUser is part of the cat.Catalog interface.
 func (tc *Catalog) GetCurrentUser() username.SQLUsername {
-	return username.EmptyRoleName()
+	return tc.currentUser
 }
 
 // GetRoutineOwner is part of the cat.Catalog interface.
@@ -588,6 +604,14 @@ func (tc *Catalog) executeDDLStmtWithIndexVersion(
 
 	case *tree.DropPolicy:
 		tc.DropPolicy(stmt)
+		return "", nil
+
+	case *tree.SetVar:
+		tc.SetVar(stmt)
+		return "", nil
+
+	case *tree.CreateRole:
+		tc.CreateRole(stmt)
 		return "", nil
 
 	default:
