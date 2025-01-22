@@ -6,12 +6,14 @@
 package optbuilder
 
 import (
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
 	"github.com/cockroachdb/cockroach/pkg/sql/parser"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
+	"github.com/cockroachdb/errors"
 )
 
 // addRowLevelSecurityFilter adds a filter based on the expressions of
@@ -60,7 +62,7 @@ func (b *Builder) buildRowLevelSecurityUsingExpression(
 	for i := 0; i < tabMeta.Table.PolicyCount(tree.PolicyTypePermissive); i++ {
 		policy := tabMeta.Table.Policy(tree.PolicyTypePermissive, i)
 
-		if !policy.AppliesTo(b.checkPrivilegeUser, cmdScope) {
+		if !policy.AppliesToRole(b.checkPrivilegeUser) || !b.policyAppliesToCommandScope(policy, cmdScope) {
 			continue
 		}
 		strExpr := policy.GetUsingExpr()
@@ -75,4 +77,25 @@ func (b *Builder) buildRowLevelSecurityUsingExpression(
 	// TODO(136742): Add support for restrictive policies.
 
 	return
+}
+
+// AppliesTo implements the cat.Policy interface.
+func (b *Builder) policyAppliesToCommandScope(
+	policy cat.Policy, cmdScope cat.PolicyCommandScope,
+) bool {
+	cmd := policy.GetPolicyCommand()
+	switch cmd {
+	case catpb.PolicyCommand_ALL:
+		return true
+	case catpb.PolicyCommand_SELECT:
+		return cmdScope == cat.PolicyScopeSelect
+	case catpb.PolicyCommand_INSERT:
+		return cmdScope == cat.PolicyScopeInsert
+	case catpb.PolicyCommand_UPDATE:
+		return cmdScope == cat.PolicyScopeUpdate
+	case catpb.PolicyCommand_DELETE:
+		return cmdScope == cat.PolicyScopeDelete
+	default:
+		panic(errors.AssertionFailedf("unknown policy command %v", cmd))
+	}
 }

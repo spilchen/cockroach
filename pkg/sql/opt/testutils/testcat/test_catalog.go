@@ -16,6 +16,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/typedesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
@@ -1897,7 +1898,7 @@ type Policy struct {
 	name          tree.Name
 	usingExpr     string
 	withCheckExpr string
-	command       tree.PolicyCommand
+	command       catpb.PolicyCommand
 	roles         map[string]struct{}
 }
 
@@ -1916,31 +1917,15 @@ func (p *Policy) GetWithCheckExpr() string {
 	return p.withCheckExpr
 }
 
-// AppliesTo implements the cat.Policy interface
-func (p *Policy) AppliesTo(user username.SQLUsername, cmdScope cat.PolicyCommandScope) bool {
-	if cmdScope == cat.PolicyScopeExempt {
-		return false
-	}
+// GetPolicyCommand implements the cat.Policy interface
+func (p *Policy) GetPolicyCommand() catpb.PolicyCommand { return p.command }
 
+// AppliesToRole implements the cat.Policy interface
+func (p *Policy) AppliesToRole(user username.SQLUsername) bool {
 	// If no roles are specified, assume the policy applies to all users (public role).
-	if p.roles != nil {
-		if _, found := p.roles[user.Normalized()]; !found {
-			return false
-		}
-	}
-
-	switch p.command {
-	case tree.PolicyCommandAll:
+	if p.roles == nil {
 		return true
-	case tree.PolicyCommandSelect:
-		return cmdScope == cat.PolicyScopeSelect
-	case tree.PolicyCommandInsert:
-		return cmdScope == cat.PolicyScopeInsert
-	case tree.PolicyCommandUpdate:
-		return cmdScope == cat.PolicyScopeUpdate
-	case tree.PolicyCommandDelete:
-		return cmdScope == cat.PolicyScopeDelete
-	default:
-		panic(errors.AssertionFailedf("unknown policy command %v", p.command))
 	}
+	_, found := p.roles[user.Normalized()]
+	return found
 }

@@ -7,6 +7,7 @@ package cat
 
 import (
 	"github.com/cockroachdb/cockroach/pkg/security/username"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 )
 
@@ -47,6 +48,9 @@ type Policy interface {
 	// this returns an empty string.
 	GetWithCheckExpr() string
 
-	// AppliesTo checks whether the policy applies to the given usage.
-	AppliesTo(user username.SQLUsername, commandScope PolicyCommandScope) bool
+	// GetPolicyCommand returns the command that the policy was defined for.
+	GetPolicyCommand() catpb.PolicyCommand
+
+	// AppliesToRole checks whether the policy applies to the give role.
+	AppliesToRole(user username.SQLUsername) bool
 }

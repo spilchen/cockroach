@@ -2984,33 +2984,17 @@ func (o *optPolicy) GetWithCheckExpr() string {
 	return o.withCheckExpr
 }
 
-// AppliesTo implements the cat.Policy interface.
-func (o *optPolicy) AppliesTo(user username.SQLUsername, cmdScope cat.PolicyCommandScope) bool {
-	if cmdScope == cat.PolicyScopeExempt {
-		return false
-	}
+// GetPolicyCommand implements the cat.Policy interface.
+func (o *optPolicy) GetPolicyCommand() catpb.PolicyCommand { return o.command }
 
-	// SPILLY - this logic is duplicate twice. Should we just define it for the interface?
-	if o.roles != nil {
-		_, found := o.roles[user.Normalized()]
-		if !found {
-			return false
-		}
-	}
-	switch o.command {
-	case catpb.PolicyCommand_ALL:
+// AppliesToRole implements the cat.Policy interface.
+func (o *optPolicy) AppliesToRole(user username.SQLUsername) bool {
+	// If no roles are specified, assume the policy applies to all users (public role).
+	if o.roles == nil {
 		return true
-	case catpb.PolicyCommand_SELECT:
-		return cmdScope == cat.PolicyScopeSelect
-	case catpb.PolicyCommand_INSERT:
-		return cmdScope == cat.PolicyScopeInsert
-	case catpb.PolicyCommand_UPDATE:
-		return cmdScope == cat.PolicyScopeUpdate
-	case catpb.PolicyCommand_DELETE:
-		return cmdScope == cat.PolicyScopeDelete
-	default:
-		panic(errors.AssertionFailedf("unknown policy command %v", o.command))
 	}
+	_, found := o.roles[user.Normalized()]
+	return found
 }
 
 // getOptPolicies maps from descpb.PolicyDescriptor to optPolicy
