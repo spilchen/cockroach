@@ -582,6 +582,22 @@ func (tc *Catalog) executeDDLStmtWithIndexVersion(
 		tc.DropTrigger(stmt)
 		return "", nil
 
+	case *tree.CreatePolicy:
+		tc.CreatePolicy(stmt)
+		return "", nil
+
+	case *tree.DropPolicy:
+		tc.DropPolicy(stmt)
+		return "", nil
+
+	case *tree.SetVar:
+		tc.SetVar(stmt)
+		return "", nil
+
+	case *tree.CreateRole:
+		tc.CreateRole(stmt)
+		return "", nil
+
 	default:
 		return "", errors.AssertionFailedf("unsupported statement: %v", stmt)
 	}
