@@ -864,6 +864,7 @@ func (mb *mutationBuilder) addSynthesizedComputedCols(colIDs opt.OptionalColList
 // to checkColIDs, which allows pruning normalization rules to remove the
 // unnecessary projected column.
 func (mb *mutationBuilder) addCheckConstraintCols(isUpdate bool) {
+	// SPILLY - I think this is we can update things.
 	if mb.tab.CheckCount() != 0 {
 		projectionsScope := mb.outScope.replace()
 		projectionsScope.appendColumnsFromScope(mb.outScope)
