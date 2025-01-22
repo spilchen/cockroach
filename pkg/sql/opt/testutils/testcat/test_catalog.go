@@ -320,7 +320,7 @@ func (tc *Catalog) CheckExecutionPrivilege(
 func (tc *Catalog) HasAdminRole(ctx context.Context) (bool, error) {
 	roleMembership, found := tc.users[tc.currentUser]
 	if !found {
-		return false, errors.AssertionFailedf("user %s not found", tc.currentUser)
+		return false, errors.AssertionFailedf("user %q not found", tc.currentUser)
 	}
 	return roleMembership.isMemberOfAdminRole, nil
 }
@@ -1139,7 +1139,7 @@ func (tt *Table) findPolicyByName(policyName tree.Name) (cat.Policy, tree.Policy
 			}
 		}
 	}
-	return nil, tree.PolicyTypeDefault, 0
+	return nil, tree.PolicyTypePermissive, -1
 }
 
 // Index implements the cat.Index interface for testing purposes.

@@ -2603,7 +2603,7 @@ func (ot *optVirtualTable) PolicyCount(polType tree.PolicyType) int { return 0 }
 
 // Policy is part of the cat.Table interface
 func (ot *optVirtualTable) Policy(polType tree.PolicyType, i int) cat.Policy {
-	panic(errors.AssertionFailedf("no triggers"))
+	panic(errors.AssertionFailedf("no policies"))
 }
 
 // optVirtualIndex is a dummy implementation of cat.Index for the indexes
@@ -2990,6 +2990,7 @@ func (o *optPolicy) AppliesTo(user username.SQLUsername, cmdScope cat.PolicyComm
 		return false
 	}
 
+	// SPILLY - this logic is duplicate twice. Should we just define it for the interface?
 	if o.roles != nil {
 		_, found := o.roles[user.Normalized()]
 		if !found {

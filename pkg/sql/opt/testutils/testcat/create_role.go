@@ -19,6 +19,9 @@ func (tc *Catalog) CreateRole(n *tree.CreateRole) {
 	}
 	_, found := tc.users[usr]
 	if found {
+		if n.IfNotExists {
+			return
+		}
 		panic(errors.Newf(`user %q already exists`, n.Name.Name))
 	}
 	tc.users[usr] = roleMembership{isMemberOfAdminRole: false}

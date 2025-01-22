@@ -183,22 +183,22 @@ CREATE USER fred;
 ----
 
 exec-ddl
-CREATE TABLE debug(c1 int);
-----
-
-exec-ddl
-CREATE POLICY p1 on debug TO fred USING (c1 > 0);
+CREATE POLICY p1 on t1 TO fred USING (c1 > 0);
 ----
 
 build
-SELECT c1 FROM debug where C1 between 0 and 9;
+SELECT c1 FROM t1 where C1 between 0 and 9;
 ----
 project
  ├── columns: c1:1!null
  └── select
       ├── columns: c1:1!null rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
-      ├── scan debug
-      │    └── columns: c1:1 rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      ├── select
+      │    ├── columns: c1:1 rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      │    ├── scan t1
+      │    │    └── columns: c1:1 rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      │    └── filters
+      │         └── false
       └── filters
            └── (c1:1 >= 0) AND (c1:1 <= 9)
 
@@ -207,13 +207,17 @@ SET ROLE fred;
 ----
 
 build
-SELECT c1 FROM debug where C1 between 0 and 9;
+SELECT c1 FROM t1 where C1 between 0 and 9;
 ----
 project
  ├── columns: c1:1!null
  └── select
       ├── columns: c1:1!null rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
-      ├── scan debug
-      │    └── columns: c1:1 rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      ├── select
+      │    ├── columns: c1:1!null rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      │    ├── scan t1
+      │    │    └── columns: c1:1 rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      │    └── filters
+      │         └── c1:1 > 0
       └── filters
            └── (c1:1 >= 0) AND (c1:1 <= 9)

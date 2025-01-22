@@ -28,6 +28,9 @@ func (tc *Catalog) DropPolicy(n *tree.DropPolicy) {
 
 	policy, policyType, inx := ts.findPolicyByName(n.PolicyName)
 	if policy == nil {
+		if n.IfExists {
+			return
+		}
 		panic(errors.Newf("cannot find policy %q on table %q", n.PolicyName, ts.Name))
 	}
 	ts.policies[policyType] = append(ts.policies[policyType][:inx], ts.policies[policyType][inx+1:]...)

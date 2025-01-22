@@ -10,9 +10,10 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 )
 
-// PolicyCommandScope defines the scope of commands to which a policy is applied.
-// It specifies whether a policy applies to specific SQL operations or if an operation
-// is exempt from row-level security policies.
+// PolicyCommandScope specifies the scope of SQL commands to which a policy applies.
+// It determines whether a policy is enforced for specific operations or if an operation
+// is exempt from row-level security. The operations checked must align with the policy
+// commands defined in the CREATE POLICY SQL syntax.
 type PolicyCommandScope int
 
 const (
