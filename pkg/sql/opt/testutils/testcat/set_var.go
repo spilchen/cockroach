@@ -11,7 +11,8 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-// SetVar is called to implement the 'SET ...' SQL statement.
+// SetVar implements the 'SET ...' SQL statement. Currently, it supports only
+// statements that set the current role (e.g., SET ROLE <user>).
 func (tc *Catalog) SetVar(n *tree.SetVar) {
 	if n.Name != "role" {
 		panic(errors.Newf("SET only supports SET ROLE: %q", n.Name))

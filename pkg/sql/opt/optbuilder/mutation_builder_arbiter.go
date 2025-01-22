@@ -335,6 +335,8 @@ func (mb *mutationBuilder) buildAntiJoinForDoNothingArbiter(
 		locking,
 		inScope,
 		true, /* disableNotVisibleIndex */
+		// TODO(136704): Review and adjust the scope used here after implementing
+		// WITH CHECK to ensure correct filtering behavior for UPSERT operations.
 		cat.PolicyScopeExempt,
 	)
 
@@ -475,6 +477,8 @@ func (mb *mutationBuilder) buildLeftJoinForUpsertArbiter(
 		locking,
 		inScope,
 		true, /* disableNotVisibleIndex */
+		// TODO(136704): Review and adjust the scope used here after implementing
+		// WITH CHECK to ensure correct filtering behavior for UPSERT operations.
 		cat.PolicyScopeExempt,
 	)
 	// Set fetchColIDs to reference the columns created for the fetch values.
@@ -693,6 +697,8 @@ func (h *arbiterPredicateHelper) tableScope() *scope {
 			noRowLocking,
 			h.mb.b.allocScope(),
 			false, /* disableNotVisibleIndex */
+			// TODO(136704): Review and adjust the scope used here after implementing
+			// WITH CHECK to ensure correct filtering behavior for UPSERT operations.
 			cat.PolicyScopeExempt,
 		)
 	}
