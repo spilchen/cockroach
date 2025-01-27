@@ -32,8 +32,10 @@ func (b *Builder) addRowLevelSecurityFilter(
 		panic(err)
 	}
 	if isAdmin {
+		b.factory.Metadata().SetRLSEnabled(b.evalCtx, true /* isAdmin */)
 		return
 	}
+	b.factory.Metadata().SetRLSEnabled(b.evalCtx, false /* isAdmin */)
 
 	strExpr := b.buildRowLevelSecurityUsingExpression(tabMeta, cmdScope)
 	if strExpr == "" {
