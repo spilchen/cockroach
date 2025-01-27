@@ -487,4 +487,183 @@ ALTER TABLE roaches DISABLE ROW LEVEL SECURITY;
 statement ok
 DROP TABLE roaches;
 
+subtest policy_applied_to_select
+
+statement ok
+CREATE TYPE league AS ENUM('AL','NL');
+
+statement ok
+CREATE TABLE bbteams (team text, league league);
+
+statement ok
+ALTER TABLE bbteams ENABLE ROW LEVEL SECURITY;
+
+statement ok
+INSERT INTO bbteams VALUES ('jays', 'AL'), ('tigers', 'AL'), ('cardinals', 'NL'), ('orioles', 'AL'), ('nationals', 'NL');
+
+# Confirm admin user can see all rows
+query TT
+select team, league from bbteams order by league, team;
+----
+jays AL
+orioles AL
+tigers AL
+cardinals NL
+nationals NL
+
+statement ok
+CREATE USER buck;
+
+statement ok
+GRANT ALL ON bbteams TO buck;
+
+statement ok
+set role buck
+
+# user buck can't see anything because they aren't admin, rls is enabled and no policies are defined.
+query TT
+select team, league from bbteams order by league, team;
+----
+
+statement ok
+set role root
+
+# We will create a function and a sequence to include in the expression, as
+# these introduce additional dependencies compared to a plain expression using
+# basic types.
+statement ok
+CREATE FUNCTION is_valid(l league) RETURNS BOOL AS $$
+BEGIN
+  RETURN l = 'AL';
+END;
+$$ LANGUAGE PLpgSQL;
+
+statement ok
+CREATE SEQUENCE seq1;
+
+statement ok
+GRANT USAGE ON seq1 TO buck;
+
+statement ok
+create policy restrict_select on bbteams for select to buck,current_user,session_user using (is_valid(league) and nextval('seq1') < 1000);
+
+# confirm admin can see all
+query TT
+select team, league from bbteams where team != 'cardinals' order by league, team;
+----
+jays AL
+orioles AL
+tigers AL
+nationals NL
+
+statement ok
+set role buck
+
+# TODO(136717): Reusing the statement cache prevents recompiling a new plan,
+# which leads to incorrect results in this case.
+query TT
+select team, league from bbteams where team != 'cardinals' order by league, team;
+----
+jays AL
+orioles AL
+tigers AL
+nationals NL
+
+query TT
+select team, league from bbteams where team != 'astros' order by league, team;
+----
+jays AL
+orioles AL
+tigers AL
+
+# Verify that if admin is granted to user buck, it sees all rows because RLS is exempt.
+statement ok
+set role root
+
+statement ok
+GRANT admin TO buck;
+
+statement ok
+set role buck;
+
+# This is the same query as before, but since admin changed, we will see all of the rows.
+# TODO(136717): We are mistakenly reusing the statement plan here. So we see the rows as if
+# the policies were applied.
+query TT
+select team, league from bbteams where team != 'astros' order by league, team;
+----
+jays AL
+orioles AL
+tigers AL
+
+# Retry with a query never tried before so we avoid the statement cache.
+query TT
+select team, league from bbteams where team != 'mariners' order by league, team;
+----
+jays AL
+orioles AL
+tigers AL
+cardinals NL
+nationals NL
+
+statement ok
+set role root
+
+statement ok
+REVOKE admin FROM buck;
+
+# Add policies that apply to other commands. Only SELECT will return rows.
+statement ok
+CREATE POLICY restrict_insert ON bbteams FOR INSERT TO buck USING (false);
+
+statement ok
+CREATE POLICY restrict_delete ON bbteams FOR DELETE TO buck USING (false);
+
+statement ok
+CREATE POLICY restrict_update ON bbteams FOR UPDATE TO buck USING (false);
+
+statement ok
+set role buck
+
+# Verify SELECT will use the original policy that restricts rows just to AL teams
+query TT
+select team, league from bbteams where team != 'jays' order by league, team;
+----
+orioles AL
+tigers AL
+
+# Try updating a row. The policy for update will prevent us from reading the row.
+statement ok
+UPDATE bbteams SET team = 'blue jays' where team = 'jays';
+
+query TT
+select team, league from bbteams order by league, team;
+----
+jays AL
+orioles AL
+tigers AL
+
+# Try to delete the row. The delete policy will prevent us from reading the row.
+statement ok
+DELETE FROM bbteams;
+
+query TT
+select team, league from bbteams order by league, team;
+----
+jays AL
+orioles AL
+tigers AL
+
+statement ok
+set role root
+
+statement ok
+DROP TABLE bbteams;
+
+statement ok
+DROP SEQUENCE seq1;
+
+statement ok
+DROP FUNCTION is_valid;
+
 subtest end
