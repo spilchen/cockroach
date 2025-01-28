@@ -9,6 +9,7 @@ package cat
 
 import (
 	"context"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 
 	"github.com/cockroachdb/cockroach/pkg/config"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
@@ -259,4 +260,7 @@ type Catalog interface {
 	// GetRoutineOwner returns the username.SQLUsername of the routine's
 	// (specified by routineOid) owner.
 	GetRoutineOwner(ctx context.Context, routineOid oid.Oid) (username.SQLUsername, error)
+
+	// SPILLY - is StableID correct here? Is it the same as MetaID in cat.Table?
+	ResolvePolicy(ctx context.Context, tableID StableID, policyID descpb.PolicyID) (Policy, error)
 }

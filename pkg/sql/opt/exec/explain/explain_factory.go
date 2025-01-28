@@ -8,6 +8,8 @@ package explain
 
 import (
 	"context"
+	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
+	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
 
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/exec"
@@ -25,6 +27,8 @@ type Factory struct {
 	wrappedFactory exec.Factory
 	semaCtx        *tree.SemaContext
 	evalCtx        *eval.Context
+	mem            *memo.Memo
+	catalog        cat.Catalog
 }
 
 var _ exec.ExplainFactory = &Factory{}
@@ -124,18 +128,21 @@ type Plan struct {
 	Checks      []*Node
 	WrappedPlan exec.Plan
 	Gist        PlanGist
+	Policies    PlanPolicies
 }
 
 var _ exec.Plan = &Plan{}
 
 // NewFactory creates a new explain factory.
 func NewFactory(
-	wrappedFactory exec.Factory, semaCtx *tree.SemaContext, evalCtx *eval.Context,
+	wrappedFactory exec.Factory, semaCtx *tree.SemaContext, evalCtx *eval.Context, mem *memo.Memo, catalog cat.Catalog,
 ) *Factory {
 	return &Factory{
 		wrappedFactory: wrappedFactory,
 		semaCtx:        semaCtx,
 		evalCtx:        evalCtx,
+		mem:            mem,
+		catalog:        catalog,
 	}
 }
 
@@ -153,6 +160,9 @@ func (f *Factory) ConstructPlan(
 	rootRowCount int64,
 	flags exec.PlanFlags,
 ) (exec.Plan, error) {
+	var pf PlanPoliciesFactory
+	pf.Init(f.mem, f.catalog)
+
 	p := &Plan{
 		Root:       root.(*Node),
 		Subqueries: subqueries,
@@ -160,6 +170,7 @@ func (f *Factory) ConstructPlan(
 		Checks:     make([]*Node, len(checks)),
 		Triggers:   triggers,
 	}
+	// SPILLY - setup Plan.Policies using the memo? Where is the memo?
 	for i := range checks {
 		p.Checks[i] = checks[i].(*Node)
 	}
@@ -181,6 +192,11 @@ func (f *Factory) ConstructPlan(
 		f.wrapPostQuery(&triggers[i], &wrappedTriggers[i])
 	}
 	var err error
+	p.Policies, err = pf.Build(f.Ctx())
+	if err != nil {
+		return nil, err
+	}
+
 	p.WrappedPlan, err = f.wrappedFactory.ConstructPlan(
 		p.Root.WrappedNode(), wrappedSubqueries, wrappedCascades, wrappedTriggers, wrappedChecks,
 		rootRowCount, flags,
@@ -220,7 +236,7 @@ func (f *Factory) wrapPostQuery(originalPostQuery, wrappedPostQuery *exec.PostQu
 		if buffer != nil && buffer.(*Node).WrappedNode() != bufferRef {
 			return nil, errors.AssertionFailedf("expected captured buffer %v to wrap the provided bufferRef %v", buffer, bufferRef)
 		}
-		explainFactory := NewFactory(execFactory, semaCtx, evalCtx)
+		explainFactory := NewFactory(execFactory, semaCtx, evalCtx, f.mem, f.catalog)
 		var err error
 		postQueryPlan, err = origPlanFn(ctx, semaCtx, evalCtx, explainFactory, buffer, numBufferedRows, allowAutoCommit)
 		if err != nil {

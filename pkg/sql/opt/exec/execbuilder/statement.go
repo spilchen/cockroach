@@ -178,7 +178,7 @@ func (b *Builder) buildExplain(
 			// factory must be the inner factory.
 			var gf explain.PlanGistFactory
 			gf.Init(f)
-			ef := explain.NewFactory(&gf, b.semaCtx, b.evalCtx)
+			ef := explain.NewFactory(&gf, b.semaCtx, b.evalCtx, b.mem, b.catalog)
 
 			explainBld := New(
 				b.ctx, ef, b.optimizer, b.mem, b.catalog, explainExpr.Input,
@@ -191,6 +191,8 @@ func (b *Builder) buildExplain(
 			}
 			explainPlan := plan.(*explain.Plan)
 			explainPlan.Gist = gf.PlanGist()
+			// SPILLY - set policy information here. We have the memo that has the metadata we need access to.
+			// SPILLY - we may need b.catalog for regular plan (or b.catalog may be nil)
 			return plan, nil
 		},
 	)

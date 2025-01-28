@@ -104,6 +104,9 @@ func (e *explainPlanNode) startExec(params runParams) error {
 				}
 			}
 			ob.AddVectorized(willVectorize)
+			if e.options.Mode == tree.ExplainPlan && e.options.Flags[tree.ExplainFlagVerbose] {
+				e.plan.Policies.OutputFields(ob)
+			}
 
 			if e.options.Mode == tree.ExplainDistSQL {
 				flags := execinfrapb.DiagramFlags{
