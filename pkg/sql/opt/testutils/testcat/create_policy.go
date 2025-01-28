@@ -33,7 +33,7 @@ func (tc *Catalog) CreatePolicy(n *tree.CreatePolicy) {
 		panic(errors.Newf(`policy %q already exists on table %q`, n.PolicyName, ts.Name()))
 	}
 
-	policy := &Policy{name: n.PolicyName}
+	policy := &Policy{name: n.PolicyName, id: ts.nextPolicyID}
 	switch n.Cmd {
 	case tree.PolicyCommandAll, tree.PolicyCommandDefault:
 		policy.command = catpb.PolicyCommand_ALL
@@ -75,4 +75,5 @@ func (tc *Catalog) CreatePolicy(n *tree.CreatePolicy) {
 	}
 	// Add the policy to the appropriate map based on its type.
 	ts.policies[policyType] = append(ts.policies[policyType], policy)
+	ts.nextPolicyID++
 }

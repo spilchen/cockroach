@@ -71,6 +71,7 @@ func (b *Builder) buildRowLevelSecurityUsingExpression(
 		if strExpr == "" {
 			continue
 		}
+		b.factory.Metadata().AddPolicyUse(tabMeta.MetaID, policy.ID())
 		expr = strExpr
 		// TODO(136742): Apply multiple RLS policies.
 		return

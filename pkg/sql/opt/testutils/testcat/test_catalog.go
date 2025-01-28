@@ -833,8 +833,9 @@ type Table struct {
 
 	homeRegion string
 
-	rlsEnabled bool
-	policies   map[tree.PolicyType][]cat.Policy
+	rlsEnabled   bool
+	policies     map[tree.PolicyType][]cat.Policy
+	nextPolicyID descpb.PolicyID
 }
 
 var _ cat.Table = &Table{}
@@ -1896,6 +1897,7 @@ func (t *Trigger) Enabled() bool {
 // Policy implements the cat.Policy interface
 type Policy struct {
 	name          tree.Name
+	id            descpb.PolicyID
 	usingExpr     string
 	withCheckExpr string
 	command       catpb.PolicyCommand
@@ -1905,6 +1907,11 @@ type Policy struct {
 // Name implements the cat.Policy interface
 func (p *Policy) Name() tree.Name {
 	return p.name
+}
+
+// ID implements the cat.Policy interface
+func (p *Policy) ID() descpb.PolicyID {
+	return p.id
 }
 
 // GetUsingExpr implements the cat.Policy interface

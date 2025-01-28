@@ -87,6 +87,7 @@ func (tc *Catalog) CreateTable(stmt *tree.CreateTable) *Table {
 	}
 
 	tab.policies = make(map[tree.PolicyType][]cat.Policy)
+	tab.nextPolicyID = 1
 
 	if isRbr && stmt.PartitionByTable == nil {
 		// Build the table as LOCALITY REGIONAL BY ROW.

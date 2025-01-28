@@ -2959,6 +2959,7 @@ func getOptTriggers(descTriggers []descpb.TriggerDescriptor) []optTrigger {
 // cat.Policy interface.
 type optPolicy struct {
 	name          tree.Name
+	id            descpb.PolicyID
 	usingExpr     string
 	withCheckExpr string
 	roles         map[string]struct{} // If roles is nil, then the policy applies to all (aka public)
@@ -2971,6 +2972,9 @@ var _ cat.Policy = &optPolicy{}
 func (o *optPolicy) Name() tree.Name {
 	return o.name
 }
+
+// ID implements the cat.Policy interface.
+func (o *optPolicy) ID() descpb.PolicyID { return o.id }
 
 // GetUsingExpr implements the cat.Policy interface.
 func (o *optPolicy) GetUsingExpr() string {
@@ -3019,6 +3023,7 @@ func getOptPolicies(descPolicies []descpb.PolicyDescriptor) map[tree.PolicyType]
 		}
 		policies[targetPolicyType] = append(policies[targetPolicyType], optPolicy{
 			name:          tree.Name(descPolicy.Name),
+			id:            descPolicy.ID,
 			usingExpr:     descPolicy.UsingExpr,
 			withCheckExpr: descPolicy.WithCheckExpr,
 			command:       descPolicy.Command,
