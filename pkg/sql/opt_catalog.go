@@ -2970,6 +2970,7 @@ func getOptPolicies(descPolicies []descpb.PolicyDescriptor) cat.Policies {
 		descPolicy := &descPolicies[i]
 		policy := cat.Policy{
 			Name:          tree.Name(descPolicy.Name),
+			ID:            descPolicy.ID,
 			UsingExpr:     descPolicy.UsingExpr,
 			WithCheckExpr: descPolicy.WithCheckExpr,
 			Command:       descPolicy.Command,

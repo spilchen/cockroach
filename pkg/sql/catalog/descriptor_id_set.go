@@ -142,3 +142,61 @@ func (s *ConstraintIDSet) Ordered() []descpb.ConstraintID {
 	})
 	return result
 }
+
+// PolicyIDSet stores an unordered set of policy ids.
+type PolicyIDSet struct {
+	set intsets.Fast
+}
+
+// MakePolicyIDSet returns a set initialized with the given values.
+func MakePolicyIDSet(ids ...descpb.PolicyID) PolicyIDSet {
+	s := PolicyIDSet{}
+	for _, id := range ids {
+		s.Add(id)
+	}
+	return s
+}
+
+// Add adds an id to the set. No-op if the id is already in the set.
+func (s *PolicyIDSet) Add(id descpb.PolicyID) {
+	s.set.Add(int(id))
+}
+
+// Remove removes the ID from the set.
+func (s *PolicyIDSet) Remove(id descpb.PolicyID) {
+	s.set.Remove(int(id))
+}
+
+// Empty returns true if the set is empty.
+func (s PolicyIDSet) Empty() bool {
+	return s.set.Empty()
+}
+
+// Len returns the number of ids in the set.
+func (s PolicyIDSet) Len() int {
+	return s.set.Len()
+}
+
+// Contains checks if the set contains the given id.
+func (s PolicyIDSet) Contains(id descpb.PolicyID) bool {
+	return s.set.Contains(int(id))
+}
+
+// Ordered returns all ids as an ordered slice.
+func (s PolicyIDSet) Ordered() []descpb.PolicyID {
+	if s.Empty() {
+		return nil
+	}
+	result := make([]descpb.PolicyID, 0, s.Len())
+	s.set.ForEach(func(i int) {
+		result = append(result, descpb.PolicyID(i))
+	})
+	return result
+}
+
+// Copy makes a deep copy of the set.
+func (s PolicyIDSet) Copy() PolicyIDSet {
+	return PolicyIDSet{
+		set: s.set.Copy(),
+	}
+}

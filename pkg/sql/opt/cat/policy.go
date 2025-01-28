@@ -8,6 +8,7 @@ package cat
 import (
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 )
 
@@ -37,6 +38,8 @@ type Policy struct {
 	// Name is the name of the policy. The name is unique within a table
 	// and cannot be qualified.
 	Name tree.Name
+	// ID returns the ID assigned to this policy. The ID is unique within the table.
+	ID descpb.PolicyID // SPILLY - populate
 	// UsingExpr is the optional filter expression evaluated on rows during
 	// read operations. If the policy does not define a USING expression, this is
 	// an empty string.

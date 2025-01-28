@@ -8,6 +8,7 @@ package opt
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"math/bits"
 	"strings"
 
@@ -334,6 +335,11 @@ func (md *Metadata) CopyFrom(from *Metadata, copyScalarFn func(Expr) Expr) {
 	md.withBindings = nil
 
 	md.rlsMeta = from.rlsMeta
+	md.rlsMeta.PoliciesEnforced = make(map[TableID]*catalog.PolicyIDSet)
+	for id, policies := range from.rlsMeta.PoliciesEnforced {
+		c := policies.Copy()
+		md.rlsMeta.PoliciesEnforced[id] = &c
+	}
 }
 
 // MDDepName stores either the unresolved DataSourceName or the StableID from
@@ -1295,4 +1301,10 @@ func (md *Metadata) checkRLSDependencies(ctx context.Context, evalCtx *eval.Cont
 	// on a table, a new version of the table descriptor is created. The metadata
 	// dependency check already accounts for changes in the table descriptor version.
 	return true, nil
+}
+
+// AddPolicyUse is used to indicate the given policyID of a table was applied in
+// the query.
+func (md *Metadata) AddPolicyUse(tableID TableID, policyID descpb.PolicyID) {
+	md.rlsMeta.AddPolicyUse(tableID, policyID)
 }

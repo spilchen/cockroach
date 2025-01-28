@@ -58,6 +58,7 @@ func (b *Builder) buildRowLevelSecurityUsingExpression(
 		if strExpr == "" {
 			continue
 		}
+		b.factory.Metadata().AddPolicyUse(tabMeta.MetaID, policy.ID)
 		parsedExpr, err := parser.ParseExpr(strExpr)
 		if err != nil {
 			panic(err)

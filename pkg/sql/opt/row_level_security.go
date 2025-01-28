@@ -7,6 +7,8 @@ package opt
 
 import (
 	"github.com/cockroachdb/cockroach/pkg/security/username"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 )
 
@@ -26,6 +28,10 @@ type RowLevelSecurityMeta struct {
 	// creating the query plan. This is only set if at least one table in the
 	// query had RLS enabled.
 	HasAdminRole bool
+
+	// PoliciesEnforced is the set of policies that were applied for each relation
+	// in the query.
+	PoliciesEnforced map[TableID]*catalog.PolicyIDSet
 }
 
 func (r *RowLevelSecurityMeta) MaybeInit(evalCtx *eval.Context, hasAdminRole bool) {
@@ -34,5 +40,17 @@ func (r *RowLevelSecurityMeta) MaybeInit(evalCtx *eval.Context, hasAdminRole boo
 	}
 	r.User = evalCtx.SessionData().User()
 	r.HasAdminRole = hasAdminRole
+	r.PoliciesEnforced = make(map[TableID]*catalog.PolicyIDSet)
 	r.IsInitialized = true
+}
+
+// AddPolicyUse is used to indicate the given policyID of a table was applied in
+// the query.
+func (r *RowLevelSecurityMeta) AddPolicyUse(tableID TableID, policyID descpb.PolicyID) {
+	if set, found := r.PoliciesEnforced[tableID]; !found {
+		newSet := catalog.MakePolicyIDSet(policyID)
+		r.PoliciesEnforced[tableID] = &newSet
+	} else {
+		set.Add(policyID)
+	}
 }

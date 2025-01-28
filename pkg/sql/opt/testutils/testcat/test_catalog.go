@@ -835,6 +835,7 @@ type Table struct {
 
 	rlsEnabled bool
 	policies   cat.Policies
+	nextPolicyID descpb.PolicyID
 }
 
 var _ cat.Table = &Table{}
