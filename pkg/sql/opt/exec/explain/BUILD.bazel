@@ -9,6 +9,7 @@ go_library(
         "output.go",
         "plan_gist_factory.go",
         "result_columns.go",
+        "row_level_security.go",
         ":gen-explain-factory",  # keep
         ":gen-gist-factory",  # keep
     ],
@@ -28,6 +29,7 @@ go_library(
         "//pkg/sql/opt/constraint",
         "//pkg/sql/opt/exec",
         "//pkg/sql/opt/invertedexpr",  # keep
+        "//pkg/sql/opt/memo",
         "//pkg/sql/pgwire/pgcode",
         "//pkg/sql/pgwire/pgerror",
         "//pkg/sql/sem/catid",

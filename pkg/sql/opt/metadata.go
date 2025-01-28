@@ -1308,3 +1308,10 @@ func (md *Metadata) checkRLSDependencies(ctx context.Context, evalCtx *eval.Cont
 func (md *Metadata) AddPolicyUse(tableID TableID, policyID descpb.PolicyID) {
 	md.rlsMeta.AddPolicyUse(tableID, policyID)
 }
+
+// GetPoliciesEnforced returns the set of policy IDs that were enforced for the
+// given table.
+func (md *Metadata) GetPoliciesEnforced(tableID TableID) (catalog.PolicyIDSet, bool) {
+	ids, found := md.rlsMeta.PoliciesEnforced[tableID]
+	return *ids, found
+}
