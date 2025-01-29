@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/errors"
 	"strings"
 )
@@ -33,7 +34,7 @@ func (p *PlanPolicies) OutputFields(ob *OutputBuilder) {
 			} else {
 				sb.WriteString(" OR ")
 			}
-			sb.WriteString(policyName)
+			sb.WriteString(policyName.Normalize())
 		}
 		if sb.Len() == 0 {
 			sb.WriteString("none applied")
@@ -47,9 +48,8 @@ func (p *PlanPolicies) OutputFields(ob *OutputBuilder) {
 // PoliciesEnforced tracks the policies, both permissive and restrictive,
 // that were applied to the query for a specific relation.
 type PoliciesEnforced struct {
-	// SPILLY - strings really??
-	name               string
-	permissivePolicies []string
+	name               tree.Name
+	permissivePolicies []tree.Name
 	// TODO(136742): Add a slice for restrictive policies when we support those.
 }
 
@@ -67,42 +67,33 @@ func (p *PlanPoliciesFactory) Init(
 	p.catalog = catalog
 }
 
+// Build will generate and return a PlanPolicies struct based on the rls
+// policies used in the query.
 func (p *PlanPoliciesFactory) Build(ctx context.Context) (PlanPolicies, error) {
+	var planPolicies PlanPolicies
 	if p.catalog == nil {
 		return PlanPolicies{}, errors.AssertionFailedf("catalog is needed to format the policies enforced")
 	}
 	md := p.mem.Metadata()
 	for _, tableMeta := range md.AllTables() {
-		enforcement := PoliciesEnforced{
-			name: tableMeta.Table.Name().Normalize(),
-		}
-		ids, rlsActive := md.GetPoliciesEnforced(tableMeta.MetaID)
+		ids, rlsActive := md.GetPoliciesEnforced(tableMeta.MetaID) // SPILLY - should we consider have a big check that avoids this loop entirely?
 		if !rlsActive {
 			// Skip this table as row-level security is not active.
 			continue
 		}
-		// For each policy ID, we need to find its name as that's what we report on
-		// and figure out if it's permissive or restrictive, as the output groups
-		// them by type.
-		// SPILLY - first cut we will leave out restrictive policies
-		// SPILLY - figure out mess of MetaID vs StableID.
-		for _, id := range ids.Ordered() {
-			// SPILLY - we may be able to skip ResolvePolicy and just get the Policy
-			// information from the tableMeta.Table. It would require a new way to
-			// potentially store the policy information for efficient lookup (yi.e
-			// map)
-			policy, err := p.catalog.ResolvePolicy(ctx, StableID.(table.MetaID), id)
-			if err != nil {
-				return PlanPolicies{}, err
-			}
-			// TODO(136742): Group them by type when we support restrictive policies.
-
+		enforcement := PoliciesEnforced{
+			name: tableMeta.Table.Name(),
 		}
-
+		// Get the name of each policy enforced for inclusion in the explain output.
+		// TODO(136742): We only support permissive policies here. We need to
+		// add support for restrictive policies.
+		for i := 0; i < tableMeta.Table.PolicyCount(tree.PolicyTypePermissive); i++ {
+			policy := tableMeta.Table.Policy(tree.PolicyTypePermissive, i)
+			if ids.Contains(policy.ID) {
+				enforcement.permissivePolicies = append(enforcement.permissivePolicies, policy.Name)
+			}
+		}
+		planPolicies.enforced = append(planPolicies.enforced, enforcement)
 	}
-	// SPILLY - guts
-	return PlanPolicies{}, nil
+	return planPolicies, nil
 }
-
-// SPILLY - add function to add table info
-//func (p *PlanPoliciesFactory) AddTable()

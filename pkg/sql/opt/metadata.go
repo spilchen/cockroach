@@ -1311,7 +1311,7 @@ func (md *Metadata) AddPolicyUse(tableID TableID, policyID descpb.PolicyID) {
 
 // GetPoliciesEnforced returns the set of policy IDs that were enforced for the
 // given table.
-func (md *Metadata) GetPoliciesEnforced(tableID TableID) (catalog.PolicyIDSet, bool) {
+func (md *Metadata) GetPoliciesEnforced(tableID TableID) (*catalog.PolicyIDSet, bool) {
 	ids, found := md.rlsMeta.PoliciesEnforced[tableID]
-	return *ids, found
+	return ids, found
 }

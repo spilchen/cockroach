@@ -39,7 +39,7 @@ type Policy struct {
 	// and cannot be qualified.
 	Name tree.Name
 	// ID returns the ID assigned to this policy. The ID is unique within the table.
-	ID descpb.PolicyID // SPILLY - populate
+	ID descpb.PolicyID
 	// UsingExpr is the optional filter expression evaluated on rows during
 	// read operations. If the policy does not define a USING expression, this is
 	// an empty string.
