@@ -145,6 +145,10 @@ func (e *explainPlanNode) startExec(params runParams) error {
 			}
 		}
 	}
+	// Add RLS policy information if verbose
+	if e.options.Mode == tree.ExplainPlan && e.options.Flags[tree.ExplainFlagVerbose] {
+		rows = append(rows, e.plan.Policies.BuildStringRows()...)
+	}
 	// Add index recommendations to output, if they exist.
 	if recs := params.p.instrumentation.explainIndexRecs; recs != nil {
 		// First add empty row.

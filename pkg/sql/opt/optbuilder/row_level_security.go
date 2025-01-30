@@ -32,10 +32,10 @@ func (b *Builder) addRowLevelSecurityFilter(
 		panic(err)
 	}
 	if isAdmin {
-		b.factory.Metadata().SetRLSEnabled(b.evalCtx, true /* isAdmin */)
+		b.factory.Metadata().SetRLSEnabled(b.evalCtx, true /* isAdmin */, tabMeta.MetaID)
 		return
 	}
-	b.factory.Metadata().SetRLSEnabled(b.evalCtx, false /* isAdmin */)
+	b.factory.Metadata().SetRLSEnabled(b.evalCtx, false /* isAdmin */, tabMeta.MetaID)
 
 	scalar := b.buildRowLevelSecurityUsingExpression(tabMeta, tableScope, cmdScope)
 	tableScope.expr = b.factory.ConstructSelect(tableScope.expr,
@@ -58,6 +58,7 @@ func (b *Builder) buildRowLevelSecurityUsingExpression(
 		if strExpr == "" {
 			continue
 		}
+		b.factory.Metadata().GetRLSMeta().AddPolicyUse(tabMeta.MetaID, policy.ID)
 		parsedExpr, err := parser.ParseExpr(strExpr)
 		if err != nil {
 			panic(err)

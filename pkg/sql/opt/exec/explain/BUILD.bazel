@@ -9,6 +9,7 @@ go_library(
         "output.go",
         "plan_gist_factory.go",
         "result_columns.go",
+        "row_level_security.go",
         ":gen-explain-factory",  # keep
         ":gen-gist-factory",  # keep
     ],
@@ -57,6 +58,7 @@ go_test(
         "main_test.go",
         "output_test.go",
         "plan_gist_test.go",
+        "row_level_security_test.go",
     ],
     data = glob(["testdata/**"]) + [
         "//pkg/sql/opt/testutils/opttester:testfixtures",
@@ -69,6 +71,7 @@ go_test(
         "//pkg/security/securitytest",
         "//pkg/server",
         "//pkg/sql/catalog/colinfo",
+        "//pkg/sql/opt",
         "//pkg/sql/opt/cat",
         "//pkg/sql/opt/exec",
         "//pkg/sql/opt/memo",

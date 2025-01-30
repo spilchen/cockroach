@@ -334,6 +334,10 @@ func (md *Metadata) CopyFrom(from *Metadata, copyScalarFn func(Expr) Expr) {
 	md.withBindings = nil
 
 	md.rlsMeta = from.rlsMeta
+	md.rlsMeta.PoliciesEnforced = make(map[TableID]*catalog.PolicyIDSet)
+	for id, policies := range from.rlsMeta.PoliciesEnforced {
+		md.rlsMeta.PoliciesEnforced[id] = policies.Copy()
+	}
 }
 
 // MDDepName stores either the unresolved DataSourceName or the StableID from
@@ -1262,13 +1266,21 @@ func (md *Metadata) TestingPrivileges() map[cat.StableID]privilegeBitmap {
 
 // SetRLSEnabled will update the metadata to indicate we came across an RLS
 // enabled table.
-func (md *Metadata) SetRLSEnabled(evalCtx *eval.Context, isAdmin bool) {
+func (md *Metadata) SetRLSEnabled(evalCtx *eval.Context, isAdmin bool, tableID TableID) {
 	md.rlsMeta.MaybeInit(evalCtx, isAdmin)
+	md.rlsMeta.AddTableUse(tableID)
+}
+
+// GetRLSMeta returns the rls metadata struct
+func (md *Metadata) GetRLSMeta() *RowLevelSecurityMeta {
+	return &md.rlsMeta
 }
 
 // checkRLSDependencies will check the metadata for row-level security
 // dependencies to see if it is up to date.
-func (md *Metadata) checkRLSDependencies(ctx context.Context, evalCtx *eval.Context, optCatalog cat.Catalog) (upToDate bool, err error) {
+func (md *Metadata) checkRLSDependencies(
+	ctx context.Context, evalCtx *eval.Context, optCatalog cat.Catalog,
+) (upToDate bool, err error) {
 	// rlsMeta is lazily updated. If we didn't initialize it, then we didn't come
 	// across any RLS enabled tables. So, from a rls point of view the memo is up
 	// to date.

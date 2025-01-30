@@ -10,6 +10,7 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
+	"github.com/cockroachdb/cockroach/pkg/sql/opt"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/exec"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
@@ -25,6 +26,7 @@ type Factory struct {
 	wrappedFactory exec.Factory
 	semaCtx        *tree.SemaContext
 	evalCtx        *eval.Context
+	md             *opt.Metadata
 }
 
 var _ exec.ExplainFactory = &Factory{}
@@ -124,18 +126,20 @@ type Plan struct {
 	Checks      []*Node
 	WrappedPlan exec.Plan
 	Gist        PlanGist
+	Policies    *PlanPolicies
 }
 
 var _ exec.Plan = &Plan{}
 
 // NewFactory creates a new explain factory.
 func NewFactory(
-	wrappedFactory exec.Factory, semaCtx *tree.SemaContext, evalCtx *eval.Context,
+	wrappedFactory exec.Factory, semaCtx *tree.SemaContext, evalCtx *eval.Context, md *opt.Metadata,
 ) *Factory {
 	return &Factory{
 		wrappedFactory: wrappedFactory,
 		semaCtx:        semaCtx,
 		evalCtx:        evalCtx,
+		md:             md,
 	}
 }
 
@@ -180,6 +184,13 @@ func (f *Factory) ConstructPlan(
 	for i := range wrappedTriggers {
 		f.wrapPostQuery(&triggers[i], &wrappedTriggers[i])
 	}
+	ppf := NewPlanPoliciesFactory(f.md)
+	if policies, err := ppf.Build(); err != nil {
+		return nil, err
+	} else {
+		p.Policies = policies
+	}
+
 	var err error
 	p.WrappedPlan, err = f.wrappedFactory.ConstructPlan(
 		p.Root.WrappedNode(), wrappedSubqueries, wrappedCascades, wrappedTriggers, wrappedChecks,
@@ -220,7 +231,7 @@ func (f *Factory) wrapPostQuery(originalPostQuery, wrappedPostQuery *exec.PostQu
 		if buffer != nil && buffer.(*Node).WrappedNode() != bufferRef {
 			return nil, errors.AssertionFailedf("expected captured buffer %v to wrap the provided bufferRef %v", buffer, bufferRef)
 		}
-		explainFactory := NewFactory(execFactory, semaCtx, evalCtx)
+		explainFactory := NewFactory(execFactory, semaCtx, evalCtx, f.md)
 		var err error
 		postQueryPlan, err = origPlanFn(ctx, semaCtx, evalCtx, explainFactory, buffer, numBufferedRows, allowAutoCommit)
 		if err != nil {
