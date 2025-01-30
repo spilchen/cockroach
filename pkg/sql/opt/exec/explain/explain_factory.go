@@ -128,7 +128,7 @@ type Plan struct {
 	Checks      []*Node
 	WrappedPlan exec.Plan
 	Gist        PlanGist
-	Policies    PlanPolicies
+	Policies    *PlanPolicies
 }
 
 var _ exec.Plan = &Plan{}
@@ -160,9 +160,6 @@ func (f *Factory) ConstructPlan(
 	rootRowCount int64,
 	flags exec.PlanFlags,
 ) (exec.Plan, error) {
-	var pf PlanPoliciesFactory
-	pf.Init(f.mem)
-
 	p := &Plan{
 		Root:       root.(*Node),
 		Subqueries: subqueries,
@@ -190,12 +187,15 @@ func (f *Factory) ConstructPlan(
 	for i := range wrappedTriggers {
 		f.wrapPostQuery(&triggers[i], &wrappedTriggers[i])
 	}
-	var err error
-	p.Policies, err = pf.Build(f.Ctx())
-	if err != nil {
+	var pf PlanPoliciesFactory
+	pf.Init(f.mem.Metadata())
+	if policies, err := pf.Build(); err != nil {
 		return nil, err
+	} else {
+		p.Policies = policies
 	}
 
+	var err error
 	p.WrappedPlan, err = f.wrappedFactory.ConstructPlan(
 		p.Root.WrappedNode(), wrappedSubqueries, wrappedCascades, wrappedTriggers, wrappedChecks,
 		rootRowCount, flags,

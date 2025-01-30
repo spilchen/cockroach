@@ -6,9 +6,8 @@
 package explain
 
 import (
-	"context"
 	"fmt"
-	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
+	"github.com/cockroachdb/cockroach/pkg/sql/opt"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"strings"
 )
@@ -61,27 +60,25 @@ type PoliciesEnforced struct {
 
 // PlanPoliciesFactory will build a PlanPolicies
 type PlanPoliciesFactory struct {
-	mem *memo.Memo
+	md *opt.Metadata
 }
 
 func (p *PlanPoliciesFactory) Init(
-	mem *memo.Memo,
+	md *opt.Metadata,
 ) {
-	// SPILLY - only store Metadata??
-	p.mem = mem
+	p.md = md
 }
 
 // Build will generate and return a PlanPolicies struct based on the rls
 // policies used in the query.
-func (p *PlanPoliciesFactory) Build(ctx context.Context) (PlanPolicies, error) {
-	md := p.mem.Metadata()
+func (p *PlanPoliciesFactory) Build() (*PlanPolicies, error) {
 	// Early out if the query didn't see any tables with row-level security enabled.
-	if !md.IsRLSEnabled() {
-		return PlanPolicies{}, nil
+	if !p.md.IsRLSEnabled() {
+		return nil, nil
 	}
 	var planPolicies PlanPolicies
-	for _, tableMeta := range md.AllTables() {
-		ids, rlsActive := md.GetPoliciesEnforced(tableMeta.MetaID)
+	for _, tableMeta := range p.md.AllTables() {
+		ids, rlsActive := p.md.GetPoliciesEnforced(tableMeta.MetaID)
 		if !rlsActive {
 			// Skip this table as row-level security is not active.
 			continue
@@ -100,5 +97,5 @@ func (p *PlanPoliciesFactory) Build(ctx context.Context) (PlanPolicies, error) {
 		}
 		planPolicies.enforced = append(planPolicies.enforced, enforcement)
 	}
-	return planPolicies, nil
+	return &planPolicies, nil
 }
