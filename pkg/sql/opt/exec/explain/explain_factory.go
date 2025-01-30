@@ -161,7 +161,7 @@ func (f *Factory) ConstructPlan(
 	flags exec.PlanFlags,
 ) (exec.Plan, error) {
 	var pf PlanPoliciesFactory
-	pf.Init(f.mem, f.catalog)
+	pf.Init(f.mem)
 
 	p := &Plan{
 		Root:       root.(*Node),
@@ -170,7 +170,6 @@ func (f *Factory) ConstructPlan(
 		Checks:     make([]*Node, len(checks)),
 		Triggers:   triggers,
 	}
-	// SPILLY - setup Plan.Policies using the memo? Where is the memo?
 	for i := range checks {
 		p.Checks[i] = checks[i].(*Node)
 	}

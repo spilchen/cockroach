@@ -44,6 +44,16 @@ func (r *RowLevelSecurityMeta) MaybeInit(evalCtx *eval.Context, hasAdminRole boo
 	r.IsInitialized = true
 }
 
+// AddTableUse indicates that an RLS-enabled table was encountered while
+// building the query plan. If any policies are in use, they will be added
+// via the AddPolicyUse call.
+func (r *RowLevelSecurityMeta) AddTableUse(tableID TableID) {
+	if _, found := r.PoliciesEnforced[tableID]; !found {
+		emptySet := catalog.MakePolicyIDSet()
+		r.PoliciesEnforced[tableID] = &emptySet
+	}
+}
+
 // AddPolicyUse is used to indicate the given policyID of a table was applied in
 // the query.
 func (r *RowLevelSecurityMeta) AddPolicyUse(tableID TableID, policyID descpb.PolicyID) {

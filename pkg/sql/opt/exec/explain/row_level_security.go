@@ -8,10 +8,8 @@ package explain
 import (
 	"context"
 	"fmt"
-	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
-	"github.com/cockroachdb/errors"
 	"strings"
 )
 
@@ -25,8 +23,8 @@ type PlanPolicies struct {
 // policies enforced.
 func (p *PlanPolicies) OutputFields(ob *OutputBuilder) {
 	for _, tab := range p.enforced {
-		// String together the names of the policies in the format that the
-		// optimizer applies the policies.
+		// Concatenate the policy names in the order they are applied by the
+		// optimizer.
 		var sb strings.Builder
 		for _, policyName := range tab.permissivePolicies {
 			if sb.Len() == 0 {
@@ -38,9 +36,11 @@ func (p *PlanPolicies) OutputFields(ob *OutputBuilder) {
 		}
 		if sb.Len() == 0 {
 			sb.WriteString("none applied")
+		} else {
+			sb.WriteString(")")
 		}
 
-		key := fmt.Sprintf("row-level security policies for %q", tab.name)
+		key := fmt.Sprintf("row-level security policies for %s", tab.name)
 		ob.AddTopLevelField(key, sb.String())
 	}
 }
@@ -55,28 +55,27 @@ type PoliciesEnforced struct {
 
 // PlanPoliciesFactory will build a PlanPolicies
 type PlanPoliciesFactory struct {
-	mem     *memo.Memo
-	catalog cat.Catalog
+	mem *memo.Memo
 }
 
 func (p *PlanPoliciesFactory) Init(
-	mem *memo.Memo, catalog cat.Catalog,
+	mem *memo.Memo,
 ) {
 	// SPILLY - only store Metadata??
 	p.mem = mem
-	p.catalog = catalog
 }
 
 // Build will generate and return a PlanPolicies struct based on the rls
 // policies used in the query.
 func (p *PlanPoliciesFactory) Build(ctx context.Context) (PlanPolicies, error) {
-	var planPolicies PlanPolicies
-	if p.catalog == nil {
-		return PlanPolicies{}, errors.AssertionFailedf("catalog is needed to format the policies enforced")
-	}
 	md := p.mem.Metadata()
+	// Early out if the query didn't see any tables with row-level security enabled.
+	if !md.IsRLSEnabled() {
+		return PlanPolicies{}, nil
+	}
+	var planPolicies PlanPolicies
 	for _, tableMeta := range md.AllTables() {
-		ids, rlsActive := md.GetPoliciesEnforced(tableMeta.MetaID) // SPILLY - should we consider have a big check that avoids this loop entirely?
+		ids, rlsActive := md.GetPoliciesEnforced(tableMeta.MetaID)
 		if !rlsActive {
 			// Skip this table as row-level security is not active.
 			continue

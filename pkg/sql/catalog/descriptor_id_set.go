@@ -195,8 +195,11 @@ func (s PolicyIDSet) Ordered() []descpb.PolicyID {
 }
 
 // Copy makes a deep copy of the set.
-func (s PolicyIDSet) Copy() PolicyIDSet {
-	return PolicyIDSet{
+func (s *PolicyIDSet) Copy() *PolicyIDSet {
+	if s == nil {
+		return nil
+	}
+	return &PolicyIDSet{
 		set: s.set.Copy(),
 	}
 }

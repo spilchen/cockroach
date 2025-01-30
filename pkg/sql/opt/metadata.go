@@ -337,8 +337,7 @@ func (md *Metadata) CopyFrom(from *Metadata, copyScalarFn func(Expr) Expr) {
 	md.rlsMeta = from.rlsMeta
 	md.rlsMeta.PoliciesEnforced = make(map[TableID]*catalog.PolicyIDSet)
 	for id, policies := range from.rlsMeta.PoliciesEnforced {
-		c := policies.Copy()
-		md.rlsMeta.PoliciesEnforced[id] = &c
+		md.rlsMeta.PoliciesEnforced[id] = policies.Copy()
 	}
 }
 
@@ -1268,8 +1267,15 @@ func (md *Metadata) TestingPrivileges() map[cat.StableID]privilegeBitmap {
 
 // SetRLSEnabled will update the metadata to indicate we came across an RLS
 // enabled table.
-func (md *Metadata) SetRLSEnabled(evalCtx *eval.Context, isAdmin bool) {
+func (md *Metadata) SetRLSEnabled(evalCtx *eval.Context, isAdmin bool, tableID TableID) {
 	md.rlsMeta.MaybeInit(evalCtx, isAdmin)
+	md.rlsMeta.AddTableUse(tableID)
+}
+
+// IsRLSEnabled will return true if during opt building of the plan we came
+// across at least one table with row-level security enabled.
+func (md *Metadata) IsRLSEnabled() bool {
+	return md.rlsMeta.IsInitialized
 }
 
 // checkRLSDependencies will check the metadata for row-level security
