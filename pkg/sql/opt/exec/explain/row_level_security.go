@@ -19,30 +19,36 @@ type PlanPolicies struct {
 	enforced []PoliciesEnforced
 }
 
-// OutputFields will output to the explain details about the row-level security
-// policies enforced.
-func (p *PlanPolicies) OutputFields(ob *OutputBuilder) {
-	for _, tab := range p.enforced {
-		// Concatenate the policy names in the order they are applied by the
-		// optimizer.
-		var sb strings.Builder
-		for _, policyName := range tab.permissivePolicies {
-			if sb.Len() == 0 {
-				sb.WriteString("(")
-			} else {
-				sb.WriteString(" OR ")
-			}
-			sb.WriteString(policyName.Normalize())
-		}
-		if sb.Len() == 0 {
-			sb.WriteString("none applied")
-		} else {
-			sb.WriteString(")")
-		}
-
-		key := fmt.Sprintf("row-level security policies for %s", tab.name)
-		ob.AddTopLevelField(key, sb.String())
+// BuildStringRows generates output of []string of RLS information to include in
+// explain output.
+func (p *PlanPolicies) BuildStringRows() []string {
+	if len(p.enforced) == 0 {
+		return nil
 	}
+	estRows := 1 /* header */ + len(p.enforced)*3 /* 3 rows per table */
+	rows := make([]string, 0, estRows)
+
+	rows = append(rows, "")
+	rows = append(rows, "row-level security policies:")
+	for i := range p.enforced {
+		rows = append(rows, fmt.Sprintf("%d. table: %s", i+1, p.enforced[i].name))
+		rows = append(rows, fmt.Sprintf("   permissive: [%s]", flattenNames(p.enforced[i].permissivePolicies)))
+		// TODO(136742): Print out restrictive policies when we support those.
+	}
+	return rows
+}
+
+// flattenNames is a helper that takes a slice of Names and returns them as a
+// single string, concatenated and separated by commas.
+func flattenNames(names []tree.Name) string {
+	var sb strings.Builder
+	for _, name := range names {
+		if sb.Len() > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(name.Normalize())
+	}
+	return sb.String()
 }
 
 // PoliciesEnforced tracks the policies, both permissive and restrictive,

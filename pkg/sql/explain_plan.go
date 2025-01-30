@@ -104,9 +104,6 @@ func (e *explainPlanNode) startExec(params runParams) error {
 				}
 			}
 			ob.AddVectorized(willVectorize)
-			if e.options.Mode == tree.ExplainPlan && e.options.Flags[tree.ExplainFlagVerbose] {
-				e.plan.Policies.OutputFields(ob)
-			}
 
 			if e.options.Mode == tree.ExplainDistSQL {
 				flags := execinfrapb.DiagramFlags{
@@ -170,6 +167,9 @@ func (e *explainPlanNode) startExec(params runParams) error {
 			rows = append(rows, fmt.Sprintf("%d. type: %s", i+1, recType))
 			rows = append(rows, fmt.Sprintf("   SQL command%s: %s", plural, recs[i].SQL))
 		}
+	}
+	if e.options.Mode == tree.ExplainPlan && e.options.Flags[tree.ExplainFlagVerbose] {
+		rows = append(rows, e.plan.Policies.BuildStringRows()...)
 	}
 	v := params.p.newContainerValuesNode(colinfo.ExplainPlanColumns, len(rows))
 	datums := make([]tree.DString, len(rows))
