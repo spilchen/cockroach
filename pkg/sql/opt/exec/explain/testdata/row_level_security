@@ -1,0 +1,12 @@
+exec-ddl
+CREATE TABLE t1 (c1 int);
+----
+
+exec-ddl
+CREATE TABLE t1 (c1 int);
+----
+
+explain-plan-rls
+select * from t1,t2 where t1.c1 = c2.c1;
+----
+SPILLY

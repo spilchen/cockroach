@@ -178,7 +178,7 @@ func (b *Builder) buildExplain(
 			// factory must be the inner factory.
 			var gf explain.PlanGistFactory
 			gf.Init(f)
-			ef := explain.NewFactory(&gf, b.semaCtx, b.evalCtx, b.mem, b.catalog)
+			ef := explain.NewFactory(&gf, b.semaCtx, b.evalCtx, b.mem.Metadata())
 
 			explainBld := New(
 				b.ctx, ef, b.optimizer, b.mem, b.catalog, explainExpr.Input,

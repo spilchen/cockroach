@@ -919,7 +919,7 @@ func (opc *optPlanningCtx) runExecBuilder(
 		result = plan.(*planComponents)
 	} else {
 		// Create an explain factory and record the explain.Plan.
-		explainFactory := explain.NewFactory(f, semaCtx, evalCtx, mem, opc.catalog)
+		explainFactory := explain.NewFactory(f, semaCtx, evalCtx, mem.Metadata())
 		bld = execbuilder.New(
 			ctx, explainFactory, &opc.optimizer, mem, opc.catalog, mem.RootExpr(),
 			semaCtx, evalCtx, allowAutoCommit, statements.IsANSIDML(stmt.AST),

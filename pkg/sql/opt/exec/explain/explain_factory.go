@@ -8,10 +8,8 @@ package explain
 
 import (
 	"context"
-	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
-	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
-
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
+	"github.com/cockroachdb/cockroach/pkg/sql/opt"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/exec"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
@@ -27,8 +25,7 @@ type Factory struct {
 	wrappedFactory exec.Factory
 	semaCtx        *tree.SemaContext
 	evalCtx        *eval.Context
-	mem            *memo.Memo
-	catalog        cat.Catalog
+	md             *opt.Metadata
 }
 
 var _ exec.ExplainFactory = &Factory{}
@@ -135,14 +132,13 @@ var _ exec.Plan = &Plan{}
 
 // NewFactory creates a new explain factory.
 func NewFactory(
-	wrappedFactory exec.Factory, semaCtx *tree.SemaContext, evalCtx *eval.Context, mem *memo.Memo, catalog cat.Catalog,
+	wrappedFactory exec.Factory, semaCtx *tree.SemaContext, evalCtx *eval.Context, md *opt.Metadata,
 ) *Factory {
 	return &Factory{
 		wrappedFactory: wrappedFactory,
 		semaCtx:        semaCtx,
 		evalCtx:        evalCtx,
-		mem:            mem,
-		catalog:        catalog,
+		md:             md,
 	}
 }
 
@@ -188,7 +184,7 @@ func (f *Factory) ConstructPlan(
 		f.wrapPostQuery(&triggers[i], &wrappedTriggers[i])
 	}
 	var pf PlanPoliciesFactory
-	pf.Init(f.mem.Metadata())
+	pf.Init(f.md)
 	if policies, err := pf.Build(); err != nil {
 		return nil, err
 	} else {
@@ -235,7 +231,7 @@ func (f *Factory) wrapPostQuery(originalPostQuery, wrappedPostQuery *exec.PostQu
 		if buffer != nil && buffer.(*Node).WrappedNode() != bufferRef {
 			return nil, errors.AssertionFailedf("expected captured buffer %v to wrap the provided bufferRef %v", buffer, bufferRef)
 		}
-		explainFactory := NewFactory(execFactory, semaCtx, evalCtx, f.mem, f.catalog)
+		explainFactory := NewFactory(execFactory, semaCtx, evalCtx, f.md)
 		var err error
 		postQueryPlan, err = origPlanFn(ctx, semaCtx, evalCtx, explainFactory, buffer, numBufferedRows, allowAutoCommit)
 		if err != nil {
