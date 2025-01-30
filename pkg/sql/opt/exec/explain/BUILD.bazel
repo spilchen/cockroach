@@ -28,9 +28,7 @@ go_library(
         "//pkg/sql/opt/cat",
         "//pkg/sql/opt/constraint",
         "//pkg/sql/opt/exec",
-        "//pkg/sql/opt/indexrec",
         "//pkg/sql/opt/invertedexpr",  # keep
-        "//pkg/sql/opt/memo",
         "//pkg/sql/pgwire/pgcode",
         "//pkg/sql/pgwire/pgerror",
         "//pkg/sql/sem/catid",
@@ -60,6 +58,7 @@ go_test(
         "main_test.go",
         "output_test.go",
         "plan_gist_test.go",
+        "row_level_security_test.go",
     ],
     data = glob(["testdata/**"]) + [
         "//pkg/sql/opt/testutils/opttester:testfixtures",
@@ -72,6 +71,7 @@ go_test(
         "//pkg/security/securitytest",
         "//pkg/server",
         "//pkg/sql/catalog/colinfo",
+        "//pkg/sql/opt",
         "//pkg/sql/opt/cat",
         "//pkg/sql/opt/exec",
         "//pkg/sql/opt/memo",

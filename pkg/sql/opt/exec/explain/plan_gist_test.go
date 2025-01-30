@@ -8,9 +8,9 @@ package explain_test
 import (
 	"context"
 	"fmt"
-	"github.com/cockroachdb/cockroach/pkg/sql/opt"
 	"testing"
 
+	"github.com/cockroachdb/cockroach/pkg/sql/opt"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/exec"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/exec/explain"
@@ -86,7 +86,6 @@ func plan(ot *opttester.OptTester, t *testing.T) string {
 	return str
 }
 
-// SPILLY - rename if this ends up working
 func TestPlanGistBuilder(t *testing.T) {
 	catalog := testcat.New()
 	testGists := func(t *testing.T, d *datadriven.TestData) string {
@@ -113,8 +112,6 @@ func TestPlanGistBuilder(t *testing.T) {
 			return plan(ot, t)
 		case "hash":
 			return fmt.Sprintf("%d\n", makeGist(ot, t).Hash())
-		case "explain-plan-rls":
-			return "SPILLY"
 		default:
 			return ot.RunCommand(t, d)
 		}

@@ -1278,6 +1278,13 @@ func (md *Metadata) IsRLSEnabled() bool {
 	return md.rlsMeta.IsInitialized
 }
 
+// SPILLY - should we get rid of IsRLSEnabled and some other APIs?
+
+// GetRLSMeta returns the rls metadata struct
+func (md *Metadata) GetRLSMeta() *RowLevelSecurityMeta {
+	return &md.rlsMeta
+}
+
 // checkRLSDependencies will check the metadata for row-level security
 // dependencies to see if it is up to date.
 func (md *Metadata) checkRLSDependencies(ctx context.Context, evalCtx *eval.Context, optCatalog cat.Catalog) (upToDate bool, err error) {
@@ -1318,6 +1325,7 @@ func (md *Metadata) AddPolicyUse(tableID TableID, policyID descpb.PolicyID) {
 // GetPoliciesEnforced returns the set of policy IDs that were enforced for the
 // given table.
 func (md *Metadata) GetPoliciesEnforced(tableID TableID) (*catalog.PolicyIDSet, bool) {
+	// SPILLY - can we get rid of this API now that we have bare access to meta?
 	ids, found := md.rlsMeta.PoliciesEnforced[tableID]
 	return ids, found
 }

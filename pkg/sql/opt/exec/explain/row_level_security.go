@@ -16,7 +16,8 @@ import (
 // PlanPolicies keeps track of the policies that are enforced for each relation
 // in the query.
 type PlanPolicies struct {
-	enforced []PoliciesEnforced
+	hasAdminRole bool
+	enforced     []PoliciesEnforced
 }
 
 // BuildStringRows generates output of []string of RLS information to include in
@@ -26,7 +27,22 @@ func (p *PlanPolicies) BuildStringRows() []string {
 		return nil
 	}
 
+	tp := p.generateTreePrinter()
+	fmtRows := tp.FormattedRows()
+	rows := make([]string, 1, 1+len(fmtRows)) // prefix with 1 empty row
+	rows = append(rows, fmtRows...)
+	return rows
+}
+
+// generateTreePrinter will build up the rls explain output and return it as a
+// treeprinter.Node.
+func (p *PlanPolicies) generateTreePrinter() treeprinter.Node {
 	tp := treeprinter.NewWithStyle(treeprinter.BulletStyle)
+	// Early out for admin, as policies for all tables were exempt.
+	if p.hasAdminRole {
+		tp.Child("row-level security policies\nexempt for admin member")
+		return tp
+	}
 	root := tp.Child("row-level security policies")
 	for i := range p.enforced {
 		var sb strings.Builder
@@ -35,11 +51,7 @@ func (p *PlanPolicies) BuildStringRows() []string {
 		// TODO(136742): Print out restrictive policies when we support those.
 		root.Child(sb.String())
 	}
-
-	fmtRows := tp.FormattedRows()
-	rows := make([]string, 1, 1+len(fmtRows)) // prefix with 1 empty row
-	rows = append(rows, fmtRows...)
-	return rows
+	return tp
 }
 
 // flattenNames is a helper that takes a slice of Names and returns them as a
@@ -77,13 +89,17 @@ func (p *PlanPoliciesFactory) Init(
 // Build will generate and return a PlanPolicies struct based on the rls
 // policies used in the query.
 func (p *PlanPoliciesFactory) Build() (*PlanPolicies, error) {
+	rlsMeta := p.md.GetRLSMeta()
 	// Early out if the query didn't see any tables with row-level security enabled.
-	if !p.md.IsRLSEnabled() {
+	if !rlsMeta.IsInitialized {
 		return nil, nil
 	}
-	var planPolicies PlanPolicies
+	planPolicies := PlanPolicies{
+		hasAdminRole: rlsMeta.HasAdminRole,
+		enforced:     make([]PoliciesEnforced, 0, len(p.md.AllTables())),
+	}
 	for _, tableMeta := range p.md.AllTables() {
-		ids, rlsActive := p.md.GetPoliciesEnforced(tableMeta.MetaID)
+		ids, rlsActive := rlsMeta.PoliciesEnforced[tableMeta.MetaID]
 		if !rlsActive {
 			// Skip this table as row-level security is not active.
 			continue
