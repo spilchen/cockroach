@@ -25,13 +25,9 @@ func (p *PlanPolicies) BuildStringRows() []string {
 	if len(p.enforced) == 0 {
 		return nil
 	}
-	estRows := 1 /* header */ + len(p.enforced)*3 /* 3 rows per table */
-	rows := make([]string, 0, estRows)
 
 	tp := treeprinter.NewWithStyle(treeprinter.BulletStyle)
-	// NB: The output includes the number of tables with policy enforcement to
-	// simplify parsing of RLS information in tests from the EXPLAIN output.
-	root := tp.Child(fmt.Sprintf("row-level security policies: %d", len(p.enforced)))
+	root := tp.Child("row-level security policies")
 	for i := range p.enforced {
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("table: %s\n", p.enforced[i].name))
@@ -40,8 +36,9 @@ func (p *PlanPolicies) BuildStringRows() []string {
 		root.Child(sb.String())
 	}
 
-	rows = append(rows, "")
-	rows = append(rows, tp.FormattedRows()...)
+	fmtRows := tp.FormattedRows()
+	rows := make([]string, 1, 1+len(fmtRows)) // prefix with 1 empty row
+	rows = append(rows, fmtRows...)
 	return rows
 }
 
