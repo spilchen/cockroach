@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/util/treeprinter"
 	"strings"
 )
 
@@ -27,15 +28,20 @@ func (p *PlanPolicies) BuildStringRows() []string {
 	estRows := 1 /* header */ + len(p.enforced)*3 /* 3 rows per table */
 	rows := make([]string, 0, estRows)
 
-	rows = append(rows, "")
+	tp := treeprinter.NewWithStyle(treeprinter.BulletStyle)
 	// NB: The output includes the number of tables with policy enforcement to
 	// simplify parsing of RLS information in tests from the EXPLAIN output.
-	rows = append(rows, fmt.Sprintf("row-level security policies: %d", len(p.enforced)))
+	root := tp.Child(fmt.Sprintf("row-level security policies: %d", len(p.enforced)))
 	for i := range p.enforced {
-		rows = append(rows, fmt.Sprintf("%d. table: %s", i+1, p.enforced[i].name))
-		rows = append(rows, fmt.Sprintf("   permissive: [%s]", flattenNames(p.enforced[i].permissivePolicies)))
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("table: %s\n", p.enforced[i].name))
+		sb.WriteString(fmt.Sprintf("permissive: [%s]", flattenNames(p.enforced[i].permissivePolicies)))
 		// TODO(136742): Print out restrictive policies when we support those.
+		root.Child(sb.String())
 	}
+
+	rows = append(rows, "")
+	rows = append(rows, tp.FormattedRows()...)
 	return rows
 }
 

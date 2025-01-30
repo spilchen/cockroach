@@ -145,6 +145,10 @@ func (e *explainPlanNode) startExec(params runParams) error {
 			}
 		}
 	}
+	// Add RLS policy information if verbose
+	if e.options.Mode == tree.ExplainPlan && e.options.Flags[tree.ExplainFlagVerbose] {
+		rows = append(rows, e.plan.Policies.BuildStringRows()...)
+	}
 	// Add index recommendations to output, if they exist.
 	if recs := params.p.instrumentation.explainIndexRecs; recs != nil {
 		// First add empty row.
@@ -167,9 +171,6 @@ func (e *explainPlanNode) startExec(params runParams) error {
 			rows = append(rows, fmt.Sprintf("%d. type: %s", i+1, recType))
 			rows = append(rows, fmt.Sprintf("   SQL command%s: %s", plural, recs[i].SQL))
 		}
-	}
-	if e.options.Mode == tree.ExplainPlan && e.options.Flags[tree.ExplainFlagVerbose] {
-		rows = append(rows, e.plan.Policies.BuildStringRows()...)
 	}
 	v := params.p.newContainerValuesNode(colinfo.ExplainPlanColumns, len(rows))
 	datums := make([]tree.DString, len(rows))
