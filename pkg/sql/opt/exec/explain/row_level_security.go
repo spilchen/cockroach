@@ -28,7 +28,9 @@ func (p *PlanPolicies) BuildStringRows() []string {
 	rows := make([]string, 0, estRows)
 
 	rows = append(rows, "")
-	rows = append(rows, "row-level security policies:")
+	// NB: The output includes the number of tables with policy enforcement to
+	// simplify parsing of RLS information in tests from the EXPLAIN output.
+	rows = append(rows, fmt.Sprintf("row-level security policies: %d", len(p.enforced)))
 	for i := range p.enforced {
 		rows = append(rows, fmt.Sprintf("%d. table: %s", i+1, p.enforced[i].name))
 		rows = append(rows, fmt.Sprintf("   permissive: [%s]", flattenNames(p.enforced[i].permissivePolicies)))
