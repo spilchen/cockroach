@@ -24,6 +24,7 @@ func (s *scope) GetColumnItemResolver() colinfo.ColumnItemResolver {
 
 // AddTable is part of the sqlutils.ColumnItemResolverTester interface.
 func (s *scope) AddTable(tabName tree.TableName, colNames []tree.Name) {
+	if s.dd
 	for _, col := range colNames {
 		s.cols = append(s.cols, scopeColumn{name: scopeColName(col), table: tabName})
 	}

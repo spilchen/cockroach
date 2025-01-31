@@ -117,6 +117,7 @@ type mutationBuilder struct {
 	// evaluating check constraint expressions defined on the target table. Its
 	// length is always equal to the number of check constraints on the table
 	// (see opt.Table.CheckCount).
+	// SPILLY - update comment to reflect that it contains snythesized checks
 	checkColIDs opt.OptionalColList
 
 	// partialIndexPutColIDs lists the input column IDs storing the boolean
@@ -264,7 +265,8 @@ func (mb *mutationBuilder) init(b *Builder, opName string, tab cat.Table, alias 
 	numPartialIndexes := partialIndexCount(tab)
 	numVectorIndexes := vectorIndexCount(tab)
 	numChecks := tab.CheckCount()
-	colIDs := make(opt.OptionalColList, 4*tabCols+numChecks+2*numPartialIndexes+3*numVectorIndexes)
+	numPolicies := tab.PolicyCount(tree.PolicyTypePermissive)
+	colIDs := make(opt.OptionalColList, 4*tabCols+numChecks+2*numPartialIndexes+3*numVectorIndexes+numPolicies)
 
 	var start int
 	getSlice := func(n int) opt.OptionalColList {
@@ -276,7 +278,7 @@ func (mb *mutationBuilder) init(b *Builder, opName string, tab cat.Table, alias 
 	mb.fetchColIDs = getSlice(tabCols)
 	mb.updateColIDs = getSlice(tabCols)
 	mb.upsertColIDs = getSlice(tabCols)
-	mb.checkColIDs = getSlice(numChecks)
+	mb.checkColIDs = getSlice(numChecks + numPolicies)
 	mb.partialIndexPutColIDs = getSlice(numPartialIndexes)
 	mb.partialIndexDelColIDs = getSlice(numPartialIndexes)
 	mb.vectorIndexPutPartitionColIDs = getSlice(numVectorIndexes)
@@ -865,77 +867,101 @@ func (mb *mutationBuilder) addSynthesizedComputedCols(colIDs opt.OptionalColList
 // to checkColIDs, which allows pruning normalization rules to remove the
 // unnecessary projected column.
 func (mb *mutationBuilder) addCheckConstraintCols(isUpdate bool) {
-	if mb.tab.CheckCount() != 0 {
+	// SPILLY - here
+	if mb.tab.CheckCount() != 0 || mb.tab.IsRowLevelSecurityEnabled() {
 		projectionsScope := mb.outScope.replace()
 		projectionsScope.appendColumnsFromScope(mb.outScope)
-		mutationCols := mb.mutationColumnIDs()
 
-		for i, n := 0, mb.tab.CheckCount(); i < n; i++ {
+		var i int
+		for n := mb.tab.CheckCount(); i < n; i++ {
 			check := mb.tab.Check(i)
-			expr, err := parser.ParseExpr(check.Constraint())
+			mb.addOneCheckConstraint(check, i, projectionsScope, isUpdate)
+		}
+
+		// SPILLY - move some of this out into row_level_security.go
+		if mb.tab.IsRowLevelSecurityEnabled() {
+			isAdmin, err := mb.b.catalog.HasAdminRole(mb.b.ctx)
 			if err != nil {
 				panic(err)
 			}
+			if isAdmin {
+				mb.md.SetRLSEnabled(mb.b.evalCtx, true /* isAdmin */, mb.tabID)
+			} else {
+				mb.md.SetRLSEnabled(mb.b.evalCtx, false, mb.tabID)
+				// SPILLY - explain why i must be reused
+				for n := mb.tab.CheckCount() + mb.tab.PolicyCount(tree.PolicyTypePermissive); i < n; i++ {
 
-			texpr := mb.outScope.resolveAndRequireType(expr, types.Bool)
-
-			// Use an anonymous name because the column cannot be referenced
-			// in other expressions.
-			colName := scopeColName("").WithMetadataName(fmt.Sprintf("check%d", i+1))
-			scopeCol := projectionsScope.addColumn(colName, texpr)
-
-			// TODO(ridwanmsharif): Maybe we can avoid building constraints here
-			// and instead use the constraints stored in the table metadata.
-			referencedCols := &opt.ColSet{}
-			mb.b.buildScalar(texpr, mb.outScope, projectionsScope, scopeCol, referencedCols)
-
-			// If the mutation is not an UPDATE, track the synthesized check
-			// columns in checkColIDS. If the mutation is an UPDATE, only track
-			// the check columns if the columns referenced in the check
-			// expression are being mutated.
-			if !isUpdate || referencedCols.Intersects(mutationCols) {
-				mb.checkColIDs[i] = scopeCol.id
-
-				// TODO(michae2): Under weaker isolation levels we need to use shared
-				// locking to enforce multi-column-family check constraints. Disallow it
-				// for now.
-				//
-				// When do we need the locking? If:
-				// - The check constraint involves a column family that is updated
-				//   (otherwise we don't need to do anything to maintain this constraint)
-				// - And the check constraint involves a column family that is *not*
-				//   updated, but *is* read. In this case we don't have an intent, so
-				//   we need a lock. But we're not currently taking that lock.
-				if mb.b.evalCtx.TxnIsoLevel != isolation.Serializable {
-					// Find the columns referenced in the check constraint that are being
-					// read and updated.
-					var readColOrds, updateColOrds intsets.Fast
-					for j, n := 0, check.ColumnCount(); j < n; j++ {
-						ord := check.ColumnOrdinal(j)
-						if mb.fetchColIDs[ord] != 0 {
-							readColOrds.Add(ord)
-						}
-						if mb.updateColIDs[ord] != 0 {
-							updateColOrds.Add(ord)
-						}
-					}
-					// If some of the check constraint column families are being updated
-					// but others are only being read, return an error.
-					if updateColOrds.Len() > 0 {
-						readColFamilies := getColumnFamilySet(readColOrds, mb.tab)
-						updateColFamilies := getColumnFamilySet(updateColOrds, mb.tab)
-						if readColFamilies.Difference(updateColFamilies).Len() > 0 {
-							panic(unimplemented.NewWithIssuef(112488,
-								"multi-column-family check constraints are not yet supported under read committed isolation",
-							))
-						}
-					}
 				}
 			}
 		}
 
 		mb.b.constructProjectForScope(mb.outScope, projectionsScope)
 		mb.outScope = projectionsScope
+	}
+}
+
+func (mb *mutationBuilder) addOneCheckConstraint(check cat.CheckConstraint, checkInx int, projectionsScope *scope, isUpdate bool) {
+	mutationCols := mb.mutationColumnIDs()
+
+	expr, err := parser.ParseExpr(check.Constraint())
+	if err != nil {
+		panic(err)
+	}
+
+	texpr := mb.outScope.resolveAndRequireType(expr, types.Bool)
+
+	// Use an anonymous name because the column cannot be referenced
+	// in other expressions.
+	colName := scopeColName("").WithMetadataName(fmt.Sprintf("check%d", checkInx+1))
+	scopeCol := projectionsScope.addColumn(colName, texpr)
+
+	// TODO(ridwanmsharif): Maybe we can avoid building constraints here
+	// and instead use the constraints stored in the table metadata.
+	referencedCols := &opt.ColSet{}
+	mb.b.buildScalar(texpr, mb.outScope, projectionsScope, scopeCol, referencedCols)
+
+	// If the mutation is not an UPDATE, track the synthesized check
+	// columns in checkColIDS. If the mutation is an UPDATE, only track
+	// the check columns if the columns referenced in the check
+	// expression are being mutated.
+	if !isUpdate || referencedCols.Intersects(mutationCols) {
+		mb.checkColIDs[checkInx] = scopeCol.id
+
+		// TODO(michae2): Under weaker isolation levels we need to use shared
+		// locking to enforce multi-column-family check constraints. Disallow it
+		// for now.
+		//
+		// When do we need the locking? If:
+		// - The check constraint involves a column family that is updated
+		//   (otherwise we don't need to do anything to maintain this constraint)
+		// - And the check constraint involves a column family that is *not*
+		//   updated, but *is* read. In this case we don't have an intent, so
+		//   we need a lock. But we're not currently taking that lock.
+		if mb.b.evalCtx.TxnIsoLevel != isolation.Serializable {
+			// Find the columns referenced in the check constraint that are being
+			// read and updated.
+			var readColOrds, updateColOrds intsets.Fast
+			for j, n := 0, check.ColumnCount(); j < n; j++ {
+				ord := check.ColumnOrdinal(j)
+				if mb.fetchColIDs[ord] != 0 {
+					readColOrds.Add(ord)
+				}
+				if mb.updateColIDs[ord] != 0 {
+					updateColOrds.Add(ord)
+				}
+			}
+			// If some of the check constraint column families are being updated
+			// but others are only being read, return an error.
+			if updateColOrds.Len() > 0 {
+				readColFamilies := getColumnFamilySet(readColOrds, mb.tab)
+				updateColFamilies := getColumnFamilySet(updateColOrds, mb.tab)
+				if readColFamilies.Difference(updateColFamilies).Len() > 0 {
+					panic(unimplemented.NewWithIssuef(112488,
+						"multi-column-family check constraints are not yet supported under read committed isolation",
+					))
+				}
+			}
+		}
 	}
 }
 
