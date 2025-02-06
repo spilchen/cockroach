@@ -835,7 +835,7 @@ type optTable struct {
 	// checkConstraints is the set of check constraints for this table. It
 	// can be different from desc's constraints because of synthesized
 	// constraints for user defined types.
-	checkConstraints []optCheckConstraint
+	checkConstraints []cat.CheckConstraintBuilder
 
 	triggers []optTrigger
 
@@ -1118,8 +1118,12 @@ func newOptTable(
 		ot.families[i].init(ot, &desc.GetFamilies()[i+1])
 	}
 
+	// Store row-level security information
+	ot.rlsEnabled = desc.IsRowLevelSecurityEnabled()
+	ot.policies = getOptPolicies(desc.GetPolicies())
+
 	// Synthesize any check constraints for user defined types.
-	var synthesizedChecks []optCheckConstraint
+	var synthesizedChecks []cat.CheckConstraintBuilder
 	for i := 0; i < ot.ColumnCount(); i++ {
 		col := ot.Column(i)
 		if col.IsMutation() {
@@ -1136,7 +1140,7 @@ func newOptTable(
 					Left:     &tree.ColumnItem{ColumnName: col.ColName()},
 					Right:    tree.NewDTuple(colType, tree.MakeAllDEnumsInType(colType)...),
 				}
-				synthesizedChecks = append(synthesizedChecks, optCheckConstraint{
+				synthesizedChecks = append(synthesizedChecks, &optCheckConstraint{
 					constraint:  tree.Serialize(expr),
 					validated:   true,
 					columnCount: 1,
@@ -1147,12 +1151,21 @@ func newOptTable(
 			}
 		}
 	}
+	// Build a synthetic check for RLS
+	if ot.rlsEnabled {
+		synthesizedChecks = append(synthesizedChecks, &optRLSConstraintBuilder{
+			policies:            ot.policies,
+			lookupColumnOrdinal: ot.lookupColumnOrdinal,
+		})
+
+	}
+	// SPILLY - add new constraint builder here
 	// Move all existing and synthesized checks into the opt table.
 	activeChecks := desc.EnforcedCheckConstraints()
-	ot.checkConstraints = make([]optCheckConstraint, 0, len(activeChecks)+len(synthesizedChecks))
+	ot.checkConstraints = make([]cat.CheckConstraintBuilder, 0, len(activeChecks)+len(synthesizedChecks))
 	for i := range activeChecks {
 		check := activeChecks[i]
-		ot.checkConstraints = append(ot.checkConstraints, optCheckConstraint{
+		ot.checkConstraints = append(ot.checkConstraints, &optCheckConstraint{
 			constraint:  check.GetExpr(),
 			validated:   check.GetConstraintValidity() == descpb.ConstraintValidity_Validated,
 			columnCount: len(check.CheckDesc().ColumnIDs),
@@ -1165,10 +1178,6 @@ func newOptTable(
 
 	// Move all triggers into the opt table.
 	ot.triggers = getOptTriggers(desc.GetTriggers())
-
-	// Store row-level security information
-	ot.rlsEnabled = desc.IsRowLevelSecurityEnabled()
-	ot.policies = getOptPolicies(desc.GetPolicies())
 
 	// Add stats last, now that other metadata is initialized.
 	if stats != nil {
@@ -1348,8 +1357,8 @@ func (ot *optTable) CheckCount() int {
 }
 
 // Check is part of the cat.Table interface.
-func (ot *optTable) Check(i int) cat.CheckConstraint {
-	return &ot.checkConstraints[i]
+func (ot *optTable) Check(i int) cat.CheckConstraintBuilder {
+	return ot.checkConstraints[i]
 }
 
 // FamilyCount is part of the cat.Table interface.
@@ -1913,6 +1922,18 @@ func (oc *optCheckConstraint) ColumnOrdinal(i int) int {
 	}
 	return ord
 }
+
+var _ cat.CheckConstraintBuilder = &optCheckConstraint{}
+
+// Build is part of the cat.CheckConstraintBuilder interface.
+func (oc *optCheckConstraint) Build(
+	context.Context, cat.Catalog, username.SQLUsername,
+) cat.CheckConstraint {
+	return oc
+}
+
+// GetStaticConstraint is part of the cat.CheckConstraintBuilder interface.
+func (oc *optCheckConstraint) GetStaticConstraint() cat.CheckConstraint { return oc }
 
 type optTableStat struct {
 	stat           *stats.TableStatistic
@@ -2500,7 +2521,7 @@ func (ot *optVirtualTable) CheckCount() int {
 }
 
 // Check is part of the cat.Table interface.
-func (ot *optVirtualTable) Check(i int) cat.CheckConstraint {
+func (ot *optVirtualTable) Check(i int) cat.CheckConstraintBuilder {
 	check := ot.desc.EnforcedCheckConstraints()[i]
 	return &optCheckConstraint{
 		constraint:  check.GetExpr(),

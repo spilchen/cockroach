@@ -81,7 +81,14 @@ func FormatTable(
 	}
 
 	for i := 0; i < tab.CheckCount(); i++ {
-		child.Childf("CHECK (%s)", MaybeMarkRedactable(tab.Check(i).Constraint(), redactableValues))
+		// We only show constraints that are constant and known when the catalog is
+		// built. This is your standard CHECK constraint or synthesized constraints
+		// for enums.
+		cons := tab.Check(i).GetStaticConstraint()
+		if cons == nil {
+			continue
+		}
+		child.Childf("CHECK (%s)", MaybeMarkRedactable(cons.Constraint(), redactableValues))
 	}
 
 	for i := 0; i < tab.DeletableIndexCount(); i++ {

@@ -816,7 +816,7 @@ type Table struct {
 	Columns    []cat.Column
 	Indexes    []*Index
 	Stats      TableStats
-	Checks     []cat.CheckConstraint
+	Checks     []cat.CheckConstraintBuilder
 	Families   []*Family
 	Triggers   []Trigger
 	IsVirtual  bool
@@ -953,7 +953,7 @@ func (tt *Table) CheckCount() int {
 }
 
 // Check is part of the cat.Table interface.
-func (tt *Table) Check(i int) cat.CheckConstraint {
+func (tt *Table) Check(i int) cat.CheckConstraintBuilder {
 	return tt.Checks[i]
 }
 
@@ -1430,6 +1430,18 @@ func (c *CheckConstraint) ColumnCount() int {
 func (c *CheckConstraint) ColumnOrdinal(i int) int {
 	return c.columnOrdinals[i]
 }
+
+var _ cat.CheckConstraintBuilder = &CheckConstraint{}
+
+// Build is part of the cat.CheckConstraintBuilder interface.
+func (c *CheckConstraint) Build(
+	context.Context, cat.Catalog, username.SQLUsername,
+) cat.CheckConstraint {
+	return c
+}
+
+// GetStaticConstraint is part of the cat.CheckConstraintBuilder interface.
+func (c *CheckConstraint) GetStaticConstraint() cat.CheckConstraint { return c }
 
 // TableStat implements the cat.TableStatistic interface for testing purposes.
 type TableStat struct {

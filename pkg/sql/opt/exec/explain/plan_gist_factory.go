@@ -562,7 +562,7 @@ func (u *unknownTable) CheckCount() int {
 	return 0
 }
 
-func (u *unknownTable) Check(i int) cat.CheckConstraint {
+func (u *unknownTable) Check(i int) cat.CheckConstraintBuilder {
 	panic(errors.AssertionFailedf("not implemented"))
 }
 

@@ -813,7 +813,7 @@ func (b *Builder) addCheckConstraintsForTable(tabMeta *opt.TableMeta) {
 	numChecks := tab.CheckCount()
 	chkIdx := 0
 	for ; chkIdx < numChecks; chkIdx++ {
-		if tab.Check(chkIdx).Validated() {
+		if tab.Check(chkIdx).Build(b.ctx, b.catalog, b.checkPrivilegeUser).Validated() {
 			break
 		}
 	}
@@ -847,7 +847,7 @@ func (b *Builder) addCheckConstraintsForTable(tabMeta *opt.TableMeta) {
 	var filters memo.FiltersExpr
 	// Skip to the first validated constraint we found above.
 	for ; chkIdx < numChecks; chkIdx++ {
-		checkConstraint := tab.Check(chkIdx)
+		checkConstraint := tab.Check(chkIdx).Build(b.ctx, b.catalog, b.checkPrivilegeUser)
 
 		// Only add validated check constraints to the table's metadata.
 		if !checkConstraint.Validated() {

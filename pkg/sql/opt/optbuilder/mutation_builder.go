@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/concurrency/isolation"
+	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/server/telemetry"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/schemaexpr"
@@ -244,17 +245,24 @@ type mutationBuilder struct {
 	// uniqueWithTombstoneIndexes is the set of unique indexes that ensure uniqueness
 	// by writing tombstones to all partitions
 	uniqueWithTombstoneIndexes intsets.Fast
+
+	// checkPrivilegeUser helps identify the username.SQLUsername for privilege
+	// checks performed. For routines that are specified with SECURITY
+	// DEFINER, the owner of the routine is checked. Otherwise, the check is
+	// against the user of the current session.
+	checkPrivilegeUser username.SQLUsername
 }
 
 func (mb *mutationBuilder) init(b *Builder, opName string, tab cat.Table, alias tree.TableName) {
 	// This initialization pattern ensures that fields are not unwittingly
 	// reused. Field reuse must be explicit.
 	*mb = mutationBuilder{
-		b:      b,
-		md:     b.factory.Metadata(),
-		opName: opName,
-		tab:    tab,
-		alias:  alias,
+		b:                  b,
+		md:                 b.factory.Metadata(),
+		opName:             opName,
+		tab:                tab,
+		alias:              alias,
+		checkPrivilegeUser: b.checkPrivilegeUser,
 	}
 
 	tabCols := tab.ColumnCount()
@@ -871,7 +879,7 @@ func (mb *mutationBuilder) addCheckConstraintCols(isUpdate bool) {
 		mutationCols := mb.mutationColumnIDs()
 
 		for i, n := 0, mb.tab.CheckCount(); i < n; i++ {
-			check := mb.tab.Check(i)
+			check := mb.tab.Check(i).Build(mb.b.ctx, mb.b.catalog, mb.checkPrivilegeUser)
 			expr, err := parser.ParseExpr(check.Constraint())
 			if err != nil {
 				panic(err)

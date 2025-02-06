@@ -198,6 +198,7 @@ go_library(
         "revert.go",
         "revoke_role.go",
         "routine.go",
+        "row_level_security.go",
         "row_source_to_plan_node.go",
         "save_table.go",
         "scan.go",

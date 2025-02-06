@@ -6,8 +6,10 @@
 package cat
 
 import (
+	"context"
 	"time"
 
+	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
@@ -99,7 +101,7 @@ type Table interface {
 	CheckCount() int
 
 	// Check returns the ith check constraint, where i < CheckCount.
-	Check(i int) CheckConstraint
+	Check(i int) CheckConstraintBuilder
 
 	// FamilyCount returns the number of column families present on the table.
 	// There is always at least one primary family (always family 0) where columns
@@ -212,6 +214,19 @@ type CheckConstraint interface {
 	// ColumnOrdinal returns the table column ordinal of the ith column in this
 	// constraint.
 	ColumnOrdinal(i int) int
+}
+
+// CheckConstraintBuilder will generate a struct that implements CheckConstraint.
+// This allows us to handle constraints that can change depending upon different
+// runtime state.
+type CheckConstraintBuilder interface {
+	// GetStaticConstraint returns a pointer to the CheckConstraint if the
+	// constraint is the same for all environments. If the constraint needs the
+	// Build function to be called, this returns nil.
+	GetStaticConstraint() CheckConstraint
+	// Build will generate the CheckConstraint by potententially building it for
+	// the current runtime environment.
+	Build(context.Context, Catalog, username.SQLUsername) CheckConstraint
 }
 
 // TableStatistic is an interface to a table statistic. Each statistic is
