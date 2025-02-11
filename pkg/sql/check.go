@@ -872,6 +872,14 @@ func checkMutationInput(
 		}
 		colIdx++
 	}
+
+	// SPILLY - check for RLS here.
+	rlsCheck := tabDesc.RLSCheckConstraint()
+	if rlsCheck != nil {
+		// SPILLY - is this the correct user for security definer?
+		chk := rlsCheck.Build(evalCtx.SessionData().User())
+
+	}
 	return nil
 }
 

@@ -339,6 +339,7 @@ type constraintCache struct {
 	uwis, uwisEnforced     []catalog.UniqueWithIndexConstraint
 	uwois, uwoisEnforced   []catalog.UniqueWithoutIndexConstraint
 	fkBackRefs             []catalog.ForeignKeyConstraint
+	rlsCheck               catalog.RLSCheckConstraint
 }
 
 // newConstraintCache returns a fresh fully-populated constraintCache struct for the
@@ -478,6 +479,12 @@ func newConstraintCache(
 			fkBackRefBackingStructs[i].desc = &desc.InboundFKs[i]
 			c.fkBackRefs[i] = &fkBackRefBackingStructs[i]
 		}
+	}
+	// Populate the rls check constraint.
+	if desc.RowLevelSecurityEnabled {
+		// SPILLY -we need to populate the rls check constraint here
+		// We could add an AsRLSCheckConstraint() method (see ConstraintProvider)
+		//c.rlsCheck = newRLSCheckConstraint(desc)
 	}
 	return &c
 }

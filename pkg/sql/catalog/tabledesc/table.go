@@ -396,6 +396,11 @@ func (desc *wrapper) EnforcedUniqueConstraintsWithoutIndex() []catalog.UniqueWit
 	return desc.getExistingOrNewConstraintCache().uwoisEnforced
 }
 
+// SPILLY - is the name good. Is it really a check constraint??
+func (desc *wrapper) RLSCheckConstraint() catalog.RLSCheckConstraint {
+	return desc.getExistingOrNewConstraintCache().rlsCheck
+}
+
 // InitTableDescriptor returns a blank TableDescriptor.
 func InitTableDescriptor(
 	id, parentID, parentSchemaID descpb.ID,
