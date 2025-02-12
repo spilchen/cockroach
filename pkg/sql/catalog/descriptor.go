@@ -753,9 +753,6 @@ type TableDescriptor interface {
 	// defined as unique by a non-index-backed constraint.
 	UniqueWithoutIndexColumns(uwoi UniqueWithoutIndexConstraint) []Column
 
-	// SPILLY - temp
-	RLSCheckConstraint() RLSCheckConstraint
-
 	// GetLocalityConfig returns the locality config for this table, which
 	// describes the table's multi-region locality policy if one is set (e.g.
 	// GLOBAL or REGIONAL BY ROW).

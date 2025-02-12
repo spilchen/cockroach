@@ -1165,6 +1165,11 @@ func newOptTable(
 	ot.checkConstraints = make([]cat.CheckConstraintBuilder, 0, len(activeChecks)+len(synthesizedChecks))
 	for i := range activeChecks {
 		check := activeChecks[i]
+		// SPILLY - this is probably all wrong, but hacking this to get it working
+		// We add the RLS check constraint as a synthethetic check below.
+		if check.IsRLSConstraint() {
+			continue
+		}
 		ot.checkConstraints = append(ot.checkConstraints, &optCheckConstraint{
 			constraint:  check.GetExpr(),
 			validated:   check.GetConstraintValidity() == descpb.ConstraintValidity_Validated,

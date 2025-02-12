@@ -50,7 +50,7 @@ func (c checkConstraint) CheckDesc() *descpb.TableDescriptor_CheckConstraint {
 	return c.desc
 }
 
-// Expr implements the catalog.CheckConstraint interface.
+// GetExpr implements the catalog.CheckConstraint interface.
 func (c checkConstraint) GetExpr() string {
 	return c.desc.Expr
 }
@@ -76,6 +76,9 @@ func (c checkConstraint) CollectReferencedColumnIDs() catalog.TableColSet {
 func (c checkConstraint) IsNotNullColumnConstraint() bool {
 	return c.desc.IsNonNullConstraint
 }
+
+// IsRLSConstraint implements the catalog.CheckConstraint interface.
+func (c checkConstraint) IsRLSConstraint() bool { return false }
 
 // IsHashShardingConstraint implements the catalog.CheckConstraint interface.
 func (c checkConstraint) IsHashShardingConstraint() bool {
@@ -120,6 +123,81 @@ func (c checkConstraint) String() string {
 // IsEnforced implements the catalog.Constraint interface.
 func (c checkConstraint) IsEnforced() bool {
 	return !c.IsMutation() || c.WriteAndDeleteOnly()
+}
+
+type rlsSyntheticCheckConstraint struct {
+	constraintBase
+}
+
+var _ catalog.CheckConstraint = (*rlsSyntheticCheckConstraint)(nil)
+
+func (r rlsSyntheticCheckConstraint) CheckDesc() *descpb.TableDescriptor_CheckConstraint { return nil }
+
+// GetExpr implements the catalog.CheckConstraint interface.
+func (r rlsSyntheticCheckConstraint) GetExpr() string {
+	// This isn't the real constraint. This is a placeholder to fulfill this
+	// interface. The real expression is generated at runtime based on the role,
+	// policies and command.
+	return "true"
+}
+
+func (r rlsSyntheticCheckConstraint) NumReferencedColumns() int { return 0 }
+
+func (r rlsSyntheticCheckConstraint) GetReferencedColumnID(columnOrdinal int) descpb.ColumnID {
+	return 0
+}
+
+// CollectReferencedColumnIDs implements the catalog.CheckConstraint
+// interface.
+func (r rlsSyntheticCheckConstraint) CollectReferencedColumnIDs() catalog.TableColSet {
+	return catalog.TableColSet{}
+}
+
+// IsNotNullColumnConstraint implements the catalog.CheckConstraint interface.
+func (r rlsSyntheticCheckConstraint) IsNotNullColumnConstraint() bool { return false }
+
+// IsRLSConstraint implements the catalog.CheckConstraint interface.
+func (r rlsSyntheticCheckConstraint) IsRLSConstraint() bool { return true }
+
+// IsHashShardingConstraint implements the catalog.CheckConstraint interface.
+func (r rlsSyntheticCheckConstraint) IsHashShardingConstraint() bool { return false }
+
+// GetConstraintID implements the catalog.Constraint interface.
+func (r rlsSyntheticCheckConstraint) GetConstraintID() descpb.ConstraintID { return 0 }
+
+// GetConstraintValidity implements the catalog.Constraint interface.
+func (r rlsSyntheticCheckConstraint) GetConstraintValidity() descpb.ConstraintValidity {
+	return descpb.ConstraintValidity_Validated
+}
+
+// IsConstraintValidated implements the catalog.Constraint interface.
+func (r rlsSyntheticCheckConstraint) IsConstraintValidated() bool {
+	return true
+}
+
+// IsConstraintUnvalidated implements the catalog.Constraint interface.
+func (r rlsSyntheticCheckConstraint) IsConstraintUnvalidated() bool {
+	return false
+}
+
+// GetName implements the catalog.Constraint interface.
+func (r rlsSyntheticCheckConstraint) GetName() string {
+	return "rls syn check SPILLY"
+}
+
+// AsCheck implements the catalog.ConstraintProvider interface.
+func (r rlsSyntheticCheckConstraint) AsCheck() catalog.CheckConstraint {
+	return &r
+}
+
+// String implements the catalog.Constraint interface.
+func (r rlsSyntheticCheckConstraint) String() string {
+	return "SPILLY - what's my String() output"
+}
+
+// IsEnforced implements the catalog.Constraint interface.
+func (r rlsSyntheticCheckConstraint) IsEnforced() bool {
+	return true
 }
 
 type uniqueWithoutIndexConstraint struct {
@@ -339,7 +417,6 @@ type constraintCache struct {
 	uwis, uwisEnforced     []catalog.UniqueWithIndexConstraint
 	uwois, uwoisEnforced   []catalog.UniqueWithoutIndexConstraint
 	fkBackRefs             []catalog.ForeignKeyConstraint
-	rlsCheck               catalog.RLSCheckConstraint
 }
 
 // newConstraintCache returns a fresh fully-populated constraintCache struct for the
@@ -482,9 +559,11 @@ func newConstraintCache(
 	}
 	// Populate the rls check constraint.
 	if desc.RowLevelSecurityEnabled {
-		// SPILLY -we need to populate the rls check constraint here
-		// We could add an AsRLSCheckConstraint() method (see ConstraintProvider)
-		//c.rlsCheck = newRLSCheckConstraint(desc)
+		chk := rlsSyntheticCheckConstraint{}
+		c.all = append(c.all, chk)
+		c.allEnforced = append(c.allEnforced, chk)
+		c.checks = append(c.checks, chk)
+		c.checksEnforced = append(c.checksEnforced, chk)
 	}
 	return &c
 }

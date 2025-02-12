@@ -1158,9 +1158,10 @@ func (desc *wrapper) validateConstraintNamesAndIDs(vea catalog.ValidationErrorAc
 	names := make(map[string]descpb.ConstraintID, len(constraints))
 	idToName := make(map[descpb.ConstraintID]string, len(constraints))
 	for _, c := range constraints {
-		if c.AsCheck() != nil && c.AsCheck().IsNotNullColumnConstraint() {
-			// Relax validation for NOT NULL constraint when disguised as CHECK
-			// constraint, because they don't have a constraintID.
+		chk := c.AsCheck()
+		if chk != nil && (chk.IsNotNullColumnConstraint() || chk.IsRLSConstraint()) {
+			// Relax validation for NOT NULL or row-level security constraints when
+			// disguised as CHECK constraint, because they don't have a constraintID.
 			continue
 		}
 		if c.GetConstraintID() == 0 {

@@ -7,7 +7,6 @@ package catalog
 
 import (
 	"fmt"
-	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/geo/geopb"
@@ -84,11 +83,6 @@ type ConstraintProvider interface {
 	// AsUniqueWithoutIndex returns the corresponding
 	// UniqueWithoutIndexConstraint if there is one, nil otherwise.
 	AsUniqueWithoutIndex() UniqueWithoutIndexConstraint
-
-	// SPILLY - maybe consider this
-	// AsRLSCheckConstraint returns the check constraint to enforec row-level
-	// security policies.
-	//AsRLSCheckConstraint() RLSCheckConstraint
 }
 
 // Mutation is an interface around a table descriptor mutation.
@@ -554,15 +548,10 @@ type CheckConstraint interface {
 	// IsHashShardingConstraint returns true iff this check constraint is
 	// associated with a hash-sharding column in this table.
 	IsHashShardingConstraint() bool
-}
 
-// RLSCheckConstraint is a constraint that is used to enforce row-level security
-// policies for write.
-type RLSCheckConstraint interface {
-	Constraint
-
-	// Build will generate the underlying check constraint for use during runtime.
-	Build(user username.SQLUsername) CheckConstraint
+	// IsRLSConstraint returns true iff ths check constraint is the synthethic one
+	// to enforce row-level security policies.
+	IsRLSConstraint() bool
 }
 
 // ForeignKeyConstraint is an interface around a check constraint.
