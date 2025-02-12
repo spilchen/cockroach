@@ -302,6 +302,13 @@ func CheckFailed(
 	tabDesc catalog.TableDescriptor,
 	check catalog.CheckConstraint,
 ) error {
+	// If this is the synthetic check added for row-level security, we should
+	// return a different error.
+	if check.IsRLSConstraint() {
+		return pgerror.Newf(pgcode.InsufficientPrivilege,
+			"new row violates row-level security policy for table %q",
+			tabDesc.GetName())
+	}
 	// Failed to satisfy CHECK constraint, so unwrap the serialized
 	// check expression to display to the user.
 	expr, err := schemaexpr.FormatExprForDisplay(
