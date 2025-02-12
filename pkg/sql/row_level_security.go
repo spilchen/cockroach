@@ -13,6 +13,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
+	"github.com/cockroachdb/cockroach/pkg/util/intsets"
 )
 
 type optRLSConstraintBuilder struct {
@@ -56,7 +57,9 @@ func (r *optRLSConstraintBuilder) genExpression(
 ) (string, descpb.ColumnIDs) {
 	var sb strings.Builder
 
-	// SPILLY - need to figure out how to call this. We are building the catalog. Maybe pass into Build??
+	// colIDs tracks the column IDs referenced in all the policy expressions
+	// that are applied.
+	var colIDs intsets.Fast
 
 	// Admin users are exempt from any RLS policies.
 	isAdmin, err := oc.HasAdminRole(ctx)
@@ -84,6 +87,8 @@ func (r *optRLSConstraintBuilder) genExpression(
 		sb.WriteString("(")
 		sb.WriteString(p.WithCheckExpr)
 		sb.WriteString(")")
+
+		colIDs = colIDs.Union(p.WithCheckColumnIDs)
 	}
 
 	// TODO(136742): Add support for restrictive policies.
@@ -94,7 +99,8 @@ func (r *optRLSConstraintBuilder) genExpression(
 		return "(false)", nil
 	}
 
-	// SPILLY - we need to return the column IDs for the columns referenced in the
-	// expression.
-	return sb.String(), []descpb.ColumnID{0}
+	orderedColIDs := make(descpb.ColumnIDs, 0, colIDs.Len())
+	colIDs.ForEach(func(id int) { orderedColIDs = append(orderedColIDs, descpb.ColumnID(id)) })
+
+	return sb.String(), orderedColIDs
 }
