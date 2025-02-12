@@ -50,7 +50,7 @@ func (c checkConstraint) CheckDesc() *descpb.TableDescriptor_CheckConstraint {
 	return c.desc
 }
 
-// Expr implements the catalog.CheckConstraint interface.
+// GetExpr implements the catalog.CheckConstraint interface.
 func (c checkConstraint) GetExpr() string {
 	return c.desc.Expr
 }
@@ -76,6 +76,9 @@ func (c checkConstraint) CollectReferencedColumnIDs() catalog.TableColSet {
 func (c checkConstraint) IsNotNullColumnConstraint() bool {
 	return c.desc.IsNonNullConstraint
 }
+
+// IsRLSConstraint implements the catalog.CheckConstraintViolator interface.
+func (c checkConstraint) IsRLSConstraint() bool { return false }
 
 // IsHashShardingConstraint implements the catalog.CheckConstraint interface.
 func (c checkConstraint) IsHashShardingConstraint() bool {
@@ -120,6 +123,26 @@ func (c checkConstraint) String() string {
 // IsEnforced implements the catalog.Constraint interface.
 func (c checkConstraint) IsEnforced() bool {
 	return !c.IsMutation() || c.WriteAndDeleteOnly()
+}
+
+// rlsSyntheticCheckConstraint is an implementation of CheckConstraintViolator
+// for use with tables that have row-level security enabled.
+type rlsSyntheticCheckConstraint struct {
+}
+
+var _ catalog.CheckConstraintViolator = (*rlsSyntheticCheckConstraint)(nil)
+
+// GetExpr implements the catalog.CheckConstraintViolator interface.
+func (r rlsSyntheticCheckConstraint) GetExpr() string {
+	panic("GetExpr not implemented for rlsSyntheticCheckConstraint")
+}
+
+// IsRLSConstraint implements the catalog.CheckConstraintViolator interface.
+func (r rlsSyntheticCheckConstraint) IsRLSConstraint() bool { return true }
+
+// GetName implements the catalog.CheckConstraintViolator interface.
+func (r rlsSyntheticCheckConstraint) GetName() string {
+	return "rlsSyntheticCheckConstraint"
 }
 
 type uniqueWithoutIndexConstraint struct {
@@ -339,6 +362,7 @@ type constraintCache struct {
 	uwis, uwisEnforced     []catalog.UniqueWithIndexConstraint
 	uwois, uwoisEnforced   []catalog.UniqueWithoutIndexConstraint
 	fkBackRefs             []catalog.ForeignKeyConstraint
+	checkViolators         []catalog.CheckConstraintViolator
 }
 
 // newConstraintCache returns a fresh fully-populated constraintCache struct for the
@@ -389,6 +413,7 @@ func newConstraintCache(
 				c.allEnforced = append(c.allEnforced, ck)
 				c.checks = append(c.checks, ck)
 				c.checksEnforced = append(c.checksEnforced, ck)
+				c.checkViolators = append(c.checkViolators, ck)
 			}
 		}
 		for _, m := range mutations.checks {
@@ -478,6 +503,11 @@ func newConstraintCache(
 			fkBackRefBackingStructs[i].desc = &desc.InboundFKs[i]
 			c.fkBackRefs[i] = &fkBackRefBackingStructs[i]
 		}
+	}
+	// Populate the rls check constraint.
+	if desc.RowLevelSecurityEnabled {
+		ck := rlsSyntheticCheckConstraint{}
+		c.checkViolators = append(c.checkViolators, ck)
 	}
 	return &c
 }

@@ -544,6 +544,11 @@ func (d *familyTableDescriptor) EnforcedCheckConstraints() []catalog.CheckConstr
 	return filtered
 }
 
+// EnforcedCheckViolators implements catalog.TableDescriptor interface.
+func (d *familyTableDescriptor) EnforcedCheckViolators() []catalog.CheckConstraintViolator {
+	panic("EnforcedCheckViolators() is not implemented")
+}
+
 // familyColumns returns column list adopted for targeted column family.
 func (d *familyTableDescriptor) familyColumns(cols []catalog.Column) []catalog.Column {
 	filtered := make([]catalog.Column, 0, len(cols)+1)

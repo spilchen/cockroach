@@ -356,6 +356,10 @@ func (desc *wrapper) EnforcedCheckConstraints() []catalog.CheckConstraint {
 	return desc.getExistingOrNewConstraintCache().checksEnforced
 }
 
+func (desc *wrapper) EnforcedCheckViolators() []catalog.CheckConstraintViolator {
+	return desc.getExistingOrNewConstraintCache().checkViolators
+}
+
 // OutboundForeignKeys implements the catalog.TableDescriptor interface.
 func (desc *wrapper) OutboundForeignKeys() []catalog.ForeignKeyConstraint {
 	return desc.getExistingOrNewConstraintCache().fks
