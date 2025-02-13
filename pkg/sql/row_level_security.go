@@ -11,15 +11,16 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/security/username"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/util/intsets"
+	"github.com/cockroachdb/errors"
 )
 
 type optRLSConstraintBuilder struct {
 	policies cat.Policies
-	// lookupColumnOrdinal returns the table column ordinal of the ith column in
-	// this constraint.
+	// lookupColumnOrdinal returns the table column ordinal of the ith column
 	lookupColumnOrdinal func(colID descpb.ColumnID) (int, error)
 }
 
@@ -32,15 +33,17 @@ func (r *optRLSConstraintBuilder) GetStaticConstraint() cat.CheckConstraint {
 	return nil
 }
 
+// IsRLSConstraint is part of the cat.CheckConstraintBuilder interface.
+func (r *optRLSConstraintBuilder) IsRLSConstraint() bool { return true }
+
 // Build is part of the cat.CheckConstraintBuilder interface.
 func (r *optRLSConstraintBuilder) Build(
-	ctx context.Context, oc cat.Catalog, user username.SQLUsername,
+	ctx context.Context, oc cat.Catalog, user username.SQLUsername, isUpdate bool,
 ) cat.CheckConstraint {
-	expr, colIDs := r.genExpression(ctx, oc, user)
+	expr, colIDs := r.genExpression(ctx, oc, user, isUpdate)
 	if expr == "" {
 		panic(fmt.Sprintf("must return some expression but empty string returned for user: %v", user))
 	}
-	fmt.Printf("SPILLY: building RLS constraint for user %s: %s\n", user, expr)
 
 	return &optCheckConstraint{
 		constraint:  expr,
@@ -53,13 +56,17 @@ func (r *optRLSConstraintBuilder) Build(
 }
 
 func (r *optRLSConstraintBuilder) genExpression(
-	ctx context.Context, oc cat.Catalog, user username.SQLUsername,
+	ctx context.Context, oc cat.Catalog, user username.SQLUsername, isUpdate bool,
 ) (string, descpb.ColumnIDs) {
 	var sb strings.Builder
 
 	// colIDs tracks the column IDs referenced in all the policy expressions
 	// that are applied.
 	var colIDs intsets.Fast
+
+	// SPILLY - I don't like where we have this build function. Is it possible to
+	// move the code into optbuilder/row_level_security.go? That is where the
+	// mutation builder is.
 
 	// Admin users are exempt from any RLS policies.
 	isAdmin, err := oc.HasAdminRole(ctx)
@@ -74,21 +81,31 @@ func (r *optRLSConstraintBuilder) genExpression(
 	for i := range r.policies.Permissive {
 		p := &r.policies.Permissive[i]
 
-		if !p.AppliesToRole(user) {
+		if !p.AppliesToRole(user) || !r.policyAppliesToCommand(p, isUpdate) {
 			continue
 		}
-		// SPILLY - how to handle missing with check expression. This isn't correct.
+		var expr string
+		// If the WITH CHECK expression is missing, we default to the USING
+		// expression. If both are missing, then this policy doesn't apply and can
+		// be skipped.
 		if p.WithCheckExpr == "" {
-			continue
+			if p.UsingExpr == "" {
+				continue
+			}
+			expr = p.UsingExpr
+			colIDs = colIDs.Union(p.UsingColumnIDs)
+		} else {
+			expr = p.WithCheckExpr
+			colIDs = colIDs.Union(p.WithCheckColumnIDs)
 		}
 		if sb.Len() != 0 {
 			sb.WriteString(" OR ")
 		}
 		sb.WriteString("(")
-		sb.WriteString(p.WithCheckExpr)
+		sb.WriteString(expr)
 		sb.WriteString(")")
-
-		colIDs = colIDs.Union(p.WithCheckColumnIDs)
+		// TODO(136742): Add support for multiple policies.
+		break
 	}
 
 	// TODO(136742): Add support for restrictive policies.
@@ -103,4 +120,21 @@ func (r *optRLSConstraintBuilder) genExpression(
 	colIDs.ForEach(func(id int) { orderedColIDs = append(orderedColIDs, descpb.ColumnID(id)) })
 
 	return sb.String(), orderedColIDs
+}
+
+// policyAppliesToCommand will return true iff the command set in the policy
+// applies to the current mutation action.
+func (r *optRLSConstraintBuilder) policyAppliesToCommand(policy *cat.Policy, isUpdate bool) bool {
+	switch policy.Command {
+	case catpb.PolicyCommand_ALL:
+		return true
+	case catpb.PolicyCommand_SELECT, catpb.PolicyCommand_DELETE:
+		return false
+	case catpb.PolicyCommand_INSERT:
+		return !isUpdate
+	case catpb.PolicyCommand_UPDATE:
+		return isUpdate
+	default:
+		panic(errors.AssertionFailedf("unknown policy command %v", policy.Command))
+	}
 }

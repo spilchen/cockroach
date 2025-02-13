@@ -713,6 +713,10 @@ type TableDescriptor interface {
 	// EnforcedCheckConstraints returns the subset of check constraints in
 	// EnforcedConstraints for this table, in the same order.
 	EnforcedCheckConstraints() []CheckConstraint
+	// EnforcedCheckViolators function returns all check constraints that should
+	// be validated for violations, including both actual check constraints and
+	// any synthetic ones added (e.g., for row-level security).
+	EnforcedCheckViolators() []CheckConstraintViolator
 
 	// OutboundForeignKeys returns the subset of foreign key constraints in
 	// AllConstraints for this table, in the same order.

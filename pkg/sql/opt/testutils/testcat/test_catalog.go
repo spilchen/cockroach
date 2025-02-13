@@ -1435,13 +1435,16 @@ var _ cat.CheckConstraintBuilder = &CheckConstraint{}
 
 // Build is part of the cat.CheckConstraintBuilder interface.
 func (c *CheckConstraint) Build(
-	context.Context, cat.Catalog, username.SQLUsername,
+	context.Context, cat.Catalog, username.SQLUsername, bool,
 ) cat.CheckConstraint {
 	return c
 }
 
 // GetStaticConstraint is part of the cat.CheckConstraintBuilder interface.
 func (c *CheckConstraint) GetStaticConstraint() cat.CheckConstraint { return c }
+
+// IsRLSConstraint is part of the cat.CheckConstraintBuilder interface.
+func (c *CheckConstraint) IsRLSConstraint() bool { return false }
 
 // TableStat implements the cat.TableStatistic interface for testing purposes.
 type TableStat struct {

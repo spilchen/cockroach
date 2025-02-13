@@ -1159,17 +1159,11 @@ func newOptTable(
 		})
 
 	}
-	// SPILLY - add new constraint builder here
 	// Move all existing and synthesized checks into the opt table.
 	activeChecks := desc.EnforcedCheckConstraints()
 	ot.checkConstraints = make([]cat.CheckConstraintBuilder, 0, len(activeChecks)+len(synthesizedChecks))
 	for i := range activeChecks {
 		check := activeChecks[i]
-		// SPILLY - this is probably all wrong, but hacking this to get it working
-		// We add the RLS check constraint as a synthethetic check below.
-		if check.IsRLSConstraint() {
-			continue
-		}
 		ot.checkConstraints = append(ot.checkConstraints, &optCheckConstraint{
 			constraint:  check.GetExpr(),
 			validated:   check.GetConstraintValidity() == descpb.ConstraintValidity_Validated,
@@ -1932,13 +1926,16 @@ var _ cat.CheckConstraintBuilder = &optCheckConstraint{}
 
 // Build is part of the cat.CheckConstraintBuilder interface.
 func (oc *optCheckConstraint) Build(
-	context.Context, cat.Catalog, username.SQLUsername,
+	context.Context, cat.Catalog, username.SQLUsername, bool,
 ) cat.CheckConstraint {
 	return oc
 }
 
 // GetStaticConstraint is part of the cat.CheckConstraintBuilder interface.
 func (oc *optCheckConstraint) GetStaticConstraint() cat.CheckConstraint { return oc }
+
+// IsRLSConstraint is part of the cat.CheckConstraintBuilder interface.
+func (oc *optCheckConstraint) IsRLSConstraint() bool { return false }
 
 type optTableStat struct {
 	stat           *stats.TableStatistic

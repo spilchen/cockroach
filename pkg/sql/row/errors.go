@@ -300,7 +300,7 @@ func CheckFailed(
 	semaCtx *tree.SemaContext,
 	sessionData *sessiondata.SessionData,
 	tabDesc catalog.TableDescriptor,
-	check catalog.CheckConstraint,
+	check catalog.CheckConstraintViolator,
 ) error {
 	// If this is the synthetic check added for row-level security, we should
 	// return a different error.

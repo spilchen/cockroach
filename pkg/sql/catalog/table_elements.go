@@ -548,6 +548,18 @@ type CheckConstraint interface {
 	// IsHashShardingConstraint returns true iff this check constraint is
 	// associated with a hash-sharding column in this table.
 	IsHashShardingConstraint() bool
+}
+
+// CheckConstraintViolator interface is designed for evaluating whether check
+// constraints are violated. It represents a subset of the CheckConstraint
+// interface, excluding certain elements that are not applicable to synthetic
+// constraints added for row-level security.
+type CheckConstraintViolator interface {
+	// GetName returns the name of this constraint update mutation.
+	GetName() string
+
+	// GetExpr returns the check expression as a string.
+	GetExpr() string
 
 	// IsRLSConstraint returns true iff ths check constraint is the synthethic one
 	// to enforce row-level security policies.

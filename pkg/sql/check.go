@@ -858,12 +858,7 @@ func checkMutationInput(
 			"mismatched check constraint columns: expected %d, got %d", checkOrds.Len(), len(checkVals))
 	}
 
-	// SPILLY - we need enforced check constraint. Or an RLS equivalent.
-	// We need the following out of the constraint:
-	// - expression (for the error message)
-	// - name
-	// I wonder if you can make a dummy CheckConstraint for the purpose of this.
-	checks := tabDesc.EnforcedCheckConstraints()
+	checks := tabDesc.EnforcedCheckViolators()
 	colIdx := 0
 	for i := range checks {
 		if !checkOrds.Contains(i) {

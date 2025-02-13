@@ -813,7 +813,14 @@ func (b *Builder) addCheckConstraintsForTable(tabMeta *opt.TableMeta) {
 	numChecks := tab.CheckCount()
 	chkIdx := 0
 	for ; chkIdx < numChecks; chkIdx++ {
-		if tab.Check(chkIdx).Build(b.ctx, b.catalog, b.checkPrivilegeUser).Validated() {
+		// We only consider static constraints in this function. Constraints
+		// generated at runtime, such as those for row-level security (RLS), cannot
+		// be relied upon for the optimizations implemented here. RLS creates these
+		// constraints solely to prevent new data from being inserted. There is a
+		// separate expression for reads that may not uphold the same invariants as
+		// writes.
+		chk := tab.Check(chkIdx).GetStaticConstraint()
+		if chk != nil && chk.Validated() {
 			break
 		}
 	}
@@ -847,10 +854,10 @@ func (b *Builder) addCheckConstraintsForTable(tabMeta *opt.TableMeta) {
 	var filters memo.FiltersExpr
 	// Skip to the first validated constraint we found above.
 	for ; chkIdx < numChecks; chkIdx++ {
-		checkConstraint := tab.Check(chkIdx).Build(b.ctx, b.catalog, b.checkPrivilegeUser)
+		checkConstraint := tab.Check(chkIdx).GetStaticConstraint()
 
 		// Only add validated check constraints to the table's metadata.
-		if !checkConstraint.Validated() {
+		if checkConstraint == nil || !checkConstraint.Validated() {
 			continue
 		}
 		expr, err := parser.ParseExpr(checkConstraint.Constraint())

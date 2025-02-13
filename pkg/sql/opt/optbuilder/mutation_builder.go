@@ -879,7 +879,8 @@ func (mb *mutationBuilder) addCheckConstraintCols(isUpdate bool) {
 		mutationCols := mb.mutationColumnIDs()
 
 		for i, n := 0, mb.tab.CheckCount(); i < n; i++ {
-			check := mb.tab.Check(i).Build(mb.b.ctx, mb.b.catalog, mb.checkPrivilegeUser)
+			chkb := mb.tab.Check(i)
+			check := chkb.Build(mb.b.ctx, mb.b.catalog, mb.checkPrivilegeUser, isUpdate)
 			expr, err := parser.ParseExpr(check.Constraint())
 			if err != nil {
 				panic(err)
@@ -897,11 +898,17 @@ func (mb *mutationBuilder) addCheckConstraintCols(isUpdate bool) {
 			referencedCols := &opt.ColSet{}
 			mb.b.buildScalar(texpr, mb.outScope, projectionsScope, scopeCol, referencedCols)
 
-			// If the mutation is not an UPDATE, track the synthesized check
-			// columns in checkColIDS. If the mutation is an UPDATE, only track
-			// the check columns if the columns referenced in the check
-			// expression are being mutated.
-			if !isUpdate || referencedCols.Intersects(mutationCols) {
+			// For non-UPDATE mutations, track the synthesized check columns in
+			// checkColIDs. For UPDATE mutations, track the check columns in two
+			// scenarios:
+			// - If the check expression is a real check constraint and the columns
+			//   referenced in the check expression are being mutated.
+			// - If the check expression is a synthetic one used for row-level
+			//   security (RLS). Since it's not a real check expression, different
+			//   expressions can exist for read and write operations. This means it's
+			//   possible to read a row whose column values would violate the write
+			//   expression.
+			if !isUpdate || chkb.IsRLSConstraint() || referencedCols.Intersects(mutationCols) {
 				mb.checkColIDs[i] = scopeCol.id
 
 				// TODO(michae2): Under weaker isolation levels we need to use shared

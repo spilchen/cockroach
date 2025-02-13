@@ -224,9 +224,13 @@ type CheckConstraintBuilder interface {
 	// constraint is the same for all environments. If the constraint needs the
 	// Build function to be called, this returns nil.
 	GetStaticConstraint() CheckConstraint
-	// Build will generate the CheckConstraint by potententially building it for
-	// the current runtime environment.
-	Build(context.Context, Catalog, username.SQLUsername) CheckConstraint
+	// Build constructs the CheckConstraint for the current runtime environment.
+	// Row-Level Security (RLS) utilizes this method to generate constraints based
+	// on the role and operation.
+	Build(ctx context.Context, oc Catalog, user username.SQLUsername, isUpdate bool) CheckConstraint
+	// IsRLSConstraint returns true iff this constraint exists to enforce policies
+	// on tables that have enabled row-level security.
+	IsRLSConstraint() bool
 }
 
 // TableStatistic is an interface to a table statistic. Each statistic is

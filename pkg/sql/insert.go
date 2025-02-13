@@ -212,10 +212,8 @@ func (r *insertRun) processSourceRow(params runParams, rowVals tree.Datums) erro
 	}
 
 	// Verify the CHECK constraint results, if any.
-	// SPILLY - we would want to get in here for RLS if no CHECKs exist
 	if n := r.checkOrds.Len(); n > 0 {
 		// CHECK constraint results are after the insert columns.
-		// SPILLY - see this comment. We have already computed the check constraint value.
 		offset := len(r.insertCols)
 		checkVals := rowVals[offset : offset+n]
 		if err := checkMutationInput(
@@ -289,7 +287,6 @@ func (n *insertNode) BatchedNext(params runParams) (bool, error) {
 	// Now consume/accumulate the rows for this batch.
 	lastBatch := false
 	for {
-		// SPILLY - lets walk the debugger here and see if the values already contain the check constraint value.
 		if err := params.p.cancelChecker.Check(); err != nil {
 			return false, err
 		}

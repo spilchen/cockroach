@@ -42,6 +42,9 @@ type Policy struct {
 	// read operations. If the policy does not define a USING expression, this is
 	// an empty string.
 	UsingExpr string
+	// UsingColumnIDs is a set of column IDs that are referenced in the USING
+	// expression.
+	UsingColumnIDs intsets.Fast
 	// WithCheckExpr is the optional validation expression applied to new rows
 	// during write operations. If the policy does not define a WITH CHECK expression,
 	// this is an empty string.
