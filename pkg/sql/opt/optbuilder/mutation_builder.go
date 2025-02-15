@@ -889,6 +889,7 @@ func (mb *mutationBuilder) addCheckConstraintCols(isUpdate bool) {
 				chkBuilder := optRLSConstraintBuilder{
 					tab:      mb.tab,
 					md:       mb.md,
+					tabMeta:  mb.md.TableMeta(mb.tabID),
 					oc:       mb.b.catalog,
 					user:     mb.checkPrivilegeUser,
 					isUpdate: isUpdate,

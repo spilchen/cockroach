@@ -113,6 +113,7 @@ func (b *Builder) policyAppliesToCommandScope(
 type optRLSConstraintBuilder struct {
 	tab      cat.Table
 	md       *opt.Metadata
+	tabMeta  *opt.TableMeta
 	oc       cat.Catalog
 	user     username.SQLUsername
 	isUpdate bool
@@ -149,19 +150,20 @@ func (r *optRLSConstraintBuilder) genExpression(ctx context.Context) (string, []
 	if err != nil {
 		panic(err)
 	}
-	// SPILLY - on merge up, we need to use new functions to track usage
-	r.md.SetRLSEnabled(r.user, isAdmin)
+	r.md.SetRLSEnabled(r.user, isAdmin, r.tabMeta.MetaID)
 	if isAdmin {
 		// Return a constraint check that always passes.
 		return "true", nil
 	}
 
+	var policiesUsed opt.PolicyIDSet
 	for i := range r.tab.Policies().Permissive {
 		p := &r.tab.Policies().Permissive[i]
 
 		if !p.AppliesToRole(r.user) || !r.policyAppliesToCommand(p, r.isUpdate) {
 			continue
 		}
+		policiesUsed.Add(p.ID)
 		var expr string
 		// If the WITH CHECK expression is missing, we default to the USING
 		// expression. If both are missing, then this policy doesn't apply and can
@@ -187,6 +189,7 @@ func (r *optRLSConstraintBuilder) genExpression(ctx context.Context) (string, []
 		sb.WriteString(expr)
 		sb.WriteString(")")
 		// TODO(136742): Add support for multiple policies.
+		r.md.GetRLSMeta().AddPoliciesUsed(r.tabMeta.MetaID, policiesUsed)
 		break
 	}
 
@@ -195,6 +198,7 @@ func (r *optRLSConstraintBuilder) genExpression(ctx context.Context) (string, []
 	// If no policies apply, then we will add a false check as nothing is allowed
 	// to be written.
 	if sb.Len() == 0 {
+		r.md.GetRLSMeta().NoPoliciesApplied = true
 		return "(false)", nil
 	}
 
