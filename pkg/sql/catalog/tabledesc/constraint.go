@@ -77,7 +77,7 @@ func (c checkConstraint) IsNotNullColumnConstraint() bool {
 	return c.desc.IsNonNullConstraint
 }
 
-// IsRLSConstraint implements the catalog.CheckConstraintViolator interface.
+// IsRLSConstraint implements the catalog.CheckConstraintValidator interface.
 func (c checkConstraint) IsRLSConstraint() bool { return false }
 
 // IsHashShardingConstraint implements the catalog.CheckConstraint interface.
@@ -125,22 +125,22 @@ func (c checkConstraint) IsEnforced() bool {
 	return !c.IsMutation() || c.WriteAndDeleteOnly()
 }
 
-// rlsSyntheticCheckConstraint is an implementation of CheckConstraintViolator
+// rlsSyntheticCheckConstraint is an implementation of CheckConstraintValidator
 // for use with tables that have row-level security enabled.
 type rlsSyntheticCheckConstraint struct {
 }
 
-var _ catalog.CheckConstraintViolator = (*rlsSyntheticCheckConstraint)(nil)
+var _ catalog.CheckConstraintValidator = (*rlsSyntheticCheckConstraint)(nil)
 
-// GetExpr implements the catalog.CheckConstraintViolator interface.
+// GetExpr implements the catalog.CheckConstraintValidator interface.
 func (r rlsSyntheticCheckConstraint) GetExpr() string {
 	panic("GetExpr not implemented for rlsSyntheticCheckConstraint")
 }
 
-// IsRLSConstraint implements the catalog.CheckConstraintViolator interface.
+// IsRLSConstraint implements the catalog.CheckConstraintValidator interface.
 func (r rlsSyntheticCheckConstraint) IsRLSConstraint() bool { return true }
 
-// GetName implements the catalog.CheckConstraintViolator interface.
+// GetName implements the catalog.CheckConstraintValidator interface.
 func (r rlsSyntheticCheckConstraint) GetName() string {
 	return "rlsSyntheticCheckConstraint"
 }
@@ -362,7 +362,7 @@ type constraintCache struct {
 	uwis, uwisEnforced     []catalog.UniqueWithIndexConstraint
 	uwois, uwoisEnforced   []catalog.UniqueWithoutIndexConstraint
 	fkBackRefs             []catalog.ForeignKeyConstraint
-	checkViolators         []catalog.CheckConstraintViolator
+	checkValidators        []catalog.CheckConstraintValidator
 }
 
 // newConstraintCache returns a fresh fully-populated constraintCache struct for the
@@ -413,7 +413,7 @@ func newConstraintCache(
 				c.allEnforced = append(c.allEnforced, ck)
 				c.checks = append(c.checks, ck)
 				c.checksEnforced = append(c.checksEnforced, ck)
-				c.checkViolators = append(c.checkViolators, ck)
+				c.checkValidators = append(c.checkValidators, ck)
 			}
 		}
 		for _, m := range mutations.checks {
@@ -507,7 +507,7 @@ func newConstraintCache(
 	// Populate the rls check constraint.
 	if desc.RowLevelSecurityEnabled {
 		ck := rlsSyntheticCheckConstraint{}
-		c.checkViolators = append(c.checkViolators, ck)
+		c.checkValidators = append(c.checkValidators, ck)
 	}
 	return &c
 }

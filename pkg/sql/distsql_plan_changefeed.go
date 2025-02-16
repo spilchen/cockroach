@@ -544,9 +544,9 @@ func (d *familyTableDescriptor) EnforcedCheckConstraints() []catalog.CheckConstr
 	return filtered
 }
 
-// EnforcedCheckViolators implements catalog.TableDescriptor interface.
-func (d *familyTableDescriptor) EnforcedCheckViolators() []catalog.CheckConstraintViolator {
-	panic("EnforcedCheckViolators() is not implemented")
+// EnforcedCheckValidators implements catalog.TableDescriptor interface.
+func (d *familyTableDescriptor) EnforcedCheckValidators() []catalog.CheckConstraintValidator {
+	panic("EnforcedCheckValidators() is not implemented")
 }
 
 // familyColumns returns column list adopted for targeted column family.

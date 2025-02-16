@@ -550,11 +550,11 @@ type CheckConstraint interface {
 	IsHashShardingConstraint() bool
 }
 
-// CheckConstraintViolator interface is designed for evaluating whether check
+// CheckConstraintValidator interface is designed for evaluating whether check
 // constraints are violated. It represents a subset of the CheckConstraint
 // interface, excluding certain elements that are not applicable to synthetic
 // constraints added for row-level security.
-type CheckConstraintViolator interface {
+type CheckConstraintValidator interface {
 	// GetName returns the name of this constraint update mutation.
 	GetName() string
 

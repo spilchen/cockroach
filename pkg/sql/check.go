@@ -858,7 +858,7 @@ func checkMutationInput(
 			"mismatched check constraint columns: expected %d, got %d", checkOrds.Len(), len(checkVals))
 	}
 
-	checks := tabDesc.EnforcedCheckViolators()
+	checks := tabDesc.EnforcedCheckValidators()
 	colIdx := 0
 	for i := range checks {
 		if !checkOrds.Contains(i) {
@@ -872,7 +872,6 @@ func checkMutationInput(
 		}
 		colIdx++
 	}
-
 	return nil
 }
 
