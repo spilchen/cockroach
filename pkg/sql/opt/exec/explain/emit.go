@@ -703,10 +703,7 @@ func (e *emitter) emitNodeAttributes(ctx context.Context, evalCtx *eval.Context,
 			ob.VAttr("parallel", "")
 		}
 		e.emitLockingPolicy(a.Params.Locking)
-
-		if val, ok := n.annotations[exec.PolicyInfoID]; ok {
-			e.emitPolicies(ob, a.Table, val.(*exec.RLSPoliciesApplied))
-		}
+		e.emitPolicies(ob, a.Table, n)
 
 	case valuesOp:
 		a := n.args.(*valuesArgs)
@@ -714,9 +711,7 @@ func (e *emitter) emitNodeAttributes(ctx context.Context, evalCtx *eval.Context,
 		if len(a.Rows) > 0 && (len(a.Rows) > 1 || len(a.Columns) > 0) {
 			e.emitTuples(tree.RawRows(a.Rows), len(a.Columns))
 		} else if len(a.Rows) == 0 {
-			if val, ok := n.annotations[exec.PolicyInfoID]; ok {
-				e.emitPolicies(ob, nil, val.(*exec.RLSPoliciesApplied))
-			}
+			e.emitPolicies(ob, nil, n)
 		}
 
 	case filterOp:
@@ -969,6 +964,7 @@ func (e *emitter) emitNodeAttributes(ctx context.Context, evalCtx *eval.Context,
 			}
 			ob.LeaveNode()
 		}
+		e.emitPolicies(ob, a.Table, n)
 
 	case insertFastPathOp:
 		a := n.args.(*insertFastPathArgs)
@@ -1003,6 +999,7 @@ func (e *emitter) emitNodeAttributes(ctx context.Context, evalCtx *eval.Context,
 			// triggers.
 			return errors.AssertionFailedf("insert fast path with before-triggers")
 		}
+		e.emitPolicies(ob, a.Table, n)
 
 	case upsertOp:
 		a := n.args.(*upsertArgs)
@@ -1042,6 +1039,7 @@ func (e *emitter) emitNodeAttributes(ctx context.Context, evalCtx *eval.Context,
 			}
 			ob.LeaveNode()
 		}
+		e.emitPolicies(ob, a.Table, n)
 
 	case updateOp:
 		a := n.args.(*updateArgs)
@@ -1063,6 +1061,7 @@ func (e *emitter) emitNodeAttributes(ctx context.Context, evalCtx *eval.Context,
 			}
 			ob.LeaveNode()
 		}
+		e.emitPolicies(ob, a.Table, n)
 
 	case deleteOp:
 		a := n.args.(*deleteArgs)
@@ -1080,6 +1079,7 @@ func (e *emitter) emitNodeAttributes(ctx context.Context, evalCtx *eval.Context,
 			}
 			ob.LeaveNode()
 		}
+		e.emitPolicies(ob, a.Table, n)
 
 	case deleteRangeOp:
 		a := n.args.(*deleteRangeArgs)
@@ -1097,6 +1097,7 @@ func (e *emitter) emitNodeAttributes(ctx context.Context, evalCtx *eval.Context,
 			// DeleteRange should not be planned if there are applicable triggers.
 			return errors.AssertionFailedf("delete range with before-triggers")
 		}
+		e.emitPolicies(ob, a.Table, n)
 
 	case showCompletionsOp:
 		a := n.args.(*showCompletionsArgs)
@@ -1353,12 +1354,15 @@ func (e *emitter) emitJoinAttributes(
 	e.ob.Expr("pred", extraOnCond, appendColumns(leftCols, rightCols...))
 }
 
-func (e *emitter) emitPolicies(
-	ob *OutputBuilder, table cat.Table, applied *exec.RLSPoliciesApplied,
-) {
+func (e *emitter) emitPolicies(ob *OutputBuilder, table cat.Table, n *Node) {
 	if !ob.flags.ShowPolicyInfo {
 		return
 	}
+	val, ok := n.annotations[exec.PolicyInfoID]
+	if !ok {
+		return
+	}
+	applied := val.(*exec.RLSPoliciesApplied)
 
 	if applied.PoliciesSkippedForRole {
 		ob.AddField("policies", "exempt for role")
