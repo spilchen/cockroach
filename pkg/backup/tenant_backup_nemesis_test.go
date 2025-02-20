@@ -152,12 +152,9 @@ func TestTenantBackupNemesis(t *testing.T) {
 	})
 	require.NoError(t, err)
 	tenant10Conn := tenant10.SQLConn(t, serverutils.DBName("defaultdb"))
-	_, err = tenant10Conn.Exec("SET autocommit_before_ddl=off")
-	require.NoError(t, err)
 	_, err = tenant10Conn.Exec("CREATE DATABASE bank")
 	require.NoError(t, err)
-	_, err = tenant10Conn.Exec("USE bank")
-	require.NoError(t, err)
+	tenant10Conn = tenant10.SQLConn(t, serverutils.DBName("bank"))
 
 	// Import initial bank data. The bank workload runs against
 	// the bank table while we concurrently run other operations

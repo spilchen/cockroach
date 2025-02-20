@@ -1,5 +1,3 @@
-# This test requires autocommit_before_ddl to be off, but it cannot be off for repeatable read and read committed isolation levels.
-# LogicTest: !local-repeatable-read !local-read-committed
 # Default behavior, where atomicity violations are allowed
 
 statement ok
@@ -9,10 +7,10 @@ CREATE TABLE testing (k int, v string);
 
 
 statement ok
-BEGIN
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
 
 statement ok
-SET LOCAL autocommit_before_ddl=off;
+SET autocommit_before_ddl=off;
 
 statement ok
 ALTER TABLE testing ADD CONSTRAINT "unique_values" UNIQUE(v)
@@ -49,10 +47,7 @@ statement ok
 SET strict_ddl_atomicity = true
 
 statement ok
-BEGIN
-
-statement ok
-SET LOCAL autocommit_before_ddl=off;
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
 
 statement error unimplemented: cannot run this DDL statement inside a multi-statement transaction as its atomicity cannot be guaranteed.*\n.*\n.*issue-v/42061
 ALTER TABLE testing ADD CONSTRAINT "unique_values" UNIQUE(v)

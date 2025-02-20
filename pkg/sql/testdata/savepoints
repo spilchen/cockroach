@@ -340,6 +340,8 @@ DROP TABLE unused; DROP TABLE t
 -- NoTxn       -> NoTxn       #  (none)
 
 # Test the same thing, but with the default value of autocommit_before_ddl.
+# The SAVEPOINT will appear outside of a transaction, but it is something we
+# ignore if autocommit_before_ddl is on.
 sql
 BEGIN; CREATE TABLE unused(x INT)
 SAVEPOINT foo
