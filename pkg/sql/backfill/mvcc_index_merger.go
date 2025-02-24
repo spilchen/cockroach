@@ -337,6 +337,10 @@ func (ibm *IndexBackfillMerger) merge(
 	sourcePrefix := rowenc.MakeIndexKeyPrefix(codec, table.GetID(), sourceID)
 	destPrefix := rowenc.MakeIndexKeyPrefix(codec, table.GetID(), destinationID)
 
+	if len(sourceKeys) == 0 {
+		return nil
+	}
+
 	batch := retry.Batch{
 		Do: func(ctx context.Context, processed int64, batchSize int64) error {
 			until := processed + batchSize
