@@ -855,6 +855,7 @@ type Table struct {
 	homeRegion string
 
 	rlsEnabled   bool
+	rlsForced    bool
 	policies     cat.Policies
 	nextPolicyID descpb.PolicyID
 }
@@ -1139,6 +1140,9 @@ func (tt *Table) Trigger(i int) cat.Trigger {
 
 // IsRowLevelSecurityEnabled is part of the cat.Table interface.
 func (tt *Table) IsRowLevelSecurityEnabled() bool { return tt.rlsEnabled }
+
+// IsRowLevelSecurityForced is part of the cat.Table interface.
+func (tt *Table) IsRowLevelSecurityForced() bool { return tt.rlsForced }
 
 // PolicyCount is part of the cat.Table interface
 func (tt *Table) PolicyCount(polType tree.PolicyType) int {

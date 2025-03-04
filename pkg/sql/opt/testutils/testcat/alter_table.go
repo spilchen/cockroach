@@ -98,6 +98,10 @@ func toggleRLSMode(tt *Table, mode tree.TableRLSMode) {
 		tt.rlsEnabled = true
 	case tree.TableRLSDisable:
 		tt.rlsEnabled = false
+	case tree.TableRLSForce:
+		tt.rlsForced = true
+	case tree.TableRLSNoForce:
+		tt.rlsForced = false
 	default:
 		panic(errors.AssertionFailedf("unsupported RLS mode %v", mode))
 	}

@@ -185,6 +185,10 @@ type Table interface {
 	// IsRowLevelSecurityEnabled is true if policies should be applied during the query.
 	IsRowLevelSecurityEnabled() bool
 
+	// IsRowLevelSecurityForced is true if row-level security policies should be
+	// applied to the table owner.
+	IsRowLevelSecurityForced() bool
+
 	// PolicyCount returns the number of policies in the table for the given type.
 	PolicyCount(polType tree.PolicyType) int
 

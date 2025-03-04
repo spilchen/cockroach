@@ -36,6 +36,17 @@ func (b *Builder) addRowLevelSecurityFilter(
 		return
 	}
 
+	// If FORCE ROW LEVEL SECURITY is off, table owners are exempt from RLS filtering.
+	if !tabMeta.Table.IsRowLevelSecurityForced() {
+		if owner, err := b.catalog.IsOwner(b.ctx, tabMeta.Table, b.checkPrivilegeUser); err != nil {
+			panic(err)
+		} else if owner {
+			// SPILLY - update rls meta so we can print somthing in explain?
+			// Owner is exempt
+			return
+		}
+	}
+
 	scalar := b.buildRowLevelSecurityUsingExpression(tabMeta, tableScope, cmdScope)
 	tableScope.expr = b.factory.ConstructSelect(tableScope.expr,
 		memo.FiltersExpr{b.factory.ConstructFiltersItem(scalar)})

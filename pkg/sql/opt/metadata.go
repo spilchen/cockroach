@@ -373,6 +373,7 @@ func (md *Metadata) AddDependency(name MDDepName, ds cat.DataSource, priv privil
 	id := ds.ID()
 	md.dataSourceDeps[id] = ds
 	md.privileges[id] = md.privileges[id] | (1 << priv)
+	// SPILLY - could we update the RLS meta data here?
 	if name.byID == 0 {
 		// This data source was referenced by name.
 		md.objectRefsByName[id] = append(md.objectRefsByName[id], name.byName.ToUnresolvedObjectName())
@@ -587,6 +588,7 @@ func (md *Metadata) CheckDependencies(
 	// NOTE: this check has to happen after the object resolution checks, or else
 	// we may end up returning a privilege error when the memo should have just
 	// been invalidated.
+	// SPILLY - this seems like the check to reuse the memo. What about the original check?
 	if err := md.checkDataSourcePrivileges(ctx, optCatalog); err != nil {
 		return false, err
 	}
@@ -635,6 +637,7 @@ func maybeSwallowMetadataResolveErr(err error) error {
 // query for the referenced data sources have been revoked.
 func (md *Metadata) checkDataSourcePrivileges(ctx context.Context, optCatalog cat.Catalog) error {
 	for _, dataSource := range md.dataSourceDeps {
+		// SPILLY - here is code that checks the privileges of all of the tables. Could we build something similar?
 		privileges := md.privileges[dataSource.ID()]
 		for privs := privileges; privs != 0; {
 			// Strip off each privilege bit and make call to CheckPrivilege for it.
