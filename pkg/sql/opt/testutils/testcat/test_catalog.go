@@ -74,7 +74,9 @@ var _ cat.Catalog = &Catalog{}
 // New creates a new empty instance of the test catalog.
 func New() *Catalog {
 	users := make(map[username.SQLUsername]roleMembership)
-	users[username.RootUserName()] = roleMembership{isMemberOfAdminRole: true}
+	users[username.RootUserName()] = roleMembership{
+		isMemberOfAdminRole: true,
+	}
 
 	return &Catalog{
 		testSchema: Schema{
@@ -365,6 +367,18 @@ func (tc *Catalog) GetRoutineOwner(
 	return tc.GetCurrentUser(), nil
 }
 
+// IsOwner is part of the cat.Catalog interface.
+func (tc *Catalog) IsOwner(
+	ctx context.Context, o cat.Object, user username.SQLUsername,
+) (bool, error) {
+	switch t := o.(type) {
+	case *Table:
+		return t.Owner == user, nil
+	default:
+		panic(errors.AssertionFailedf("type %T is not supportid", t))
+	}
+}
+
 func (tc *Catalog) resolveSchema(toResolve *cat.SchemaName) (cat.Schema, cat.SchemaName, error) {
 	if string(toResolve.CatalogName) != testDB {
 		return nil, cat.SchemaName{}, pgerror.Newf(pgcode.InvalidSchemaName,
@@ -560,6 +574,10 @@ func (tc *Catalog) executeDDLStmtWithIndexVersion(
 
 	case *tree.AlterTable:
 		tc.AlterTable(stmt)
+		return "", nil
+
+	case *tree.AlterTableOwner:
+		tc.AlterTableOwner(stmt)
 		return "", nil
 
 	case *tree.DropTable:
@@ -832,6 +850,7 @@ type Table struct {
 	IsVirtual  bool
 	IsSystem   bool
 	Catalog    *Catalog
+	Owner      username.SQLUsername
 
 	// If Revoked is true, then the user has had privileges on the table revoked.
 	Revoked bool

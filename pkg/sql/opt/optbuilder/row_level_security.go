@@ -26,25 +26,18 @@ func (b *Builder) addRowLevelSecurityFilter(
 		return
 	}
 
-	// Admin users are exempt from any RLS filtering.
 	isAdmin, err := b.catalog.UserHasAdminRole(b.ctx, b.checkPrivilegeUser)
 	if err != nil {
 		panic(err)
 	}
-	b.factory.Metadata().SetRLSEnabled(b.checkPrivilegeUser, isAdmin, tabMeta.MetaID)
-	if isAdmin {
-		return
+	isOwnerAndNotForced, err := b.isTableOwnerAndRLSNotForced(tabMeta)
+	if err != nil {
+		panic(err)
 	}
-
-	// If FORCE ROW LEVEL SECURITY is off, table owners are exempt from RLS filtering.
-	if !tabMeta.Table.IsRowLevelSecurityForced() {
-		if owner, err := b.catalog.IsOwner(b.ctx, tabMeta.Table, b.checkPrivilegeUser); err != nil {
-			panic(err)
-		} else if owner {
-			// SPILLY - update rls meta so we can print somthing in explain?
-			// Owner is exempt
-			return
-		}
+	b.factory.Metadata().SetRLSEnabled(b.checkPrivilegeUser, isAdmin, tabMeta.MetaID, isOwnerAndNotForced)
+	// Check if RLS filtering is exempt.
+	if isAdmin || isOwnerAndNotForced {
+		return
 	}
 
 	scalar := b.buildRowLevelSecurityUsingExpression(tabMeta, tableScope, cmdScope)
@@ -112,4 +105,13 @@ func (b *Builder) policyAppliesToCommandScope(
 	default:
 		panic(errors.AssertionFailedf("unknown policy command %v", cmd))
 	}
+}
+
+// isTableOwnerAndRLSNotForced returns true iff the user is the table owner and
+// the NO FORCE option is set.
+func (b *Builder) isTableOwnerAndRLSNotForced(tabMeta *opt.TableMeta) (bool, error) {
+	if tabMeta.Table.IsRowLevelSecurityForced() {
+		return false, nil
+	}
+	return b.catalog.IsOwner(b.ctx, tabMeta.Table, b.checkPrivilegeUser)
 }

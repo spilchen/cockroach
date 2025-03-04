@@ -10,6 +10,7 @@ import (
 	gojson "encoding/json"
 	"sort"
 
+	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
@@ -24,6 +25,7 @@ import (
 //   - INJECT STATISTICS: imports table statistics from a JSON object.
 //   - ADD CONSTRAINT FOREIGN KEY: add a foreign key reference.
 //   - {ENABLE | DISABLE} ROW LEVEL SECURITY: enables or disables RLS policies for the table.
+//   - OWNER TO: transfer ownership of a table
 func (tc *Catalog) AlterTable(stmt *tree.AlterTable) {
 	tn := stmt.Table.ToTableName()
 	// Update the table name to include catalog and schema if not provided.
@@ -51,6 +53,29 @@ func (tc *Catalog) AlterTable(stmt *tree.AlterTable) {
 			panic(errors.AssertionFailedf("unsupported ALTER TABLE command %T", t))
 		}
 	}
+}
+
+// AlterTableOwner is an implementation of the ALTER TABLE ... OWNER statement.
+func (tc *Catalog) AlterTableOwner(stmt *tree.AlterTableOwner) {
+	if stmt.IfExists || stmt.IsView || stmt.IsMaterialized || stmt.IsSequence {
+		panic(errors.AssertionFailedf("unsupported options with ALTER TABLE ... OWNER: %v", stmt))
+	}
+
+	tn := stmt.Name.ToTableName()
+	// Update the table name to include catalog and schema if not provided.
+	tc.qualifyTableName(&tn)
+	tab := tc.Table(&tn)
+
+	user, err := username.MakeSQLUsernameFromUserInput(stmt.Owner.Name, username.PurposeValidation)
+	if err != nil {
+		panic(err)
+	}
+	_, found := tc.users[user]
+	if !found {
+		panic(errors.Newf(`user %q does not exist`, stmt.Owner.Name))
+	}
+
+	tab.Owner = user
 }
 
 // injectTableStats sets the table statistics as specified by a JSON object.
@@ -105,4 +130,8 @@ func toggleRLSMode(tt *Table, mode tree.TableRLSMode) {
 	default:
 		panic(errors.AssertionFailedf("unsupported RLS mode %v", mode))
 	}
+}
+
+func (tc *Catalog) changeOwner(tt *Table, newOwner tree.RoleSpec) {
+
 }

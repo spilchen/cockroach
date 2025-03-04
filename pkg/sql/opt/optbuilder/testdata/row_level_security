@@ -221,3 +221,46 @@ project
       │         └── c1:1 > 0
       └── filters
            └── (c1:1 >= 0) AND (c1:1 <= 9)
+
+# Show that the owner, who is not admin, is exempt from policies unless FORCE
+# option is set.
+
+exec-ddl
+ALTER TABLE t1 OWNER TO fred;
+----
+
+# Show that querying the table won't have the policy filter.
+build
+SELECT c1 FROM t1 where C1 between 0 and 9;
+----
+project
+ ├── columns: c1:1!null
+ └── select
+      ├── columns: c1:1!null rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      ├── scan t1
+      │    └── columns: c1:1 rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      └── filters
+           └── (c1:1 >= 0) AND (c1:1 <= 9)
+
+exec-ddl
+ALTER TABLE t1 FORCE ROW LEVEL SECURITY
+----
+
+# Repeat the above query, but this time with FORCE enabled. The policies will show up.
+build
+SELECT c1 FROM t1 where C1 between 0 and 9;
+----
+project
+ ├── columns: c1:1!null
+ └── select
+      ├── columns: c1:1!null rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      ├── select
+      │    ├── columns: c1:1!null rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      │    ├── scan t1
+      │    │    └── columns: c1:1 rowid:2!null crdb_internal_mvcc_timestamp:3 tableoid:4
+      │    └── filters
+      │         └── c1:1 > 0
+      └── filters
+           └── (c1:1 >= 0) AND (c1:1 <= 9)
+
+# SPILLY - add insert/update/delete use cases too
