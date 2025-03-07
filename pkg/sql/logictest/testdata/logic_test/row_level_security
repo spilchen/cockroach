@@ -1590,4 +1590,74 @@ DROP FUNCTION al_only;
 statement ok
 DROP SEQUENCE seq1;
 
+subtest multiple_select_policies
+
+statement ok
+CREATE TABLE multip (key INT NOT NULL, value TEXT);
+
+statement ok
+ALTER TABLE multip ENABLE ROW LEVEL SECURITY;
+
+# The policies will be combined as: (or1 || or2 || or3) && and1 && and2
+statement ok
+CREATE POLICY or1 ON multip AS PERMISSIVE USING (key = 1);
+
+statement ok
+CREATE POLICY or2 ON multip AS PERMISSIVE USING (key = 2);
+
+statement ok
+CREATE POLICY or3 ON multip AS PERMISSIVE USING (key = 3);
+
+statement ok
+CREATE POLICY and1 ON multip AS RESTRICTIVE USING (value not like '%sensitive%')
+
+statement ok
+CREATE POLICY and2 ON multip AS RESTRICTIVE USING (value not like '%confidential%')
+
+statement ok
+INSERT INTO multip VALUES
+ (0, 'key out of bounds'),
+ (1, 'okay'),
+ (1, 'sensitive - filtered out'),
+ (2, 'okay'),
+ (2, 'confidential - filtered out'),
+ (3, 'okay'),
+ (2, 'sensitive - filtered out'),
+ (4, 'key out of bounds'),
+ (4, 'confidential');
+
+statement ok
+CREATE USER multi_reader;
+
+statement ok
+GRANT ALL ON multip TO multi_reader;
+
+statement ok
+SET ROLE multi_reader;
+
+query IT
+select * from multip ORDER BY key, value;
+----
+1  okay
+2  okay
+3  okay
+
+query IT
+select * from multip where key >= 0 ORDER BY key, value;
+----
+1  okay
+2  okay
+3  okay
+
+statement ok
+SET ROLE root
+
+statement ok
+DROP TABLE multip;
+
+statement ok
+DROP USER multi_reader;
+
+subtest multiple_insert_policies
+
 subtest end
