@@ -175,51 +175,61 @@ func (r *optRLSConstraintBuilder) genExpression(ctx context.Context) (string, []
 	}
 
 	var policiesUsed opt.PolicyIDSet
-	for i := range r.tab.Policies().Permissive {
-		p := &r.tab.Policies().Permissive[i]
-
-		if !p.AppliesToRole(r.user) || !r.policyAppliesToCommand(p, r.isUpdate) {
-			continue
+	policies := r.tabMeta.Table.Policies()
+	for i, group := range [][]cat.Policy{policies.Permissive, policies.Restrictive} {
+		restrictive := i != 0
+		if restrictive {
+			// If no permissive policies apply, then we will add a false check as
+			// nothing is allowed to be written.
+			if sb.Len() == 0 {
+				r.md.GetRLSMeta().NoPoliciesApplied = true
+				return "false", nil
+			}
+			sb.WriteString(")") // Close the outer parenthesis that surrounds all permissive policies
 		}
-		policiesUsed.Add(p.ID)
-		var expr string
-		// If the WITH CHECK expression is missing, we default to the USING
-		// expression. If both are missing, then this policy doesn't apply and can
-		// be skipped.
-		if p.WithCheckExpr == "" {
-			if p.UsingExpr == "" {
+		for _, p := range group {
+			if !p.AppliesToRole(r.user) || !r.policyAppliesToCommand(&p, r.isUpdate) {
 				continue
 			}
-			expr = p.UsingExpr
-			for _, id := range p.UsingColumnIDs {
-				colIDs.Add(int(id))
+			policiesUsed.Add(p.ID)
+			r.md.GetRLSMeta().AddPoliciesUsed(r.tabMeta.MetaID, policiesUsed)
+
+			var expr string
+			// If the WITH CHECK expression is missing, we default to the USING
+			// expression. If both are missing, then this policy doesn't apply and can
+			// be skipped.
+			if p.WithCheckExpr == "" {
+				if p.UsingExpr == "" {
+					continue
+				}
+				expr = p.UsingExpr
+				for _, id := range p.UsingColumnIDs {
+					colIDs.Add(int(id))
+				}
+			} else {
+				expr = p.WithCheckExpr
+				for _, id := range p.WithCheckColumnIDs {
+					colIDs.Add(int(id))
+				}
 			}
-		} else {
-			expr = p.WithCheckExpr
-			for _, id := range p.WithCheckColumnIDs {
-				colIDs.Add(int(id))
+			if sb.Len() != 0 {
+				if restrictive {
+					sb.WriteString(" AND ")
+				} else {
+					sb.WriteString(" OR ")
+				}
+			} else {
+				sb.WriteString("(") // Add the outer parenthesis that surrounds all permissive policies
 			}
+			sb.WriteString("(")
+			sb.WriteString(expr)
+			sb.WriteString(")")
 		}
-		if sb.Len() != 0 {
-			sb.WriteString(" OR ")
-		}
-		sb.WriteString("(")
-		sb.WriteString(expr)
-		sb.WriteString(")")
-		// TODO(136742): Add support for multiple policies.
-		r.md.GetRLSMeta().AddPoliciesUsed(r.tabMeta.MetaID, policiesUsed)
-		break
 	}
 
-	// TODO(136742): Add support for restrictive policies.
-
-	// If no policies apply, then we will add a false check as nothing is allowed
-	// to be written.
 	if sb.Len() == 0 {
-		r.md.GetRLSMeta().NoPoliciesApplied = true
-		return "false", nil
+		panic(errors.AssertionFailedf("at least one applicable policy should have been included"))
 	}
-
 	return sb.String(), colIDs.Ordered()
 }
 

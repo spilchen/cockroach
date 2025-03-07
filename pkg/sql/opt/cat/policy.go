@@ -18,8 +18,6 @@ import (
 // commands defined in the CREATE POLICY SQL syntax.
 type PolicyCommandScope uint8
 
-// SPILLY - change to bits so that we can combine commands
-
 const (
 	// PolicyScopeSelect indicates that the policy applies to SELECT operations.
 	PolicyScopeSelect PolicyCommandScope = iota
