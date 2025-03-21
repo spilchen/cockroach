@@ -27,6 +27,8 @@ const (
 	PolicyScopeUpdate
 	// PolicyScopeDelete indicates that the policy applies to DELETE operations.
 	PolicyScopeDelete
+	// PolicyScopeUpsert indicates that the policy applies to INSERT ... ON CONFLICT
+	PolicyScopeUpsert
 	// PolicyScopeExempt indicates that the operation is exempt from row-level security policies.
 	PolicyScopeExempt
 )

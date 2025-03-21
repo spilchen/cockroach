@@ -186,12 +186,12 @@ func (b *Builder) isTableOwnerAndRLSNotForced(tabMeta *opt.TableMeta) (bool, err
 // optRLSConstraintBuilder is used synthesize a check constraint to enforce the
 // RLS policies for new rows.
 type optRLSConstraintBuilder struct {
-	tab      cat.Table
-	md       *opt.Metadata
-	tabMeta  *opt.TableMeta
-	oc       cat.Catalog
-	user     username.SQLUsername
-	isUpdate bool
+	tab                cat.Table
+	md                 *opt.Metadata
+	tabMeta            *opt.TableMeta
+	oc                 cat.Catalog
+	user               username.SQLUsername
+	policyCommandScope cat.PolicyCommandScope
 }
 
 // Build will construct a CheckConstraint to enforce the policies for the
@@ -244,9 +244,10 @@ func (r *optRLSConstraintBuilder) genExpression(ctx context.Context) (string, []
 // combinePolicyWithCheckExpr will build a combined expression depending if this
 // is INSERT or UPDATE.
 func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fast) string {
-	// When handling UPDATE, we need to add the SELECT/ALL using expressions
-	// first, then apply any UPDATE policy.
-	if r.isUpdate {
+	switch r.policyCommandScope {
+	case cat.PolicyScopeUpdate:
+		// When handling UPDATE, we need to add the SELECT/ALL using expressions
+		// first, then apply any UPDATE policy.
 		selExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
 		if selExpr == "" {
 			return ""
@@ -256,8 +257,30 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 			return ""
 		}
 		return fmt.Sprintf("(%s) and (%s)", selExpr, updExpr)
+
+	case cat.PolicyScopeUpsert:
+		// The handling of UPSERT / INSERT ... ON CONFLICT is a cross between INSERT
+		// and UPDATE. So we apply INSERT/ALL, SELECT/ALL and UPDATE/ALL policies in
+		// that order.
+		// SPILLY comment dosn't reflect code
+		insExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
+		if insExpr == "" {
+			return ""
+		}
+		selExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
+		if selExpr == "" {
+			return ""
+		}
+		// SPILLY - temp
+		//updExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeUpdate)
+		//if updExpr == "" {
+		//	return ""
+		//}
+		return fmt.Sprintf("(%s) and (%s)", insExpr, selExpr)
+
+	default:
+		return r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
 	}
-	return r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
 }
 
 // genPolicyWithCheckExprForCommand will build a WITH CHECK expression for the

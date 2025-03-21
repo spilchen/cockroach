@@ -860,11 +860,11 @@ func (mb *mutationBuilder) addSynthesizedComputedCols(colIDs opt.OptionalColList
 // constraint violation error if the value of the column is false.
 //
 // Synthesized check columns are not necessary for UPDATE mutations if the
-// columns referenced in the check expression are not being mutated. If isUpdate
-// is true, check columns that do not reference mutation columns are not added
-// to checkColIDs, which allows pruning normalization rules to remove the
-// unnecessary projected column.
-func (mb *mutationBuilder) addCheckConstraintCols(isUpdate bool) {
+// columns referenced in the check expression are not being mutated. If
+// policyCommandScope is cat.PolicyCommandUpdate, check columns that do not
+// reference mutation columns are not added to checkColIDs, which allows pruning
+// normalization rules to remove the unnecessary projected column.
+func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyCommandScope) {
 	if mb.tab.CheckCount() != 0 {
 		projectionsScope := mb.outScope.replace()
 		projectionsScope.appendColumnsFromScope(mb.outScope)
@@ -884,12 +884,12 @@ func (mb *mutationBuilder) addCheckConstraintCols(isUpdate bool) {
 				}
 				seenRLSConstraint = true
 				chkBuilder := optRLSConstraintBuilder{
-					tab:      mb.tab,
-					md:       mb.md,
-					tabMeta:  mb.md.TableMeta(mb.tabID),
-					oc:       mb.b.catalog,
-					user:     mb.b.checkPrivilegeUser,
-					isUpdate: isUpdate,
+					tab:                mb.tab,
+					md:                 mb.md,
+					tabMeta:            mb.md.TableMeta(mb.tabID),
+					oc:                 mb.b.catalog,
+					user:               mb.b.checkPrivilegeUser,
+					policyCommandScope: policyCommandScope,
 				}
 				check = chkBuilder.Build(mb.b.ctx)
 			}
@@ -926,7 +926,8 @@ func (mb *mutationBuilder) addCheckConstraintCols(isUpdate bool) {
 			//   expressions can exist for read and write operations. This means it's
 			//   possible to read a row whose column values would violate the write
 			//   expression.
-			if !isUpdate || check.IsRLSConstraint() || referencedCols.Intersects(mutationCols) {
+			if policyCommandScope != cat.PolicyScopeUpdate || check.IsRLSConstraint() ||
+				referencedCols.Intersects(mutationCols) {
 				mb.checkColIDs[i] = scopeCol.id
 
 				// TODO(michae2): Under weaker isolation levels we need to use shared
