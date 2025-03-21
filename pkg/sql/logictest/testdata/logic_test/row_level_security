@@ -245,16 +245,14 @@ statement ok
 CREATE POLICY p_all ON ups FOR ALL USING (comment = 'upsert') WITH CHECK (true);
 
 # This should fail with an RLS violation because the new row violates the USING expression.
-# SPILLY - not violating
-statement ok
+statement error pq: new row violates row-level security policy for table "ups"
 INSERT INTO ups VALUES (8, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
 # Setup so we can try on a conflict. Disable RLS to properly insert pk=8 in.
 statement ok
 ALTER TABLE ups NO FORCE ROW LEVEL SECURITY;
 
-# SPILLY - this fails because the insert above WAS allowed
-statement error pq: duplicate key value violates unique constraint "ups_pkey"
+statement ok
 INSERT INTO ups VALUES (8, 'original value');
 
 statement ok
@@ -282,16 +280,13 @@ CREATE POLICY p_all ON ups FOR ALL USING (comment = 'original value') WITH CHECK
 statement ok
 INSERT INTO ups VALUES (9, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
-# SPILLY - this should fail but doesn
-#statement error pq: new row violates row-level security policy for table "ups"
-statement ok
+statement error pq: new row violates row-level security policy for table "ups"
 INSERT INTO ups VALUES (9, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
-# SPILLY - this is the wrong result because of earlier failures. It should return 'original value'
 query T
 SELECT comment FROM ups WHERE pk = 9;
 ----
-
+original value
 
 # pk=10: Use an ALL policy with a WITH CHECK expression that applies to the
 # updated value during conflict resolution.
@@ -347,6 +342,31 @@ INSERT INTO ups VALUES (11, 'original value') ON CONFLICT (pk) DO UPDATE SET com
 
 query T
 SELECT comment FROM ups WHERE pk = 11;
+----
+original value
+
+# pk=12: Use an ALL policy that only has a WITH CHECK expression.
+statement ok
+DROP POLICY p_all ON ups;
+
+statement ok
+CREATE POLICY p_all ON ups FOR ALL WITH CHECK (true);
+
+statement error pq: new row violates row-level security policy for table "ups"
+INSERT INTO ups VALUES (12, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
+
+statement error pq: new row violates row-level security policy for table "ups"
+INSERT INTO ups VALUES (12, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
+
+statement ok
+INSERT INTO ups VALUES (12, 'original value')
+
+# Turn off force so we can query the row back
+statement ok
+ALTER TABLE ups NO FORCE ROW LEVEL SECURITY;
+
+query T
+SELECT comment FROM ups WHERE pk = 12;
 ----
 original value
 

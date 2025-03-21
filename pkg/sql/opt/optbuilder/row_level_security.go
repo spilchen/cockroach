@@ -260,23 +260,23 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 
 	case cat.PolicyScopeUpsert:
 		// The handling of UPSERT / INSERT ... ON CONFLICT is a cross between INSERT
-		// and UPDATE. So we apply INSERT/ALL, SELECT/ALL and UPDATE/ALL policies in
-		// that order.
-		// SPILLY comment dosn't reflect code
+		// and UPDATE. So we apply the following policies in order:
+		// - INSERT/ALL
+		// - WITH CHECK expression of SELECT/ALL
+		// - USING expression of SELECT/ALL
 		insExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
 		if insExpr == "" {
 			return ""
 		}
-		selExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
-		if selExpr == "" {
+		withCheckSelExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
+		if withCheckSelExpr == "" {
 			return ""
 		}
-		// SPILLY - temp
-		//updExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeUpdate)
-		//if updExpr == "" {
-		//	return ""
-		//}
-		return fmt.Sprintf("(%s) and (%s)", insExpr, selExpr)
+		usingSelExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
+		if usingSelExpr == "" {
+			return ""
+		}
+		return fmt.Sprintf("(%s) and (%s) and (%s)", insExpr, withCheckSelExpr, usingSelExpr)
 
 	default:
 		return r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
@@ -287,6 +287,20 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 // given policy command.
 func (r *optRLSConstraintBuilder) genPolicyWithCheckExprForCommand(
 	colIDs *intsets.Fast, cmdScope cat.PolicyCommandScope,
+) string {
+	return r.genCheckExprForCommand(colIDs, cmdScope, false /* onlyUsingExpr */)
+}
+
+// genPolicyUsingExprForCommand will build a USING expression for the given policy command.
+func (r *optRLSConstraintBuilder) genPolicyUsingExprForCommand(
+	colIDs *intsets.Fast, cmdScope cat.PolicyCommandScope,
+) string {
+	return r.genCheckExprForCommand(colIDs, cmdScope, true /* onlyUsingExpr */)
+}
+
+// genCheckExprForCommand will build a check expression for the given policy command.
+func (r *optRLSConstraintBuilder) genCheckExprForCommand(
+	colIDs *intsets.Fast, cmdScope cat.PolicyCommandScope, onlyUsingExpr bool,
 ) string {
 	var sb strings.Builder
 	var policiesUsed opt.PolicyIDSet
@@ -300,10 +314,14 @@ func (r *optRLSConstraintBuilder) genPolicyWithCheckExprForCommand(
 		policiesUsed.Add(p.ID)
 
 		var expr string
-		// If the WITH CHECK expression is missing, we default to the USING
-		// expression. If both are missing, then this policy doesn't apply and can
+		// The USING expression is used in two scenarios:
+		// - When the WITH CHECK expression is not defined
+		// - When the caller explicitly requests only the USING expression (e.g.,
+		// during UPSERT)
+		//
+		// Note: If both expressions are missing, the policy does not apply and can
 		// be skipped.
-		if p.WithCheckExpr == "" {
+		if p.WithCheckExpr == "" || onlyUsingExpr {
 			if p.UsingExpr == "" {
 				return
 			}
