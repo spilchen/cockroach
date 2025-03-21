@@ -869,7 +869,7 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 		projectionsScope := mb.outScope.replace()
 		projectionsScope.appendColumnsFromScope(mb.outScope)
 		mutationCols := mb.mutationColumnIDs()
-		var seenRLSConstraint bool
+		var rlsConstraintCount int
 
 		for i, n := 0, mb.tab.CheckCount(); i < n; i++ {
 			check := mb.tab.Check(i)
@@ -879,19 +879,39 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 			// and command used, it must be generated each time it is needed rather
 			// than being included with the table's actual check constraints.
 			if check.IsRLSConstraint() {
-				if seenRLSConstraint {
-					panic(errors.AssertionFailedf("a table should only have one RLS constraint"))
+				switch rlsConstraintCount {
+				case 0:
+					chkBuilder := optRLSConstraintBuilder{
+						tab:                mb.tab,
+						md:                 mb.md,
+						tabMeta:            mb.md.TableMeta(mb.tabID),
+						oc:                 mb.b.catalog,
+						user:               mb.b.checkPrivilegeUser,
+						policyCommandScope: policyCommandScope,
+					}
+					check = chkBuilder.Build(mb.b.ctx)
+				case 1:
+					if policyCommandScope == cat.PolicyScopeUpsert {
+						chkBuilder := optRLSConstraintBuilder{
+							tab:                mb.tab,
+							md:                 mb.md,
+							tabMeta:            mb.md.TableMeta(mb.tabID),
+							oc:                 mb.b.catalog,
+							user:               mb.b.checkPrivilegeUser,
+							policyCommandScope: cat.PolicyScopeUpdate,
+						}
+						check = chkBuilder.Build(mb.b.ctx)
+					} else {
+						check = &rlsCheckConstraint{
+							constraint: "true",
+							colIDs:     nil,
+							tab:        mb.tab,
+						}
+					}
+				default:
+					panic(errors.AssertionFailedf("a table should have at most two RLS constraints"))
 				}
-				seenRLSConstraint = true
-				chkBuilder := optRLSConstraintBuilder{
-					tab:                mb.tab,
-					md:                 mb.md,
-					tabMeta:            mb.md.TableMeta(mb.tabID),
-					oc:                 mb.b.catalog,
-					user:               mb.b.checkPrivilegeUser,
-					policyCommandScope: policyCommandScope,
-				}
-				check = chkBuilder.Build(mb.b.ctx)
+				rlsConstraintCount++
 			}
 
 			expr, err := parser.ParseExpr(check.Constraint())
@@ -905,7 +925,7 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 			// in other expressions.
 			colName := scopeColName("")
 			if check.IsRLSConstraint() {
-				colName = colName.WithMetadataName("rls")
+				colName = colName.WithMetadataName(fmt.Sprintf("rls%d", rlsConstraintCount))
 			} else {
 				colName = colName.WithMetadataName(fmt.Sprintf("check%d", i+1))
 			}
@@ -970,6 +990,10 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 
 		mb.b.constructProjectForScope(mb.outScope, projectionsScope)
 		mb.outScope = projectionsScope
+
+		if !(rlsConstraintCount == 0 || rlsConstraintCount == 2) {
+			panic(errors.AssertionFailedf("a table should have exactly two RLS constraints or none at all: %d", rlsConstraintCount))
+		}
 	}
 }
 

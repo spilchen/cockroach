@@ -81,6 +81,9 @@ func (c checkConstraint) IsNotNullColumnConstraint() bool {
 // IsRLSConstraint implements the catalog.CheckConstraintValidator interface.
 func (c checkConstraint) IsRLSConstraint() bool { return false }
 
+// IsUpsertConstraint implements the catalog.CheckConstraintValidator interface.
+func (c checkConstraint) IsUpsertConstraint() bool { return false }
+
 // IsCheckFailed implements the catalog.CheckConstraintValidator interface.
 func (c checkConstraint) IsCheckFailed(boolVal, isNull bool) bool {
 	// This is a standard CHECK constraint.
@@ -137,6 +140,7 @@ func (c checkConstraint) IsEnforced() bool {
 // rlsSyntheticCheckConstraint is an implementation of CheckConstraintValidator
 // for use with tables that have row-level security enabled.
 type rlsSyntheticCheckConstraint struct {
+	isUpsertConstraint bool
 }
 
 var _ catalog.CheckConstraintValidator = (*rlsSyntheticCheckConstraint)(nil)
@@ -148,6 +152,9 @@ func (r rlsSyntheticCheckConstraint) GetExpr() string {
 
 // IsRLSConstraint implements the catalog.CheckConstraintValidator interface.
 func (r rlsSyntheticCheckConstraint) IsRLSConstraint() bool { return true }
+
+// IsUpsertConstraint implements the catalog.CheckConstraintValidator interface.
+func (r rlsSyntheticCheckConstraint) IsUpsertConstraint() bool { return r.isUpsertConstraint }
 
 // IsCheckFailed implements the catalog.CheckConstraintValidator interface.
 func (r rlsSyntheticCheckConstraint) IsCheckFailed(boolVal, isNull bool) bool {
@@ -529,10 +536,12 @@ func newConstraintCache(
 			c.fkBackRefs[i] = &fkBackRefBackingStructs[i]
 		}
 	}
-	// Populate the check constraint for row-level security to enforce RLS policies.
+	// Populate the check constraints for row-level security to enforce RLS policies.
 	if desc.RowLevelSecurityEnabled {
-		ck := rlsSyntheticCheckConstraint{}
-		c.checkValidators = append(c.checkValidators, ck)
+		c.checkValidators = append(c.checkValidators,
+			rlsSyntheticCheckConstraint{isUpsertConstraint: false},
+			rlsSyntheticCheckConstraint{isUpsertConstraint: true},
+		)
 	}
 	return &c
 }

@@ -121,16 +121,14 @@ CREATE POLICY p_upd ON ups FOR UPDATE USING (true) WITH CHECK (comment = 'origin
 statement ok
 INSERT INTO ups VALUES (4, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
-# SPILLY - this doesn't fail, but it should
 # This should be rejected because updated value violates the WITH CHECK expression in the update policy.
-statement ok
+statement error pq: new row violates row-level security policy for table "ups"
 INSERT INTO ups VALUES (4, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
-# SPILLY - this has the wrong results. It should be original value
 query T
 SELECT comment FROM ups WHERE pk = 4;
 ----
-upsert
+original value
 
 # pk=5: Trigger INSERT policy violation before conflict resolution.
 statement ok

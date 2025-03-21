@@ -1154,11 +1154,13 @@ func newOptTable(
 	// Synthesize any check constraints for user defined types.
 	var synthesizedChecks []optCheckConstraint
 	if ot.rlsEnabled {
-		// Add a placeholder constraint for RLS. The actual constraint contents
+		// Add two placeholder constraint for RLS. The actual constraint contents
 		// are determined at runtime based on the role and command requiring it.
-		synthesizedChecks = append(synthesizedChecks, optCheckConstraint{
-			isRLSConstraint: true,
-		})
+		// SPILLY - update comments?
+		synthesizedChecks = append(synthesizedChecks,
+			optCheckConstraint{isRLSConstraint: true},
+			optCheckConstraint{isRLSConstraint: true},
+		)
 	}
 	for i := 0; i < ot.ColumnCount(); i++ {
 		col := ot.Column(i)

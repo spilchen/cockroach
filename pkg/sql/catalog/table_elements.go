@@ -565,6 +565,10 @@ type CheckConstraintValidator interface {
 	// to enforce row-level security policies.
 	IsRLSConstraint() bool
 
+	// IsUpsertConstraint returns true if the check constraint should be applied
+	// only during the UPDATE phase of an UPSERT that encounters a conflict.
+	IsUpsertConstraint() bool
+
 	// IsCheckFailed returns true if the constraint was violated based on the
 	// input given.
 	IsCheckFailed(boolVal, isNull bool) bool
