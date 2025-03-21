@@ -278,6 +278,25 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		}
 		return fmt.Sprintf("(%s) and (%s) and (%s)", insExpr, withCheckSelExpr, usingSelExpr)
 
+	case cat.PolicyScopeUpsertConflict:
+		// This case is to apply any constraints in the case that we have a
+		// conflict. This is where the UPDATE policies are applied. However,
+		// it isn't strictly treated as an UPDATE. Any policy that would have
+		// filtered out rows needs to fail. SPILLY - expand this comment
+		withCheckSelExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
+		if withCheckSelExpr == "" {
+			return ""
+		}
+		usingSelExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeUpdate)
+		if usingSelExpr == "" {
+			return ""
+		}
+		updExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeUpdate)
+		if updExpr == "" {
+			return ""
+		}
+		return fmt.Sprintf("(%s) and (%s) and (%s)", withCheckSelExpr, usingSelExpr, updExpr)
+
 	default:
 		return r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
 	}

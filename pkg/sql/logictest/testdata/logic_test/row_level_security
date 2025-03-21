@@ -51,6 +51,8 @@ CREATE POLICY p_ins ON ups FOR INSERT WITH CHECK (true);
 statement ok
 CREATE POLICY p_upd ON ups FOR UPDATE USING (comment = 'upsert') WITH CHECK (true);
 
+# SPILLY - add optbuilder tests
+
 # Okay because there is no conflict
 statement ok
 INSERT INTO ups VALUES (1, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
@@ -79,17 +81,14 @@ CREATE POLICY p_upd ON ups FOR UPDATE USING (comment = 'original value') WITH CH
 statement ok
 INSERT INTO ups VALUES (2, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
-# SPILLY - this needs to fail
-# SPILLY - postgres uses a different error code for this error to indicate the USING expression was at fault.
 # Reject because original values of the row violate the USING clause of the UPDATE policy.
-statement ok
+statement error pq: new row violates row-level security policy for table "ups"
 INSERT INTO ups VALUES (2, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
-# SPILLY - wrong result. It should be 'original value'
 query T
 SELECT comment FROM ups WHERE pk = 2;
 ----
-upsert
+original value
 
 # pk=3: Confirm no policy violation during conflict resolution when the updated
 # row satisfies the WITH CHECK expression.

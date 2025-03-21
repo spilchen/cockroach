@@ -891,6 +891,11 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 					}
 					check = chkBuilder.Build(mb.b.ctx)
 				case 1:
+					// The second RLS constraint is used to apply any policies only if
+					// there is a conflict during an UPSERT. This constraint can simply
+					// return true if UPSERT isn't the current statement.
+					// SPILLY - need testing for DO NOTHING as we don't want to apply this
+					// constraint then. Maybe that's handled on the execution side.
 					if policyCommandScope == cat.PolicyScopeUpsert {
 						chkBuilder := optRLSConstraintBuilder{
 							tab:                mb.tab,
@@ -898,12 +903,14 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 							tabMeta:            mb.md.TableMeta(mb.tabID),
 							oc:                 mb.b.catalog,
 							user:               mb.b.checkPrivilegeUser,
-							policyCommandScope: cat.PolicyScopeUpdate,
+							policyCommandScope: cat.PolicyScopeUpsertConflict,
 						}
 						check = chkBuilder.Build(mb.b.ctx)
 					} else {
+						// Not an UPSERT. So the 2nd RLS constraint won't ever be checked by
+						// the execution engine.
 						check = &rlsCheckConstraint{
-							constraint: "true",
+							constraint: "null",
 							colIDs:     nil,
 							tab:        mb.tab,
 						}
