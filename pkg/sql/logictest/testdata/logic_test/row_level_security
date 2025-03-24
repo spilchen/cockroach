@@ -663,6 +663,55 @@ drop table flying_roaches
 statement ok
 drop type roach_type
 
+subtest insert_returning
+
+statement ok
+CREATE TABLE ins (c1 INT);
+
+statement ok
+CREATE USER ins;
+
+statement ok
+ALTER TABLE ins OWNER TO ins;
+
+statement ok
+SET ROLE ins;
+
+statement ok
+CREATE POLICY p_ins ON ins FOR INSERT WITH CHECK (c1 > 0);
+
+statement ok
+CREATE POLICY p_sel ON ins FOR SELECT USING (c1 % 2 = 0);
+
+statement ok
+ALTER TABLE ins FORCE ROW LEVEL SECURITY, ENABLE ROW LEVEL SECURITY;
+
+# Verify that p_ins allows all positive rows to be inserted.
+statement ok
+INSERT INTO ins VALUES (1),(2),(3),(4);
+
+# Verify that the same statement with RETURNING will fail because it enforces
+# the SELECT policy.
+statement error pq: new row violates row-level security policy for table "ins"
+INSERT INTO ins VALUES (1),(2),(3),(4) RETURNING c1;
+
+# Verify that only rows that pass the USING expression are allowed (even numbers).
+statement ok
+INSERT INTO ins VALUES (2),(4) RETURNING c1;
+
+# Verify that insert policy violation applies when using RETURNING
+statement error pq: new row violates row-level security policy for table "ins"
+INSERT INTO ins VALUES (2),(4),(-2),(-4) RETURNING c1;
+
+statement ok
+SET ROLE root;
+
+statement ok
+DROP TABLE ins;
+
+statement ok
+DROP USER ins;
+
 subtest alter_table_rls_legacy_unimplemented
 
 statement ok
@@ -3052,6 +3101,8 @@ query T
 SELECT comment FROM ups WHERE pk = 6;
 ----
 original value
+
+# SPILLY - use ALTER POLICY to save some steps
 
 # pk=7: Trigger SELECT policy violation on new inserted row and updated row
 # during conflict resolution.

@@ -258,28 +258,27 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		}
 		return fmt.Sprintf("(%s) and (%s)", selExpr, updExpr)
 
-	case cat.PolicyScopeUpsert:
-		// The handling of UPSERT / INSERT ... ON CONFLICT is a cross between INSERT
-		// and UPDATE. So we apply the following policies in order:
-		// - INSERT/ALL
-		// - WITH CHECK expression of SELECT/ALL
-		// - USING expression of SELECT/ALL
+	case cat.PolicyScopeInsertWithSelect:
+		// An INSERT that requires SELECT privileges behaves like a regular insert,
+		// but also enforces SELECT/ALL USING expressions. Unlike typical SELECT
+		// behaviour, these expressions must not silently filter out rows — they act
+		// as checks that can fail the entire operation. This applies to INSERT ...
+		// RETURNING and the insert path of UPSERT (INSERT ... ON CONFLICT).
 		insExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
 		if insExpr == "" {
-			return ""
-		}
-		withCheckSelExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
-		if withCheckSelExpr == "" {
 			return ""
 		}
 		usingSelExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
 		if usingSelExpr == "" {
 			return ""
 		}
-		return fmt.Sprintf("(%s) and (%s) and (%s)", insExpr, withCheckSelExpr, usingSelExpr)
+		return fmt.Sprintf("(%s) and (%s)", insExpr, usingSelExpr)
 
 	case cat.PolicyScopeUpsertConflictOldValues:
-		// SPILLY - comments please
+		// This one is related to UPSERT (or INSERT ... ON CONFLICT). This scope is
+		// when we scan the table to see if there is a conflict with the new row
+		// values. The expression will evaluate the rows that were read in the scan
+		// (aka reading of the old rows).
 		selExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
 		if selExpr == "" {
 			return ""
@@ -291,11 +290,11 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		return fmt.Sprintf("(%s) and (%s)", selExpr, updExpr)
 
 	case cat.PolicyScopeUpsertConflictNewValues:
-		// This case is to apply any constraints in the case that we have a
-		// conflict. This is where the UPDATE policies are applied. However,
-		// it isn't strictly treated as an UPDATE. Any policy that would have
-		// filtered out rows needs to fail. SPILLY - expand this comment
-		// SPILLY - unsure about the with check here??
+		// SPILLY - could we combine this with INSERT with SELECT
+		// This is the final one for UPSERT / INSERT ... ON CONFLICT. This is an
+		// expression that is evaluated against newly updated rows in case there is
+		// a conflict. It behaves like an UPDATE, except we want any SELECT policy
+		// to fail rather than silently filter out rows.
 		withCheckSelExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
 		if withCheckSelExpr == "" {
 			return ""

@@ -27,9 +27,9 @@ const (
 	PolicyScopeUpdate
 	// PolicyScopeDelete indicates that the policy applies to DELETE operations.
 	PolicyScopeDelete
-	// PolicyScopeUpsert applies to the INSERT path of an INSERT ... ON CONFLICT
-	// statement, i.e., when no conflict occurs and a new row is inserted.
-	PolicyScopeUpsert
+	// PolicyScopeInsertWithSelect applies to the INSERT that also needs SELECT
+	// access (i.e. returning rows).
+	PolicyScopeInsertWithSelect
 	// PolicyScopeUpsertConflictNewValues applies to the UPDATE path of an INSERT
 	// ... ON CONFLICT statement, i.e., when a conflict occurs and the row is
 	// updated. The check is evaluated against the new (updated) values.
