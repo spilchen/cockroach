@@ -870,7 +870,6 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 		projectionsScope.appendColumnsFromScope(mb.outScope)
 		mutationCols := mb.mutationColumnIDs()
 		var rlsConstraintCount int
-		var chkBuilder optRLSConstraintBuilder
 
 		for i, n := 0, mb.tab.CheckCount(); i < n; i++ {
 			check := mb.tab.Check(i)
@@ -881,55 +880,24 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 			// than being included with the table's actual check constraints.
 			if check.IsRLSConstraint() {
 				rlsConstraintCount++
-				switch rlsConstraintCount {
-				case 1:
-					if policyCommandScope == cat.PolicyScopeUpsertConflictOldValues {
-						continue
-					}
-					chkBuilder = optRLSConstraintBuilder{
-						tab:                mb.tab,
-						md:                 mb.md,
-						tabMeta:            mb.md.TableMeta(mb.tabID),
-						oc:                 mb.b.catalog,
-						user:               mb.b.checkPrivilegeUser,
-						policyCommandScope: policyCommandScope,
-					}
-					check = chkBuilder.Build(mb.b.ctx)
-				case 2:
-					if policyCommandScope == cat.PolicyScopeUpsertConflictOldValues {
-						continue
-					}
-					check = mb.maybeBuildRLSConflictCheckConstraint(policyCommandScope)
-				case 3:
-					if policyCommandScope != cat.PolicyScopeUpsertConflictOldValues {
-						continue
-					}
-					check = mb.maybeBuildRLSConflictCheckConstraint(policyCommandScope)
-				default:
-					panic(errors.AssertionFailedf("a table should have at most three RLS constraints"))
+				check = mb.processRLSConstraint(policyCommandScope, rlsConstraintCount)
+				if check == nil {
+					// Skip if this constraint is not relevant for the current scope.
+					continue
 				}
 			} else {
-				if policyCommandScope == cat.PolicyScopeUpsertConflictOldValues {
+				// If handling an UPSERT conflict, skip all checks except the relevant
+				// RLS conflict constraints.
+				if policyCommandScope.ForUpsertConflict() {
 					continue
 				}
 			}
-
-			// SPILLY_ comments
-			//if policyCommandScope == cat.PolicyScopeUpsertConflictOldValues {
-			//	if !check.IsRLSConstraint() || chkBuilder.policyCommandScope != policyCommandScope {
-			//		continue
-			//	}
-			//} else if check.IsRLSConstraint() && chkBuilder.policyCommandScope == policyCommandScope {
-			//	continue
-			//}
 
 			expr, err := parser.ParseExpr(check.Constraint())
 			if err != nil {
 				panic(err)
 			}
 
-			// SPILLY - maybe we can return a tree.typedExpr here for RLS. Saves
-			// having to do this step. This is an optimization.
 			texpr := mb.outScope.resolveAndRequireType(expr, types.Bool)
 
 			// Use an anonymous name because the column cannot be referenced
@@ -1008,34 +976,50 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 	}
 }
 
-func (mb *mutationBuilder) maybeBuildRLSConflictCheckConstraint(
+const (
+	rlsConstraintInsertOrUpdate = iota + 1
+	rlsConstraintConflictOldValues
+	rlsConstraintConflictNewValues
+	maxRLSConstraintCount = rlsConstraintConflictNewValues
+)
+
+func (mb *mutationBuilder) processRLSConstraint(
+	scope cat.PolicyCommandScope, count int,
+) cat.CheckConstraint {
+	switch count {
+	case rlsConstraintInsertOrUpdate:
+		if scope.ForUpsertConflict() {
+			return nil
+		}
+		return mb.invokeRLSCheckConstraintBuilder(scope)
+	case rlsConstraintConflictOldValues:
+		if scope != cat.PolicyScopeUpsertConflictOldValues {
+			return nil
+		}
+		return mb.invokeRLSCheckConstraintBuilder(scope)
+	case rlsConstraintConflictNewValues:
+		if scope != cat.PolicyScopeUpsertConflictNewValues {
+			return nil
+		}
+		return mb.invokeRLSCheckConstraintBuilder(scope)
+	default:
+		panic(errors.AssertionFailedf("a table should have at most %d RLS constraints, but processing %d",
+			maxRLSConstraintCount, count))
+	}
+}
+
+func (mb *mutationBuilder) invokeRLSCheckConstraintBuilder(
 	policyCommandScope cat.PolicyCommandScope,
 ) cat.CheckConstraint {
-	if policyCommandScope == cat.PolicyScopeUpsertConflictOldValues ||
-		policyCommandScope == cat.PolicyScopeUpsert {
-		// SPILLY - ugly
-		if policyCommandScope == cat.PolicyScopeUpsert {
-			policyCommandScope = cat.PolicyScopeUpsertConflictNewValues
-		}
-		chkBuilder := optRLSConstraintBuilder{
-			tab:                mb.tab,
-			md:                 mb.md,
-			tabMeta:            mb.md.TableMeta(mb.tabID),
-			oc:                 mb.b.catalog,
-			user:               mb.b.checkPrivilegeUser,
-			policyCommandScope: policyCommandScope,
-		}
-		return chkBuilder.Build(mb.b.ctx)
-	} else {
-		// Not an UPSERT. So the 2nd and 3rd RLS constraints won't ever be checked by
-		// the execution engine.
-		// SPILLY - update comment
-		return &rlsCheckConstraint{
-			constraint: "null",
-			colIDs:     nil,
-			tab:        mb.tab,
-		}
+	chkBuilder := optRLSConstraintBuilder{
+		tab:                mb.tab,
+		md:                 mb.md,
+		tabMeta:            mb.md.TableMeta(mb.tabID),
+		oc:                 mb.b.catalog,
+		user:               mb.b.checkPrivilegeUser,
+		policyCommandScope: policyCommandScope,
 	}
+	return chkBuilder.Build(mb.b.ctx)
 }
 
 // getColumnFamilySet gets the set of column families represented in colOrdinals.

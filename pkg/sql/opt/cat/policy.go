@@ -27,16 +27,24 @@ const (
 	PolicyScopeUpdate
 	// PolicyScopeDelete indicates that the policy applies to DELETE operations.
 	PolicyScopeDelete
-	// PolicyScopeUpsert indicates that the policy applies to INSERT ... ON CONFLICT
+	// PolicyScopeUpsert applies to the INSERT path of an INSERT ... ON CONFLICT
+	// statement, i.e., when no conflict occurs and a new row is inserted.
 	PolicyScopeUpsert
-	// PolicyScopeUpsertConflictNewValues indicates that the policy applies to the conflict
-	// resolution (i.e., the UPDATE portion) of an INSERT ... ON CONFLICT statement.
+	// PolicyScopeUpsertConflictNewValues applies to the UPDATE path of an INSERT
+	// ... ON CONFLICT statement, i.e., when a conflict occurs and the row is
+	// updated. The check is evaluated against the new (updated) values.
 	PolicyScopeUpsertConflictNewValues
-	// SPILLY - deserves a comment if it works
+	// PolicyScopeUpsertConflictOldValues also applies to the UPDATE path of an
+	// INSERT ... ON CONFLICT statement. In this case, the check is evaluated
+	// against the existing (old) row values that triggered the conflict.
 	PolicyScopeUpsertConflictOldValues
 	// PolicyScopeExempt indicates that the operation is exempt from row-level security policies.
 	PolicyScopeExempt
 )
+
+func (p PolicyCommandScope) ForUpsertConflict() bool {
+	return p == PolicyScopeUpsertConflictNewValues || p == PolicyScopeUpsertConflictOldValues
+}
 
 // Policy defines an interface for a row-level security (RLS) policy on a table.
 // Policies use expressions to filter rows during read operations and/or restrict

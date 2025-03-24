@@ -371,11 +371,14 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 
 	// Case 4: INSERT..ON CONFLICT..DO UPDATE statement.
 	default:
-		// SPILLY - look in here for the old cols??
-		// SPILLY - we can call addCheckConstraintCols here if you want to look at the
-		// old columns. This didn't work. When I look at the plan, the reference to
-		// the column points to the *new* column names. Can we add the check constraint earlier?
-		mb.addCheckConstraintCols(cat.PolicyScopeUpsertConflictOldValues)
+		// RLS tables have synthetic check constraints that enforce policies during
+		// writes. One such check, which is evaluated against the scanned column
+		// values in the case of a conflict, needs to be handled here. When building
+		// the input for an UPSERT, which is done right after, we lose the ability
+		// to reference the old data using column names.
+		if mb.tab.IsRowLevelSecurityEnabled() {
+			mb.addCheckConstraintCols(cat.PolicyScopeUpsertConflictOldValues)
+		}
 
 		// Left-join each input row to the target table, using the conflict columns
 		// as the join condition.
@@ -958,11 +961,6 @@ func (mb *mutationBuilder) setUpsertCols(insertCols tree.NameList) {
 // buildUpsert constructs an Upsert operator, possibly wrapped by a Project
 // operator that corresponds to the given RETURNING clause.
 func (mb *mutationBuilder) buildUpsert(returning *tree.ReturningExprs) {
-	// SPILLY - we can call addCheckConstraintCols here if you want to look at the
-	// old columns. This didn't work. When I look at the plan, the reference to
-	// the column points to the *new* column names. Can we add the check constraint earlier?
-	//mb.addCheckConstraintCols(cat.PolicyScopeUpsertConflictOldValues)
-
 	// Merge input insert and update columns using CASE expressions.
 	mb.projectUpsertColumns()
 
@@ -970,8 +968,13 @@ func (mb *mutationBuilder) buildUpsert(returning *tree.ReturningExprs) {
 	// check constraint, refer to the correct columns.
 	mb.disambiguateColumns()
 
-	// Add any check constraint boolean columns to the input.
+	// Add any check constraint boolean columns to the input. For the synthetic
+	// RLS checks used to enforce policies, this ensures the new data is validated
+	// for both inserts and updates (i.e., in the case of a conflict).
 	mb.addCheckConstraintCols(cat.PolicyScopeUpsert)
+	if mb.tab.IsRowLevelSecurityEnabled() {
+		mb.addCheckConstraintCols(cat.PolicyScopeUpsertConflictNewValues)
+	}
 
 	// Add the partial index predicate expressions to the table metadata.
 	// These expressions are used to prune fetch columns during
