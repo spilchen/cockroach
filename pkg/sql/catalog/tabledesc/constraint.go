@@ -541,6 +541,7 @@ func newConstraintCache(
 		c.checkValidators = append(c.checkValidators,
 			rlsSyntheticCheckConstraint{isUpsertConstraint: false},
 			rlsSyntheticCheckConstraint{isUpsertConstraint: true},
+			rlsSyntheticCheckConstraint{isUpsertConstraint: true},
 		)
 	}
 	return &c

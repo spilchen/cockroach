@@ -278,24 +278,41 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		}
 		return fmt.Sprintf("(%s) and (%s) and (%s)", insExpr, withCheckSelExpr, usingSelExpr)
 
-	case cat.PolicyScopeUpsertConflict:
+	case cat.PolicyScopeUpsertConflictOldValues:
+		// SPILLY - comments please
+		selExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
+		if selExpr == "" {
+			return ""
+		}
+		updExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeUpdate)
+		if updExpr == "" {
+			return ""
+		}
+		return fmt.Sprintf("(%s) and (%s)", selExpr, updExpr)
+
+	case cat.PolicyScopeUpsertConflictNewValues:
 		// This case is to apply any constraints in the case that we have a
 		// conflict. This is where the UPDATE policies are applied. However,
 		// it isn't strictly treated as an UPDATE. Any policy that would have
 		// filtered out rows needs to fail. SPILLY - expand this comment
+		// SPILLY - unsure about the with check here??
 		withCheckSelExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
 		if withCheckSelExpr == "" {
 			return ""
 		}
-		usingSelExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeUpdate)
+		usingSelExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
 		if usingSelExpr == "" {
 			return ""
 		}
-		updExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeUpdate)
-		if updExpr == "" {
+		usingUpdExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeUpdate)
+		if usingUpdExpr == "" {
 			return ""
 		}
-		return fmt.Sprintf("(%s) and (%s) and (%s)", withCheckSelExpr, usingSelExpr, updExpr)
+		withCheckUpdExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeUpdate)
+		if withCheckUpdExpr == "" {
+			return ""
+		}
+		return fmt.Sprintf("(%s) and (%s) and (%s) and (%s)", withCheckSelExpr, usingSelExpr, usingUpdExpr, withCheckUpdExpr)
 
 	default:
 		return r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)

@@ -29,9 +29,11 @@ const (
 	PolicyScopeDelete
 	// PolicyScopeUpsert indicates that the policy applies to INSERT ... ON CONFLICT
 	PolicyScopeUpsert
-	// PolicyScopeUpsertConflict indicates that the policy applies to the conflict
+	// PolicyScopeUpsertConflictNewValues indicates that the policy applies to the conflict
 	// resolution (i.e., the UPDATE portion) of an INSERT ... ON CONFLICT statement.
-	PolicyScopeUpsertConflict
+	PolicyScopeUpsertConflictNewValues
+	// SPILLY - deserves a comment if it works
+	PolicyScopeUpsertConflictOldValues
 	// PolicyScopeExempt indicates that the operation is exempt from row-level security policies.
 	PolicyScopeExempt
 )

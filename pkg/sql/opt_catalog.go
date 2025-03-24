@@ -1160,6 +1160,7 @@ func newOptTable(
 		synthesizedChecks = append(synthesizedChecks,
 			optCheckConstraint{isRLSConstraint: true},
 			optCheckConstraint{isRLSConstraint: true},
+			optCheckConstraint{isRLSConstraint: true},
 		)
 	}
 	for i := 0; i < ot.ColumnCount(); i++ {
