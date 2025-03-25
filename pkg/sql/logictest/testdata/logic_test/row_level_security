@@ -3194,12 +3194,8 @@ INSERT INTO ups VALUES (10, 'original value');
 statement ok
 ALTER TABLE ups FORCE ROW LEVEL SECURITY;
 
-# Perform an INSERT ... ON CONFLICT where the values in the VALUES clause would
-# violate the policy, but a conflict occurs. The existing row (the conflict
-# target) does not violate the policy. This is allowed because the final row
-# written to the table complies with all policies. Note: this behavior differs
-# slightly from Postgres, which rejects this case.
-# SPILLY - I can get this behaviour if I enforce the WITH CHECK expression for SELECT/ALL
+# Attempt to insert a row that causes a conflict. This will fail due to a WITH
+# CHECK constraint violation on the existing row.
 statement error pq: new row violates row-level security policy for table "ups"
 INSERT INTO ups VALUES (10, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
