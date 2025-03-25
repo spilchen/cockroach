@@ -2983,10 +2983,7 @@ original value
 # pk=2: Ensure UPDATE policy USING expression doesn't apply to new version of
 # updated row.
 statement ok
-DROP POLICY p_upd ON ups;
-
-statement ok
-CREATE POLICY p_upd ON ups FOR UPDATE USING (comment = 'original value') WITH CHECK (true);
+ALTER POLICY p_upd ON ups USING (comment = 'original value') WITH CHECK (true);
 
 # Okay because there is no conflict
 statement ok
@@ -3005,10 +3002,7 @@ upsert
 # pk=3: Confirm no policy violation during conflict resolution when the updated
 # row satisfies the WITH CHECK expression.
 statement ok
-DROP POLICY p_upd ON ups;
-
-statement ok
-CREATE POLICY p_upd ON ups FOR UPDATE USING (true) WITH CHECK (comment = 'upsert');
+ALTER POLICY p_upd ON ups USING (true) WITH CHECK (comment = 'upsert');
 
 statement ok
 INSERT INTO ups VALUES (3, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
@@ -3024,10 +3018,7 @@ upsert
 # pk=4: Trigger UPDATE policy violation during conflict resolution, caused by
 # failing the WITH CHECK expression for the updated column values.
 statement ok
-DROP POLICY p_upd ON ups;
-
-statement ok
-CREATE POLICY p_upd ON ups FOR UPDATE USING (true) WITH CHECK (comment = 'original value');
+ALTER POLICY p_upd ON ups USING (true) WITH CHECK (comment = 'original value');
 
 statement ok
 INSERT INTO ups VALUES (4, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
@@ -3049,19 +3040,13 @@ statement ok
 CREATE POLICY p_upd ON ups FOR UPDATE USING (true);
 
 statement ok
-DROP POLICY p_ins ON ups;
-
-statement ok
-CREATE POLICY p_ins ON ups FOR INSERT WITH CHECK (comment = 'upsert');
+ALTER POLICY p_ins ON ups WITH CHECK (comment = 'upsert');
 
 statement error pq: new row violates row-level security policy for table "ups"
 INSERT INTO ups VALUES (5, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
 statement ok
-DROP POLICY p_ins ON ups;
-
-statement ok
-CREATE POLICY p_ins ON ups FOR INSERT WITH CHECK (comment = 'original value');
+ALTER POLICY p_ins ON ups WITH CHECK (comment = 'original value');
 
 statement ok
 INSERT INTO ups VALUES (5, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
@@ -3078,16 +3063,10 @@ upsert
 
 # pk=6: Trigger SELECT policy violation on conflict resolution.
 statement ok
-DROP POLICY p_ins ON ups;
+ALTER POLICY p_ins ON ups WITH CHECK (true);
 
 statement ok
-CREATE POLICY p_ins ON ups FOR INSERT WITH CHECK (true);
-
-statement ok
-DROP POLICY p_sel ON ups;
-
-statement ok
-CREATE POLICY p_sel ON ups FOR SELECT USING (comment = 'original value');
+ALTER POLICY p_sel ON ups USING (comment = 'original value');
 
 statement ok
 INSERT INTO ups VALUES (6, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
@@ -3102,15 +3081,10 @@ SELECT comment FROM ups WHERE pk = 6;
 ----
 original value
 
-# SPILLY - use ALTER POLICY to save some steps
-
 # pk=7: Trigger SELECT policy violation on new inserted row and updated row
 # during conflict resolution.
 statement ok
-DROP POLICY p_sel ON ups;
-
-statement ok
-CREATE POLICY p_sel ON ups FOR SELECT USING (comment = 'upsert');
+ALTER POLICY p_sel ON ups USING (comment = 'upsert');
 
 # This should fail because the USING clause of the SELECT policy violates the
 # new rows being inserted.
@@ -3188,10 +3162,7 @@ ALTER TABLE ups FORCE ROW LEVEL SECURITY;
 # pk=9: Have an ALL policy with a USING expression that violates the updated row
 # during conflict resolution.
 statement ok
-DROP POLICY p_all ON ups;
-
-statement ok
-CREATE POLICY p_all ON ups FOR ALL USING (comment = 'original value') WITH CHECK (true);
+ALTER POLICY p_all ON ups USING (comment = 'original value') WITH CHECK (true);
 
 statement ok
 INSERT INTO ups VALUES (9, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
@@ -3207,10 +3178,7 @@ original value
 # pk=10: Use an ALL policy with a WITH CHECK expression that applies to the
 # updated value during conflict resolution.
 statement ok
-DROP POLICY p_all ON ups;
-
-statement ok
-CREATE POLICY p_all ON ups FOR ALL USING (true) WITH CHECK (comment = 'upsert')
+ALTER POLICY p_all ON ups USING (true) WITH CHECK (comment = 'upsert')
 
 # This should fail with an RLS violation because the new row violates the WITH CHECK expression.
 statement error pq: new row violates row-level security policy for table "ups"
@@ -3243,10 +3211,7 @@ original value
 # pk=11: Use an ALL policy with a WITH CHECK expression that applies to the
 # inserted row value.
 statement ok
-DROP POLICY p_all ON ups;
-
-statement ok
-CREATE POLICY p_all ON ups FOR ALL USING (true) WITH CHECK (comment = 'original value')
+ALTER POLICY p_all ON ups USING (true) WITH CHECK (comment = 'original value')
 
 statement ok
 INSERT INTO ups VALUES (11, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
