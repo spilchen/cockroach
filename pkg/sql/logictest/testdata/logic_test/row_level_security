@@ -2980,8 +2980,8 @@ SELECT comment FROM ups WHERE pk = 1;
 ----
 original value
 
-# pk=2: Trigger UPDATE policy violation during conflict resolution, caused by
-# the original row values violating the policy's USING clause.
+# pk=2: Ensure UPDATE policy USING expression doesn't apply to new version of
+# updated row.
 statement ok
 DROP POLICY p_upd ON ups;
 
@@ -2992,14 +2992,15 @@ CREATE POLICY p_upd ON ups FOR UPDATE USING (comment = 'original value') WITH CH
 statement ok
 INSERT INTO ups VALUES (2, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
-# Reject because original values of the row violate the USING clause of the UPDATE policy.
-statement error pq: new row violates row-level security policy for table "ups"
+# Drive a conflict and confirm that the USING expression isn't used against the
+# new version of the row. Otherwise, the policy would be violated.
+statement ok
 INSERT INTO ups VALUES (2, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
 query T
 SELECT comment FROM ups WHERE pk = 2;
 ----
-original value
+upsert
 
 # pk=3: Confirm no policy violation during conflict resolution when the updated
 # row satisfies the WITH CHECK expression.
@@ -3065,7 +3066,9 @@ CREATE POLICY p_ins ON ups FOR INSERT WITH CHECK (comment = 'original value');
 statement ok
 INSERT INTO ups VALUES (5, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
-# Retry the insert with a conflict. This will succeed. Although the resulting
+# SPILLY - this comment is whack
+# SPILLY - on postgres, this succeeeds
+# Retry the insert with a conflict. This will fail too. Even though the succeed. Although the resulting
 # row violates the policy, the policy applies only to the INSERT operation, not
 # the UPDATE portion.
 statement error pq: new row violates row-level security policy for table "ups"
@@ -3231,13 +3234,14 @@ ALTER TABLE ups FORCE ROW LEVEL SECURITY;
 # target) does not violate the policy. This is allowed because the final row
 # written to the table complies with all policies. Note: this behavior differs
 # slightly from Postgres, which rejects this case.
-statement ok
+# SPILLY - I can get this behaviour if I enforce the WITH CHECK expression for SELECT/ALL
+statement error pq: new row violates row-level security policy for table "ups"
 INSERT INTO ups VALUES (10, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
 query T
 SELECT comment FROM ups WHERE pk = 10;
 ----
-upsert
+original value
 
 # pk=11: Use an ALL policy with a WITH CHECK expression that applies to the
 # inserted row value.

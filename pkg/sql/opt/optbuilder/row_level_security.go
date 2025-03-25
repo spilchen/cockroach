@@ -258,6 +258,10 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		}
 		return fmt.Sprintf("(%s) and (%s)", selExpr, updExpr)
 
+	case cat.PolicyScopeSelect:
+		// SPILLY - comments
+		return r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
+
 	case cat.PolicyScopeInsertWithSelect:
 		// An INSERT that requires SELECT privileges behaves like a regular insert,
 		// but also enforces SELECT/ALL USING expressions. Unlike typical SELECT
@@ -279,7 +283,9 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		// when we scan the table to see if there is a conflict with the new row
 		// values. The expression will evaluate the rows that were read in the scan
 		// (aka reading of the old rows).
-		selExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
+		//selExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect) // SPILLY old code
+		// SPILLY - this seemed to improve things. Now, this looks identical to Update. So, I would argue if we even need something specail here
+		selExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
 		if selExpr == "" {
 			return ""
 		}
@@ -303,15 +309,15 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		if usingSelExpr == "" {
 			return ""
 		}
-		usingUpdExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeUpdate)
-		if usingUpdExpr == "" {
-			return ""
-		}
+		//usingUpdExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeUpdate)
+		//if usingUpdExpr == "" {
+		//	return ""
+		//}
 		withCheckUpdExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeUpdate)
 		if withCheckUpdExpr == "" {
 			return ""
 		}
-		return fmt.Sprintf("(%s) and (%s) and (%s) and (%s)", withCheckSelExpr, usingSelExpr, usingUpdExpr, withCheckUpdExpr)
+		return fmt.Sprintf("(%s) and (%s) and (%s)", withCheckSelExpr, usingSelExpr, withCheckUpdExpr)
 
 	default:
 		return r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
