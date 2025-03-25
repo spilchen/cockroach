@@ -852,6 +852,7 @@ func checkMutationInput(
 	tabDesc catalog.TableDescriptor,
 	checkOrds checkSet,
 	checkVals tree.Datums,
+	isUpsert bool,
 	isUpsertAndHasConflict bool,
 ) error {
 	if len(checkVals) < checkOrds.Len() {
@@ -867,8 +868,13 @@ func checkMutationInput(
 		}
 		// Skip any constraint that should only be applied for the UPDATE phase of
 		// an UPSERT.
-		if checks[i].IsUpsertConstraint() && !isUpsertAndHasConflict {
-			continue
+		if checks[i].IsUpsertConstraint() {
+			if !isUpsert ||
+				(isUpsertAndHasConflict && !checks[i].IsUpsertConflictConstraint()) ||
+				(!isUpsertAndHasConflict && checks[i].IsUpsertConflictConstraint()) {
+				colIdx++
+				continue
+			}
 		}
 
 		if res, err := tree.GetBool(checkVals[colIdx]); err != nil {

@@ -569,6 +569,9 @@ type CheckConstraintValidator interface {
 	// only during the UPDATE phase of an UPSERT that encounters a conflict.
 	IsUpsertConstraint() bool
 
+	// SPILLY - bad smell. Don't like how this is very similar to IsUpsertConstraint. Can we have a single function?
+	IsUpsertConflictConstraint() bool
+
 	// IsCheckFailed returns true if the constraint was violated based on the
 	// input given.
 	IsCheckFailed(boolVal, isNull bool) bool

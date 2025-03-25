@@ -3066,18 +3066,15 @@ CREATE POLICY p_ins ON ups FOR INSERT WITH CHECK (comment = 'original value');
 statement ok
 INSERT INTO ups VALUES (5, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
-# SPILLY - this comment is whack
-# SPILLY - on postgres, this succeeeds
-# Retry the insert with a conflict. This will fail too. Even though the succeed. Although the resulting
-# row violates the policy, the policy applies only to the INSERT operation, not
-# the UPDATE portion.
-statement error pq: new row violates row-level security policy for table "ups"
+# Verify that the INSERT policies are skipped if we hit a conflict and end up
+# updating the existing row.
+statement ok
 INSERT INTO ups VALUES (5, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
 query T
 SELECT comment FROM ups WHERE pk = 5;
 ----
-original value
+upsert
 
 # pk=6: Trigger SELECT policy violation on conflict resolution.
 statement ok

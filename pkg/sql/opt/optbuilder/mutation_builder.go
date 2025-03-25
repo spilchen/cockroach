@@ -970,8 +970,8 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 		mb.b.constructProjectForScope(mb.outScope, projectionsScope)
 		mb.outScope = projectionsScope
 
-		if !(rlsConstraintCount == 0 || rlsConstraintCount == 3) {
-			panic(errors.AssertionFailedf("a table should have exactly three RLS constraints or none at all: %d", rlsConstraintCount))
+		if !(rlsConstraintCount == 0 || rlsConstraintCount == maxRLSConstraintCount) {
+			panic(errors.AssertionFailedf("a table should have exactly %d RLS constraints or none at all: %d", maxRLSConstraintCount, rlsConstraintCount))
 		}
 	}
 }
@@ -980,7 +980,8 @@ const (
 	rlsConstraintInsertOrUpdate = iota + 1
 	rlsConstraintConflictOldValues
 	rlsConstraintConflictNewValues
-	maxRLSConstraintCount = rlsConstraintConflictNewValues
+	rlsConstraintNoConflict
+	maxRLSConstraintCount = rlsConstraintNoConflict
 )
 
 func (mb *mutationBuilder) processRLSConstraint(
@@ -999,6 +1000,11 @@ func (mb *mutationBuilder) processRLSConstraint(
 		return mb.invokeRLSCheckConstraintBuilder(scope)
 	case rlsConstraintConflictNewValues:
 		if scope != cat.PolicyScopeUpsertConflictNewValues {
+			return nil
+		}
+		return mb.invokeRLSCheckConstraintBuilder(scope)
+	case rlsConstraintNoConflict:
+		if scope != cat.PolicyScopeUpsertNoConflict {
 			return nil
 		}
 		return mb.invokeRLSCheckConstraintBuilder(scope)

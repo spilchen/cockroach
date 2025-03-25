@@ -38,12 +38,15 @@ const (
 	// INSERT ... ON CONFLICT statement. In this case, the check is evaluated
 	// against the existing (old) row values that triggered the conflict.
 	PolicyScopeUpsertConflictOldValues
+	// SPILLY - comment me if it lasts
+	PolicyScopeUpsertNoConflict
 	// PolicyScopeExempt indicates that the operation is exempt from row-level security policies.
 	PolicyScopeExempt
 )
 
+// SPILLY _ change function name because we have a no conflict now
 func (p PolicyCommandScope) ForUpsertConflict() bool {
-	return p == PolicyScopeUpsertConflictNewValues || p == PolicyScopeUpsertConflictOldValues
+	return p == PolicyScopeUpsertConflictNewValues || p == PolicyScopeUpsertConflictOldValues || p == PolicyScopeUpsertNoConflict
 }
 
 // Policy defines an interface for a row-level security (RLS) policy on a table.

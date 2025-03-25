@@ -975,9 +975,10 @@ func (mb *mutationBuilder) buildUpsert(returning *tree.ReturningExprs) {
 	// Add any check constraint boolean columns to the input. For the synthetic
 	// RLS checks used to enforce policies, this ensures the new data is validated
 	// for both inserts and updates (i.e., in the case of a conflict).
-	mb.addCheckConstraintCols(cat.PolicyScopeInsertWithSelect)
+	mb.addCheckConstraintCols(cat.PolicyScopeSelect)
 	if mb.tab.IsRowLevelSecurityEnabled() {
 		mb.addCheckConstraintCols(cat.PolicyScopeUpsertConflictNewValues)
+		mb.addCheckConstraintCols(cat.PolicyScopeUpsertNoConflict)
 	}
 
 	// Add the partial index predicate expressions to the table metadata.

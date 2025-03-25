@@ -170,7 +170,8 @@ func (u *upsertNode) processSourceRow(params runParams, rowVals tree.Datums) err
 	if !u.run.checkOrds.Empty() {
 		if err := checkMutationInput(
 			params.ctx, params.p.EvalContext(), &params.p.semaCtx, params.p.SessionData(),
-			u.run.tw.tableDesc(), u.run.checkOrds, rowVals[:u.run.checkOrds.Len()], hasConflict,
+			u.run.tw.tableDesc(), u.run.checkOrds, rowVals[:u.run.checkOrds.Len()],
+			true /* isUpsert */, hasConflict,
 		); err != nil {
 			return err
 		}
