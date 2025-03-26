@@ -547,6 +547,7 @@ func newConstraintCache(
 	}
 	// Populate the check constraints for row-level security to enforce RLS policies.
 	// SPILLY - explain these constraints
+	// SPILLY - we should have a common set up const values so that we can keep the constraints the same
 	if desc.RowLevelSecurityEnabled {
 		c.checkValidators = append(c.checkValidators,
 			rlsSyntheticCheckConstraint{isUpsertConstraint: false},

@@ -855,6 +855,15 @@ func (mb *mutationBuilder) addSynthesizedComputedCols(colIDs opt.OptionalColList
 	mb.outScope = pb.Finish()
 }
 
+type checkConstraintInput struct {
+	includeNormalChecks   bool
+	includeRLSBase        bool
+	includeRLSUpsertRead  bool
+	includeRLSUpsertWrite bool
+	isUpdate              bool
+	policyCmdScope        cat.PolicyCommandScope // Optional, only used for RLS when processing RLS base.
+}
+
 // addCheckConstraintCols synthesizes a boolean output column for each check
 // constraint defined on the target table. The mutation operator will report a
 // constraint violation error if the value of the column is false.
@@ -864,7 +873,11 @@ func (mb *mutationBuilder) addSynthesizedComputedCols(colIDs opt.OptionalColList
 // policyCommandScope is cat.PolicyCommandUpdate, check columns that do not
 // reference mutation columns are not added to checkColIDs, which allows pruning
 // normalization rules to remove the unnecessary projected column.
-func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyCommandScope) {
+//
+// Tables enabled for row-level security (RLS) have synthetic constraints added
+// to enforce policies. The policyCommandScope is used to control what policies
+// are enforced by indicating what command is being initiated.
+func (mb *mutationBuilder) addCheckConstraintCols(ip checkConstraintInput) {
 	if mb.tab.CheckCount() != 0 {
 		projectionsScope := mb.outScope.replace()
 		projectionsScope.appendColumnsFromScope(mb.outScope)
@@ -880,17 +893,14 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 			// than being included with the table's actual check constraints.
 			if check.IsRLSConstraint() {
 				rlsConstraintCount++
-				check = mb.processRLSConstraint(policyCommandScope, rlsConstraintCount)
+				check = mb.processRLSConstraint(ip, rlsConstraintCount)
 				if check == nil {
 					// Skip if this constraint is not relevant for the current scope.
 					continue
 				}
-			} else {
-				// If handling an UPSERT conflict, skip all checks except the relevant
-				// RLS conflict constraints.
-				if policyCommandScope.ForUpsertConflict() {
-					continue
-				}
+			} else if !ip.includeNormalChecks {
+				// Skip all non-RLS constraints if handling only RLS constraint types.
+				continue
 			}
 
 			expr, err := parser.ParseExpr(check.Constraint())
@@ -925,8 +935,7 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 			//   expressions can exist for read and write operations. This means it's
 			//   possible to read a row whose column values would violate the write
 			//   expression.
-			if policyCommandScope != cat.PolicyScopeUpdate || check.IsRLSConstraint() ||
-				referencedCols.Intersects(mutationCols) {
+			if !ip.isUpdate || check.IsRLSConstraint() || referencedCols.Intersects(mutationCols) {
 				mb.checkColIDs[i] = scopeCol.id
 
 				// TODO(michae2): Under weaker isolation levels we need to use shared
@@ -977,53 +986,53 @@ func (mb *mutationBuilder) addCheckConstraintCols(policyCommandScope cat.PolicyC
 }
 
 const (
-	rlsConstraintInsertOrUpdate = iota + 1
-	rlsConstraintConflictOldValues
-	rlsConstraintConflictNewValues
-	rlsConstraintNoConflict
-	maxRLSConstraintCount = rlsConstraintNoConflict
+	rlsConstraintBase = iota + 1
+	rlsConstraintUpsertConflictOldValues
+	rlsConstraintUpsertConflictNewValues
+	rlsConstraintUpsertNoConflict
+	maxRLSConstraintCount = rlsConstraintUpsertNoConflict
 )
 
+// processRLSConstraint handles a single synthetic RLS constraint.
+// The 'count' parameter indicates which specific constraint is being processed.
 func (mb *mutationBuilder) processRLSConstraint(
-	scope cat.PolicyCommandScope, count int,
+	ip checkConstraintInput, count int,
 ) cat.CheckConstraint {
+	if !ip.includeRLSBase && !ip.includeRLSUpsertRead && !ip.includeRLSUpsertWrite {
+		return nil
+	}
+
+	shouldProcess := false
+	var cmdScope cat.PolicyCommandScope
 	switch count {
-	case rlsConstraintInsertOrUpdate:
-		if scope.ForUpsertConflict() {
-			return nil
-		}
-		return mb.invokeRLSCheckConstraintBuilder(scope)
-	case rlsConstraintConflictOldValues:
-		if scope != cat.PolicyScopeUpsertConflictOldValues {
-			return nil
-		}
-		return mb.invokeRLSCheckConstraintBuilder(scope)
-	case rlsConstraintConflictNewValues:
-		if scope != cat.PolicyScopeUpsertConflictNewValues {
-			return nil
-		}
-		return mb.invokeRLSCheckConstraintBuilder(scope)
-	case rlsConstraintNoConflict:
-		if scope != cat.PolicyScopeUpsertNoConflict {
-			return nil
-		}
-		return mb.invokeRLSCheckConstraintBuilder(scope)
+	case rlsConstraintBase:
+		shouldProcess = ip.includeRLSBase
+		cmdScope = ip.policyCmdScope
+	case rlsConstraintUpsertConflictOldValues:
+		shouldProcess = ip.includeRLSUpsertRead
+		// SPILLY - consider renameing this command scope
+		cmdScope = cat.PolicyScopeUpsertConflictOldValues
+	case rlsConstraintUpsertConflictNewValues:
+		shouldProcess = ip.includeRLSUpsertWrite
+		cmdScope = cat.PolicyScopeUpdate
+	case rlsConstraintUpsertNoConflict:
+		shouldProcess = ip.includeRLSUpsertWrite
+		cmdScope = cat.PolicyScopeInsertWithSelect
 	default:
 		panic(errors.AssertionFailedf("a table should have at most %d RLS constraints, but processing %d",
 			maxRLSConstraintCount, count))
 	}
-}
 
-func (mb *mutationBuilder) invokeRLSCheckConstraintBuilder(
-	policyCommandScope cat.PolicyCommandScope,
-) cat.CheckConstraint {
+	if !shouldProcess {
+		return nil
+	}
 	chkBuilder := optRLSConstraintBuilder{
 		tab:                mb.tab,
 		md:                 mb.md,
 		tabMeta:            mb.md.TableMeta(mb.tabID),
 		oc:                 mb.b.catalog,
 		user:               mb.b.checkPrivilegeUser,
-		policyCommandScope: policyCommandScope,
+		policyCommandScope: cmdScope,
 	}
 	return chkBuilder.Build(mb.b.ctx)
 }

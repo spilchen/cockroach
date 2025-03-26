@@ -337,7 +337,12 @@ func (mb *mutationBuilder) buildUpdate(returning *tree.ReturningExprs) {
 	mb.disambiguateColumns()
 
 	// Add any check constraint boolean columns to the input.
-	mb.addCheckConstraintCols(cat.PolicyScopeUpdate)
+	mb.addCheckConstraintCols(checkConstraintInput{
+		includeNormalChecks: true,
+		includeRLSBase:      true,
+		isUpdate:            true,
+		policyCmdScope:      cat.PolicyScopeUpdate,
+	})
 
 	// Add the partial index predicate expressions to the table metadata.
 	// These expressions are used to prune fetch columns during

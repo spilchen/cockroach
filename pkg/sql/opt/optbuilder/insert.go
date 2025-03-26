@@ -376,9 +376,14 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 		// values in the case of a conflict, needs to be handled here. When building
 		// the input for an UPSERT, which is done right after, we lose the ability
 		// to reference the old data using column names.
+		// SPILLY - update comments
 		if mb.tab.IsRowLevelSecurityEnabled() {
-			mb.addCheckConstraintCols(cat.PolicyScopeUpsertConflictOldValues)
+			mb.addCheckConstraintCols(checkConstraintInput{
+				includeRLSUpsertRead: true,
+			})
 		}
+
+		// SPILLY - skip upsert conflict checks in COPY FROM codepath
 
 		// Left-join each input row to the target table, using the conflict columns
 		// as the join condition.
@@ -768,7 +773,11 @@ func (mb *mutationBuilder) buildInsert(returning *tree.ReturningExprs, vectorIns
 	if returning != nil {
 		cmd = cat.PolicyScopeInsertWithSelect
 	}
-	mb.addCheckConstraintCols(cmd)
+	mb.addCheckConstraintCols(checkConstraintInput{
+		includeNormalChecks: true,
+		includeRLSBase:      true,
+		policyCmdScope:      cmd,
+	})
 
 	// Project partial index PUT boolean columns.
 	mb.projectPartialIndexPutCols()
@@ -972,14 +981,19 @@ func (mb *mutationBuilder) buildUpsert(returning *tree.ReturningExprs) {
 	// check constraint, refer to the correct columns.
 	mb.disambiguateColumns()
 
-	// Add any check constraint boolean columns to the input. For the synthetic
-	// RLS checks used to enforce policies, this ensures the new data is validated
-	// for both inserts and updates (i.e., in the case of a conflict).
-	mb.addCheckConstraintCols(cat.PolicyScopeSelect)
-	if mb.tab.IsRowLevelSecurityEnabled() {
-		mb.addCheckConstraintCols(cat.PolicyScopeUpsertConflictNewValues)
-		mb.addCheckConstraintCols(cat.PolicyScopeUpsertNoConflict)
-	}
+	// Add any check constraint boolean columns to the input.
+	mb.addCheckConstraintCols(checkConstraintInput{
+		includeNormalChecks:   true,
+		includeRLSUpsertWrite: true,
+		includeRLSBase:        true,
+		policyCmdScope:        cat.PolicyScopeExempt, // Mark base constraint as exempt.
+
+		// For UPSERT, policy enforcement is handled by conflict-specific RLS constraints.
+		// The execution engine selects the appropriate constraint based on whether a
+		// conflict occurred. Although we include the base RLS constraint here, we mark it
+		// as exempt so it always succeeds during validation. Actual enforcement is delegated
+		// to the conflict constraints.
+	})
 
 	// Add the partial index predicate expressions to the table metadata.
 	// These expressions are used to prune fetch columns during

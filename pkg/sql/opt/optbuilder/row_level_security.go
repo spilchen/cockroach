@@ -295,6 +295,9 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		}
 		return fmt.Sprintf("(%s) and (%s)", selExpr, updExpr)
 
+	case cat.PolicyScopeExempt:
+		return "true"
+
 	default:
 		return r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
 	}
