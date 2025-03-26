@@ -1003,8 +1003,7 @@ func (mb *mutationBuilder) processRLSConstraint(
 		cmdScope = ip.policyCmdScope
 	case cat.RLSUpsertConflictExistingRowConstraint:
 		shouldProcess = ip.includeRLSUpsertRead
-		// SPILLY - consider renameing this command scope
-		cmdScope = cat.PolicyScopeUpsertConflictOldValues
+		cmdScope = cat.PolicyScopeUpsertConflictScan
 	case cat.RLSUpsertConflictNewRowConstraint:
 		shouldProcess = ip.includeRLSUpsertWrite
 		cmdScope = cat.PolicyScopeUpdate

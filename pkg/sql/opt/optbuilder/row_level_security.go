@@ -245,7 +245,7 @@ func (r *optRLSConstraintBuilder) genExpression(ctx context.Context) (string, []
 // is INSERT or UPDATE.
 func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fast) string {
 	switch r.policyCommandScope {
-	case cat.PolicyScopeUpdate, cat.PolicyScopeUpsertConflictNewValues:
+	case cat.PolicyScopeUpdate:
 		// When handling UPDATE, we need to add the SELECT/ALL using expressions
 		// first, then apply any UPDATE policy.
 		selExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
@@ -258,13 +258,7 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		}
 		return fmt.Sprintf("(%s) and (%s)", selExpr, updExpr)
 
-	case cat.PolicyScopeSelect:
-		// SPILLY - comments
-		// SPILLY - remove this
-		//return r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
-		return "true"
-
-	case cat.PolicyScopeInsertWithSelect, cat.PolicyScopeUpsertNoConflict:
+	case cat.PolicyScopeInsertWithSelect:
 		// An INSERT that requires SELECT privileges behaves like a regular insert,
 		// but also enforces SELECT/ALL USING expressions. Unlike typical SELECT
 		// behaviour, these expressions must not silently filter out rows — they act
@@ -280,7 +274,7 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		}
 		return fmt.Sprintf("(%s) and (%s)", insExpr, usingSelExpr)
 
-	case cat.PolicyScopeUpsertConflictOldValues:
+	case cat.PolicyScopeUpsertConflictScan:
 		// This one is related to UPSERT (or INSERT ... ON CONFLICT). This scope is
 		// when we scan the table to see if there is a conflict with the new row
 		// values. The expression will evaluate the rows that were read in the scan
@@ -298,8 +292,11 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 	case cat.PolicyScopeExempt:
 		return "true"
 
-	default:
+	case cat.PolicyScopeInsert:
 		return r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
+
+	default:
+		panic(errors.AssertionFailedf("policy command scope cannot be enforced as a WITH CHECK expression: %v", r.policyCommandScope))
 	}
 }
 

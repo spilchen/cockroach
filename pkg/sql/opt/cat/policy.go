@@ -30,24 +30,18 @@ const (
 	// PolicyScopeInsertWithSelect applies to the INSERT that also needs SELECT
 	// access (i.e. returning rows).
 	PolicyScopeInsertWithSelect
-	// PolicyScopeUpsertConflictNewValues applies to the UPDATE path of an INSERT
-	// ... ON CONFLICT statement, i.e., when a conflict occurs and the row is
-	// updated. The check is evaluated against the new (updated) values.
-	PolicyScopeUpsertConflictNewValues
-	// PolicyScopeUpsertConflictOldValues also applies to the UPDATE path of an
-	// INSERT ... ON CONFLICT statement. In this case, the check is evaluated
-	// against the existing (old) row values that triggered the conflict.
-	PolicyScopeUpsertConflictOldValues
-	// SPILLY - comment me if it lasts
-	PolicyScopeUpsertNoConflict
+	// PolicyScopeUpsertConflictScan is used during the conflict detection phase of
+	// an UPSERT (i.e., INSERT ... ON CONFLICT). This scope applies to the scan of
+	// existing rows to determine whether a conflict exists.
+	//
+	// Unlike a typical SELECT, the USING expressions evaluated here do not filter
+	// rows silently — if a row violates the policy, the operation fails. This scope
+	// may also evaluate UPDATE USING expressions, since the conflict resolution
+	// path typically involves an update to the existing row.
+	PolicyScopeUpsertConflictScan
 	// PolicyScopeExempt indicates that the operation is exempt from row-level security policies.
 	PolicyScopeExempt
 )
-
-// SPILLY _ change function name because we have a no conflict now
-func (p PolicyCommandScope) ForUpsertConflict() bool {
-	return p == PolicyScopeUpsertConflictNewValues || p == PolicyScopeUpsertConflictOldValues || p == PolicyScopeUpsertNoConflict
-}
 
 type RLSConstraintType int8
 
@@ -82,8 +76,6 @@ func (r RLSConstraintType) IsUpsert() bool {
 func (r RLSConstraintType) IsUpsertConflict() bool {
 	return r == RLSUpsertConflictExistingRowConstraint || r == RLSUpsertConflictNewRowConstraint
 }
-
-// SPILLY - make the constaint a type and add a IsUpsertConflict
 
 // Policy defines an interface for a row-level security (RLS) policy on a table.
 // Policies use expressions to filter rows during read operations and/or restrict
