@@ -371,19 +371,16 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 
 	// Case 4: INSERT..ON CONFLICT..DO UPDATE statement.
 	default:
-		// RLS tables have synthetic check constraints that enforce policies during
-		// writes. One such check, which is evaluated against the scanned column
+		// RLS tables have synthetic check constraints that enforce policies for
+		// mutations. One such check, which is evaluated against the scanned column
 		// values in the case of a conflict, needs to be handled here. When building
 		// the input for an UPSERT, which is done right after, we lose the ability
 		// to reference the old data using column names.
-		// SPILLY - update comments
 		if mb.tab.IsRowLevelSecurityEnabled() {
 			mb.addCheckConstraintCols(checkConstraintInput{
 				includeRLSUpsertRead: true,
 			})
 		}
-
-		// SPILLY - skip upsert conflict checks in COPY FROM codepath
 
 		// Left-join each input row to the target table, using the conflict columns
 		// as the join condition.
