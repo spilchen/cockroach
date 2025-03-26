@@ -260,13 +260,11 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 
 	case cat.PolicyScopeSelect:
 		// SPILLY - comments
-		return r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
+		// SPILLY - remove this
+		//return r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
+		return "true"
 
-	case cat.PolicyScopeUpsertNoConflict:
-		// SPILLY - comments
-		return r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
-
-	case cat.PolicyScopeInsertWithSelect:
+	case cat.PolicyScopeInsertWithSelect, cat.PolicyScopeUpsertNoConflict:
 		// An INSERT that requires SELECT privileges behaves like a regular insert,
 		// but also enforces SELECT/ALL USING expressions. Unlike typical SELECT
 		// behaviour, these expressions must not silently filter out rows — they act
