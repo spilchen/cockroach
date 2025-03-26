@@ -882,7 +882,7 @@ func (mb *mutationBuilder) addCheckConstraintCols(ip checkConstraintInput) {
 		projectionsScope := mb.outScope.replace()
 		projectionsScope.appendColumnsFromScope(mb.outScope)
 		mutationCols := mb.mutationColumnIDs()
-		var rlsConstraintCount int
+		var rlsConstraintCount cat.RLSConstraintType
 
 		for i, n := 0, mb.tab.CheckCount(); i < n; i++ {
 			check := mb.tab.Check(i)
@@ -979,35 +979,17 @@ func (mb *mutationBuilder) addCheckConstraintCols(ip checkConstraintInput) {
 		mb.b.constructProjectForScope(mb.outScope, projectionsScope)
 		mb.outScope = projectionsScope
 
-		if !(rlsConstraintCount == 0 || rlsConstraintCount == MaxRLSConstraintCount) {
-			panic(errors.AssertionFailedf("a table should have exactly %d RLS constraints or none at all: %d", MaxRLSConstraintCount, rlsConstraintCount))
+		if !(rlsConstraintCount == cat.RLSConstraintUnused || rlsConstraintCount == cat.RLSConstraintTypeCount) {
+			panic(errors.AssertionFailedf("a table should have exactly %d RLS constraints or none at all: %d",
+				cat.RLSConstraintTypeCount, rlsConstraintCount))
 		}
 	}
 }
 
-const (
-	// RLSBaseConstraint enforces RLS policies for general INSERT and UPDATE operations.
-	RLSBaseConstraint = iota + 1
-
-	// RLSUpsertConflictExistingRowConstraint enforces RLS during an UPSERT when a
-	// conflict is found. It applies to the *existing* row that was matched.
-	RLSUpsertConflictExistingRowConstraint
-
-	// RLSUpsertConflictNewRowConstraint enforces RLS for the *updated* row that
-	// will be written as part of an UPSERT with conflict.
-	RLSUpsertConflictNewRowConstraint
-
-	// RLSUpsertNoConflictConstraint enforces RLS when an UPSERT inserts a new row
-	// (i.e., no conflict occurred). Functionally similar to INSERT.
-	RLSUpsertNoConflictConstraint
-
-	MaxRLSConstraintCount = RLSUpsertNoConflictConstraint
-)
-
 // processRLSConstraint handles a single synthetic RLS constraint.
 // The 'count' parameter indicates which specific constraint is being processed.
 func (mb *mutationBuilder) processRLSConstraint(
-	ip checkConstraintInput, count int,
+	ip checkConstraintInput, constraintType cat.RLSConstraintType,
 ) cat.CheckConstraint {
 	if !ip.includeRLSBase && !ip.includeRLSUpsertRead && !ip.includeRLSUpsertWrite {
 		return nil
@@ -1015,23 +997,23 @@ func (mb *mutationBuilder) processRLSConstraint(
 
 	shouldProcess := false
 	var cmdScope cat.PolicyCommandScope
-	switch count {
-	case RLSBaseConstraint:
+	switch constraintType {
+	case cat.RLSBaseConstraint:
 		shouldProcess = ip.includeRLSBase
 		cmdScope = ip.policyCmdScope
-	case RLSUpsertConflictExistingRowConstraint:
+	case cat.RLSUpsertConflictExistingRowConstraint:
 		shouldProcess = ip.includeRLSUpsertRead
 		// SPILLY - consider renameing this command scope
 		cmdScope = cat.PolicyScopeUpsertConflictOldValues
-	case RLSUpsertConflictNewRowConstraint:
+	case cat.RLSUpsertConflictNewRowConstraint:
 		shouldProcess = ip.includeRLSUpsertWrite
 		cmdScope = cat.PolicyScopeUpdate
-	case RLSUpsertNoConflictConstraint:
+	case cat.RLSUpsertNoConflictConstraint:
 		shouldProcess = ip.includeRLSUpsertWrite
 		cmdScope = cat.PolicyScopeInsertWithSelect
 	default:
 		panic(errors.AssertionFailedf("a table should have at most %d RLS constraints, but processing %d",
-			MaxRLSConstraintCount, count))
+			cat.RLSConstraintTypeCount, constraintType))
 	}
 
 	if !shouldProcess {

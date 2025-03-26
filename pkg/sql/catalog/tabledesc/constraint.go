@@ -10,6 +10,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/semenumpb"
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/errors"
@@ -143,8 +144,7 @@ func (c checkConstraint) IsEnforced() bool {
 // rlsSyntheticCheckConstraint is an implementation of CheckConstraintValidator
 // for use with tables that have row-level security enabled.
 type rlsSyntheticCheckConstraint struct {
-	isUpsertConstraint         bool
-	isUpsertConflictConstraint bool
+	constraintType cat.RLSConstraintType
 }
 
 var _ catalog.CheckConstraintValidator = (*rlsSyntheticCheckConstraint)(nil)
@@ -158,11 +158,11 @@ func (r rlsSyntheticCheckConstraint) GetExpr() string {
 func (r rlsSyntheticCheckConstraint) IsRLSConstraint() bool { return true }
 
 // IsUpsertConstraint implements the catalog.CheckConstraintValidator interface.
-func (r rlsSyntheticCheckConstraint) IsUpsertConstraint() bool { return r.isUpsertConstraint }
+func (r rlsSyntheticCheckConstraint) IsUpsertConstraint() bool { return r.constraintType.IsUpsert() }
 
 // IsUpsertConflictConstraint implements the catalog.CheckConstraintValidator interface.
 func (r rlsSyntheticCheckConstraint) IsUpsertConflictConstraint() bool {
-	return r.isUpsertConflictConstraint
+	return r.constraintType.IsUpsertConflict()
 }
 
 // IsCheckFailed implements the catalog.CheckConstraintValidator interface.
@@ -546,15 +546,10 @@ func newConstraintCache(
 		}
 	}
 	// Populate the check constraints for row-level security to enforce RLS policies.
-	// SPILLY - explain these constraints
-	// SPILLY - we should have a common set up const values so that we can keep the constraints the same
 	if desc.RowLevelSecurityEnabled {
-		c.checkValidators = append(c.checkValidators,
-			rlsSyntheticCheckConstraint{isUpsertConstraint: false},
-			rlsSyntheticCheckConstraint{isUpsertConstraint: true, isUpsertConflictConstraint: true},
-			rlsSyntheticCheckConstraint{isUpsertConstraint: true, isUpsertConflictConstraint: true},
-			rlsSyntheticCheckConstraint{isUpsertConstraint: true, isUpsertConflictConstraint: false},
-		)
+		for ct := cat.RLSBaseConstraint; ct <= cat.RLSConstraintTypeCount; ct++ {
+			c.checkValidators = append(c.checkValidators, rlsSyntheticCheckConstraint{constraintType: ct})
+		}
 	}
 	return &c
 }
