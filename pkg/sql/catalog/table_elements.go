@@ -550,6 +550,14 @@ type CheckConstraint interface {
 	IsHashShardingConstraint() bool
 }
 
+type MutationOpType int
+
+const (
+	MutationOpInsert MutationOpType = iota
+	MutationOpUpdate
+	MutationOpUpsert
+)
+
 // CheckConstraintValidator interface is designed for evaluating whether check
 // constraints are violated. It represents a subset of the CheckConstraint
 // interface, excluding certain elements that are not applicable to synthetic
@@ -565,12 +573,9 @@ type CheckConstraintValidator interface {
 	// to enforce row-level security policies.
 	IsRLSConstraint() bool
 
-	// IsUpsertConstraint returns true if the check constraint should be applied
-	// only during the UPDATE phase of an UPSERT that encounters a conflict.
-	IsUpsertConstraint() bool
-
-	// SPILLY - bad smell. Don't like how this is very similar to IsUpsertConstraint. Can we have a single function?
-	IsUpsertConflictConstraint() bool
+	// ShouldEvaluate returns true if the check constraint should be evaluated
+	// for the given mutation.
+	ShouldEvaluate(op MutationOpType, hasConflict bool) bool
 
 	// IsCheckFailed returns true if the constraint was violated based on the
 	// input given.

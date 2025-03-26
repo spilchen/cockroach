@@ -191,7 +191,7 @@ func (u *updateNode) processSourceRow(params runParams, sourceVals tree.Datums) 
 		if err := checkMutationInput(
 			params.ctx, params.EvalContext(), &params.p.semaCtx, params.p.SessionData(),
 			u.run.tu.tableDesc(), u.run.checkOrds, sourceVals[:u.run.checkOrds.Len()],
-			false /* isUpsert */, false, /* isUpsertAndHasConflict */
+			catalog.MutationOpUpdate, false, /* hasConflict */
 		); err != nil {
 			return err
 		}

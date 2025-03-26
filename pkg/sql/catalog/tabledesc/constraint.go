@@ -82,11 +82,8 @@ func (c checkConstraint) IsNotNullColumnConstraint() bool {
 // IsRLSConstraint implements the catalog.CheckConstraintValidator interface.
 func (c checkConstraint) IsRLSConstraint() bool { return false }
 
-// IsUpsertConstraint implements the catalog.CheckConstraintValidator interface.
-func (c checkConstraint) IsUpsertConstraint() bool { return false }
-
-// IsUpsertConflictConstraint implements the catalog.CheckConstraintValidator interface.
-func (c checkConstraint) IsUpsertConflictConstraint() bool { return false }
+// ShouldEvaluate implements the catalog.CheckConstraintValidator interface.
+func (c checkConstraint) ShouldEvaluate(catalog.MutationOpType, bool) bool { return true }
 
 // IsCheckFailed implements the catalog.CheckConstraintValidator interface.
 func (c checkConstraint) IsCheckFailed(boolVal, isNull bool) bool {
@@ -157,12 +154,21 @@ func (r rlsSyntheticCheckConstraint) GetExpr() string {
 // IsRLSConstraint implements the catalog.CheckConstraintValidator interface.
 func (r rlsSyntheticCheckConstraint) IsRLSConstraint() bool { return true }
 
-// IsUpsertConstraint implements the catalog.CheckConstraintValidator interface.
-func (r rlsSyntheticCheckConstraint) IsUpsertConstraint() bool { return r.constraintType.IsUpsert() }
-
-// IsUpsertConflictConstraint implements the catalog.CheckConstraintValidator interface.
-func (r rlsSyntheticCheckConstraint) IsUpsertConflictConstraint() bool {
-	return r.constraintType.IsUpsertConflict()
+// ShouldEvaluate implements the catalog.CheckConstraintValidator interface.
+func (r rlsSyntheticCheckConstraint) ShouldEvaluate(
+	op catalog.MutationOpType, hasConflict bool,
+) bool {
+	switch r.constraintType {
+	case cat.RLSBaseConstraint:
+		// Always applicable on INSERT/UPDATE/UPSERT.
+		return true
+	case cat.RLSUpsertConflictExistingRowConstraint, cat.RLSUpsertConflictNewRowConstraint:
+		return op == catalog.MutationOpUpsert && hasConflict
+	case cat.RLSUpsertNoConflictConstraint:
+		return op == catalog.MutationOpUpsert && !hasConflict
+	default:
+		panic(errors.AssertionFailedf("unexpected constraint type: %d", r.constraintType))
+	}
 }
 
 // IsCheckFailed implements the catalog.CheckConstraintValidator interface.
