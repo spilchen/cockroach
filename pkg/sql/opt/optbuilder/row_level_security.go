@@ -287,9 +287,7 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 		// when we scan the table to see if there is a conflict with the new row
 		// values. The expression will evaluate the rows that were read in the scan
 		// (aka reading of the old rows).
-		//selExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect) // SPILLY old code
-		// SPILLY - this seemed to improve things. Now, this looks identical to Update. So, I would argue if we even need something specail here
-		selExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
+		selExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
 		if selExpr == "" {
 			return ""
 		}

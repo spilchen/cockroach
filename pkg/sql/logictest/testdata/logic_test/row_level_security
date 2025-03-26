@@ -3194,15 +3194,21 @@ INSERT INTO ups VALUES (10, 'original value');
 statement ok
 ALTER TABLE ups FORCE ROW LEVEL SECURITY;
 
-# Attempt to insert a row that causes a conflict. This will fail due to a WITH
-# CHECK constraint violation on the existing row.
-statement error pq: new row violates row-level security policy for table "ups"
+# Insert a row that triggers a conflict and is handled via UPDATE.
+# The values provided for the initial INSERT would violate a WITH CHECK
+# constraint, but because the conflict resolution results in an UPDATE,
+# we allow the statement to succeed.
+#
+# Note: This behavior slightly deviates from PostgreSQL, which rejects
+# the statement. However, this may not be intentional, as their
+# documentation suggests it should be allowed.
+statement ok
 INSERT INTO ups VALUES (10, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
 query T
 SELECT comment FROM ups WHERE pk = 10;
 ----
-original value
+upsert
 
 # pk=11: Use an ALL policy with a WITH CHECK expression that applies to the
 # inserted row value.
@@ -3221,7 +3227,9 @@ SELECT comment FROM ups WHERE pk = 11;
 ----
 original value
 
-# pk=12: Use an ALL policy that only has a WITH CHECK expression.
+# pk=12: Test an ALL policy that only includes a WITH CHECK expression.
+# Since there is no USING expression to evaluate during conflict checks,
+# the default behavior is deny-all, causing the statements to fail.
 statement ok
 DROP POLICY p_all ON ups;
 
@@ -3231,11 +3239,11 @@ CREATE POLICY p_all ON ups FOR ALL WITH CHECK (true);
 statement error pq: new row violates row-level security policy for table "ups"
 INSERT INTO ups VALUES (12, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
-statement error pq: new row violates row-level security policy for table "ups"
-INSERT INTO ups VALUES (12, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
-
 statement ok
 INSERT INTO ups VALUES (12, 'original value')
+
+statement error pq: new row violates row-level security policy for table "ups"
+INSERT INTO ups VALUES (12, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
 
 # Turn off force so we can query the row back
 statement ok
