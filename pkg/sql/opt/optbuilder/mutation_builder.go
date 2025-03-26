@@ -979,18 +979,29 @@ func (mb *mutationBuilder) addCheckConstraintCols(ip checkConstraintInput) {
 		mb.b.constructProjectForScope(mb.outScope, projectionsScope)
 		mb.outScope = projectionsScope
 
-		if !(rlsConstraintCount == 0 || rlsConstraintCount == maxRLSConstraintCount) {
-			panic(errors.AssertionFailedf("a table should have exactly %d RLS constraints or none at all: %d", maxRLSConstraintCount, rlsConstraintCount))
+		if !(rlsConstraintCount == 0 || rlsConstraintCount == MaxRLSConstraintCount) {
+			panic(errors.AssertionFailedf("a table should have exactly %d RLS constraints or none at all: %d", MaxRLSConstraintCount, rlsConstraintCount))
 		}
 	}
 }
 
 const (
-	rlsConstraintBase = iota + 1
-	rlsConstraintUpsertConflictOldValues
-	rlsConstraintUpsertConflictNewValues
-	rlsConstraintUpsertNoConflict
-	maxRLSConstraintCount = rlsConstraintUpsertNoConflict
+	// RLSBaseConstraint enforces RLS policies for general INSERT and UPDATE operations.
+	RLSBaseConstraint = iota + 1
+
+	// RLSUpsertConflictExistingRowConstraint enforces RLS during an UPSERT when a
+	// conflict is found. It applies to the *existing* row that was matched.
+	RLSUpsertConflictExistingRowConstraint
+
+	// RLSUpsertConflictNewRowConstraint enforces RLS for the *updated* row that
+	// will be written as part of an UPSERT with conflict.
+	RLSUpsertConflictNewRowConstraint
+
+	// RLSUpsertNoConflictConstraint enforces RLS when an UPSERT inserts a new row
+	// (i.e., no conflict occurred). Functionally similar to INSERT.
+	RLSUpsertNoConflictConstraint
+
+	MaxRLSConstraintCount = RLSUpsertNoConflictConstraint
 )
 
 // processRLSConstraint handles a single synthetic RLS constraint.
@@ -1005,22 +1016,22 @@ func (mb *mutationBuilder) processRLSConstraint(
 	shouldProcess := false
 	var cmdScope cat.PolicyCommandScope
 	switch count {
-	case rlsConstraintBase:
+	case RLSBaseConstraint:
 		shouldProcess = ip.includeRLSBase
 		cmdScope = ip.policyCmdScope
-	case rlsConstraintUpsertConflictOldValues:
+	case RLSUpsertConflictExistingRowConstraint:
 		shouldProcess = ip.includeRLSUpsertRead
 		// SPILLY - consider renameing this command scope
 		cmdScope = cat.PolicyScopeUpsertConflictOldValues
-	case rlsConstraintUpsertConflictNewValues:
+	case RLSUpsertConflictNewRowConstraint:
 		shouldProcess = ip.includeRLSUpsertWrite
 		cmdScope = cat.PolicyScopeUpdate
-	case rlsConstraintUpsertNoConflict:
+	case RLSUpsertNoConflictConstraint:
 		shouldProcess = ip.includeRLSUpsertWrite
 		cmdScope = cat.PolicyScopeInsertWithSelect
 	default:
 		panic(errors.AssertionFailedf("a table should have at most %d RLS constraints, but processing %d",
-			maxRLSConstraintCount, count))
+			MaxRLSConstraintCount, count))
 	}
 
 	if !shouldProcess {
