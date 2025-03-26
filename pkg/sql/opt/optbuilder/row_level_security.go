@@ -245,10 +245,10 @@ func (r *optRLSConstraintBuilder) genExpression(ctx context.Context) (string, []
 // is INSERT or UPDATE.
 func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fast) string {
 	switch r.policyCommandScope {
-	case cat.PolicyScopeUpdate:
+	case cat.PolicyScopeUpdate, cat.PolicyScopeUpsertConflictNewValues:
 		// When handling UPDATE, we need to add the SELECT/ALL using expressions
 		// first, then apply any UPDATE policy.
-		selExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
+		selExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
 		if selExpr == "" {
 			return ""
 		}
@@ -298,30 +298,6 @@ func (r *optRLSConstraintBuilder) combinePolicyWithCheckExpr(colIDs *intsets.Fas
 			return ""
 		}
 		return fmt.Sprintf("(%s) and (%s)", selExpr, updExpr)
-
-	case cat.PolicyScopeUpsertConflictNewValues:
-		// SPILLY - could we combine this with INSERT with SELECT
-		// This is the final one for UPSERT / INSERT ... ON CONFLICT. This is an
-		// expression that is evaluated against newly updated rows in case there is
-		// a conflict. It behaves like an UPDATE, except we want any SELECT policy
-		// to fail rather than silently filter out rows.
-		withCheckSelExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeSelect)
-		if withCheckSelExpr == "" {
-			return ""
-		}
-		usingSelExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeSelect)
-		if usingSelExpr == "" {
-			return ""
-		}
-		//usingUpdExpr := r.genPolicyUsingExprForCommand(colIDs, cat.PolicyScopeUpdate)
-		//if usingUpdExpr == "" {
-		//	return ""
-		//}
-		withCheckUpdExpr := r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeUpdate)
-		if withCheckUpdExpr == "" {
-			return ""
-		}
-		return fmt.Sprintf("(%s) and (%s) and (%s)", withCheckSelExpr, usingSelExpr, withCheckUpdExpr)
 
 	default:
 		return r.genPolicyWithCheckExprForCommand(colIDs, cat.PolicyScopeInsert)
