@@ -3202,8 +3202,13 @@ ALTER TABLE ups FORCE ROW LEVEL SECURITY;
 # Note: This behavior slightly deviates from PostgreSQL, which rejects
 # the statement. However, this may not be intentional, as their
 # documentation suggests it should be allowed.
+# SPILLY - include something like this the DO NOTHING validation
 statement ok
 INSERT INTO ups VALUES (10, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
+
+# SPILLY - confirm this with postgres
+statement error pq: new row violates row-level security policy for table "ups"
+INSERT INTO ups VALUES (10, 'original value')
 
 query T
 SELECT comment FROM ups WHERE pk = 10;
