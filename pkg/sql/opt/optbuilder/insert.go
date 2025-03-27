@@ -370,17 +370,6 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 
 	// Case 4: INSERT..ON CONFLICT..DO UPDATE statement.
 	default:
-		// RLS tables have synthetic check constraints that enforce policies for
-		// mutations. One such check, which is evaluated against the scanned column
-		// values in the case of a conflict, needs to be handled here. When building
-		// the input for an UPSERT, which is done right after, we lose the ability
-		// to reference the old data using column names.
-		if mb.tab.IsRowLevelSecurityEnabled() {
-			mb.addCheckConstraintCols(checkConstraintInput{
-				includeRLSUpsertRead: true,
-			})
-		}
-
 		// Left-join each input row to the target table, using the conflict columns
 		// as the join condition.
 		canaryCol := mb.buildInputForUpsert(inScope, ins.Table, ins.OnConflict)
@@ -435,6 +424,8 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 //  4. Each update value is the same as the corresponding insert value.
 //  5. There are no inbound foreign keys containing non-key columns.
 //  6. There are no UPDATE triggers on the target table.
+//  7. Row-level security is disabled for the table. RLS may need to check for
+//     policy violations on the old rows, so we always need to fetch them.
 //
 // TODO(andyk): The fast path is currently only enabled when the UPSERT alias
 // is explicitly selected by the user. It's possible to fast path some queries
@@ -498,6 +489,12 @@ func (mb *mutationBuilder) needExistingRows() bool {
 				return true
 			}
 		}
+	}
+
+	// If RLS is enabled, we need to fetch the old rows to check for policy
+	// violations.
+	if mb.tab.IsRowLevelSecurityEnabled() {
+		return true
 	}
 
 	return false
@@ -984,10 +981,8 @@ func (mb *mutationBuilder) buildUpsert(returning *tree.ReturningExprs) {
 	// Add any check constraint boolean columns to the input.
 	mb.addCheckConstraintCols(checkConstraintInput{
 		includeNormalChecks:   true,
+		includeRLSUpsertRead:  true,
 		includeRLSUpsertWrite: true,
-		includeRLSBase:        true,
-		policyCmdScope:        cat.PolicyScopeExempt, // Mark base constraint as exempt.
-
 		// For UPSERT, policy enforcement is handled by conflict-specific RLS constraints.
 		// The execution engine selects the appropriate constraint based on whether a
 		// conflict occurred. Although we include the base RLS constraint here, we mark it

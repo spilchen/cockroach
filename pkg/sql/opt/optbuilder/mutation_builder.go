@@ -886,6 +886,7 @@ func (mb *mutationBuilder) addCheckConstraintCols(ip checkConstraintInput) {
 
 		for i, n := 0, mb.tab.CheckCount(); i < n; i++ {
 			check := mb.tab.Check(i)
+			resolveScope := mb.outScope
 
 			// For tables with RLS enabled, we create a synthetic check constraint
 			// to enforce the policies. Since this check varies based on the role
@@ -893,7 +894,7 @@ func (mb *mutationBuilder) addCheckConstraintCols(ip checkConstraintInput) {
 			// than being included with the table's actual check constraints.
 			if check.IsRLSConstraint() {
 				rlsConstraintCount++
-				check = mb.processRLSConstraint(ip, rlsConstraintCount)
+				check, resolveScope = mb.processRLSConstraint(ip, rlsConstraintCount)
 				if check == nil {
 					// Skip if this constraint is not relevant for the current scope.
 					continue
@@ -908,7 +909,7 @@ func (mb *mutationBuilder) addCheckConstraintCols(ip checkConstraintInput) {
 				panic(err)
 			}
 
-			texpr := mb.outScope.resolveAndRequireType(expr, types.Bool)
+			texpr := resolveScope.resolveAndRequireType(expr, types.Bool)
 
 			// Use an anonymous name because the column cannot be referenced
 			// in other expressions.
@@ -990,11 +991,14 @@ func (mb *mutationBuilder) addCheckConstraintCols(ip checkConstraintInput) {
 // The 'count' parameter indicates which specific constraint is being processed.
 func (mb *mutationBuilder) processRLSConstraint(
 	ip checkConstraintInput, constraintType cat.RLSConstraintType,
-) cat.CheckConstraint {
+) (cat.CheckConstraint, *scope) {
 	if !ip.includeRLSBase && !ip.includeRLSUpsertRead && !ip.includeRLSUpsertWrite {
-		return nil
+		return nil, nil
 	}
 
+	// Set a default scope to use to evaluate the expression. It's always the
+	// outscope unless overridden.
+	exprScope := mb.outScope
 	shouldProcess := false
 	var cmdScope cat.PolicyCommandScope
 	switch constraintType {
@@ -1004,6 +1008,8 @@ func (mb *mutationBuilder) processRLSConstraint(
 	case cat.RLSUpsertConflictExistingRowConstraint:
 		shouldProcess = ip.includeRLSUpsertRead
 		cmdScope = cat.PolicyScopeUpsertConflictScan
+		// Use the scope that scanned the table for conflicts.
+		exprScope = mb.fetchScope
 	case cat.RLSUpsertConflictNewRowConstraint:
 		shouldProcess = ip.includeRLSUpsertWrite
 		cmdScope = cat.PolicyScopeUpdate
@@ -1016,7 +1022,7 @@ func (mb *mutationBuilder) processRLSConstraint(
 	}
 
 	if !shouldProcess {
-		return nil
+		return nil, nil
 	}
 	chkBuilder := optRLSConstraintBuilder{
 		tab:                mb.tab,
@@ -1026,7 +1032,7 @@ func (mb *mutationBuilder) processRLSConstraint(
 		user:               mb.b.checkPrivilegeUser,
 		policyCommandScope: cmdScope,
 	}
-	return chkBuilder.Build(mb.b.ctx)
+	return chkBuilder.Build(mb.b.ctx), exprScope
 }
 
 // getColumnFamilySet gets the set of column families represented in colOrdinals.
