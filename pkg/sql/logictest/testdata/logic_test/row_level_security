@@ -3268,4 +3268,183 @@ DROP TABLE ups;
 statement ok
 DROP USER ups;
 
+subtest insert_on_conflict_do_nothing
+
+statement ok
+SET enable_row_level_security = on;
+
+statement ok
+CREATE TABLE ups (pk INT NOT NULL PRIMARY KEY, comment TEXT, c SMALLINT);
+
+statement ok
+CREATE USER ups;
+
+statement ok
+ALTER TABLE ups OWNER TO ups;
+
+statement ok
+SET ROLE ups;
+
+statement ok
+ALTER TABLE ups ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+
+# pk=1: Verify the conflict scan is exempt from RLS policies USING expressions
+# and we don't insert a duplicate value.
+statement ok
+CREATE POLICY p_sel ON ups FOR SELECT USING (comment = 'original value');
+
+statement ok
+CREATE POLICY p_ins ON ups FOR INSERT WITH CHECK (true);
+
+statement ok
+INSERT INTO ups VALUES (1, 'original value', 1) ON CONFLICT (pk) DO NOTHING;
+
+statement ok
+INSERT INTO ups VALUES (1, 'original value', 2) ON CONFLICT (pk) DO NOTHING;
+
+# Verify that input VALUES are not checked against policies when a conflict
+# occurs. This behaviour differs from PostgreSQL, which evaluates VALUES even in
+# conflict cases. The discrepancy stems from a known difference in how CHECK
+# constraints are handled. See issue #35370 for more details.
+statement ok
+INSERT INTO ups VALUES (1, 'upsert', 3) ON CONFLICT (pk) DO NOTHING;
+
+query TI
+SELECT comment, c FROM ups WHERE pk = 1;
+----
+original value 1
+
+statement ok
+ALTER POLICY p_sel ON ups USING (comment = 'upsert');
+
+# PostgreSQL would block this, but since a conflict occurs and we do nothing,
+# the constraints are never evaluated.
+statement ok
+INSERT INTO ups VALUES (1, 'original value', 4) ON CONFLICT (pk) DO NOTHING;
+
+# pk=2: Ensure that the INSERT expression is only violated if there is no
+# conflict
+statement ok
+ALTER POLICY p_sel ON ups USING (true);
+
+statement ok
+ALTER POLICY p_ins ON ups WITH CHECK (comment = 'original value');
+
+statement error pq: new row violates row-level security policy for table "ups"
+INSERT INTO ups VALUES (2, 'first value', 1) ON CONFLICT (pk) DO NOTHING;
+
+statement ok
+INSERT INTO ups VALUES (2, 'original value', 2) ON CONFLICT (pk) DO NOTHING;
+
+statement ok
+INSERT INTO ups VALUES (2, 'original value', 3) ON CONFLICT (pk) DO NOTHING;
+
+# An INSERT that encounters a conflict will skip writing the row and skip the
+# RLS policy checks. Note: This differs from PostgreSQL, which raises a policy
+# violation error because it checks constraints/policies on the input values.
+statement ok
+INSERT INTO ups VALUES (2, 'upsert', 4) ON CONFLICT (pk) DO NOTHING;
+
+query TI
+SELECT comment, c FROM ups WHERE pk = 2;
+----
+original value 2
+
+# pk=3: Test an ALL policy with a USING expression that is intentionally violated
+statement ok
+DROP POLICY p_ins ON ups;
+
+statement ok
+DROP POLICY p_sel ON ups;
+
+statement ok
+CREATE POLICY p_all ON ups FOR ALL USING (comment = 'original value') WITH CHECK (true);
+
+statement error pq: new row violates row-level security policy for table "ups"
+INSERT INTO ups VALUES (3, 'first value', 1) ON CONFLICT (pk) DO NOTHING;
+
+statement ok
+INSERT INTO ups VALUES (3, 'original value', 2) ON CONFLICT (pk) DO NOTHING;
+
+statement ok
+INSERT INTO ups VALUES (3, 'original value', 3) ON CONFLICT (pk) DO NOTHING;
+
+# An INSERT that encounters a conflict will skip writing the row and skip the
+# RLS policy checks. Note: This differs from PostgreSQL, which raises a policy
+# violation error because it checks constraints/policies on the input values.
+statement ok
+INSERT INTO ups VALUES (3, 'upsert', 4) ON CONFLICT (pk) DO NOTHING;
+
+query TI
+SELECT comment, c FROM ups WHERE pk = 3;
+----
+original value 2
+
+statement ok
+DELETE FROM ups WHERE pk = 3;
+
+statement ok
+INSERT INTO ups VALUES (3, 'first value', 5);
+
+statement ok
+ALTER POLICY p_all ON ups USING (comment = 'upsert');
+
+statement ok
+INSERT INTO ups VALUES (3, 'upsert', 6) ON CONFLICT (pk) DO NOTHING;
+
+statement ok
+ALTER TABLE ups NO FORCE ROW LEVEL SECURITY;
+
+query TI
+SELECT comment, c FROM ups WHERE pk = 3;
+----
+first value 5
+
+statement ok
+ALTER TABLE ups FORCE ROW LEVEL SECURITY;
+
+# pk=4: ALL policy with a violated WITH CHECK expression
+statement ok
+ALTER POLICY p_all ON ups USING (true) WITH CHECK (comment = 'original value');
+
+statement ok
+INSERT INTO ups VALUES (4, 'original value', 1) ON CONFLICT (pk) DO NOTHING;
+
+statement ok
+INSERT INTO ups VALUES (4, 'original value', 2) ON CONFLICT (pk) DO NOTHING;
+
+# An INSERT that encounters a conflict will skip writing the row and skip the
+# RLS policy checks. Note: This differs from PostgreSQL, which raises a policy
+# violation error because it checks constraints/policies on the input values.
+statement ok
+INSERT INTO ups VALUES (4, 'upsert', 3) ON CONFLICT (pk) DO NOTHING;
+
+query TI
+SELECT comment, c FROM ups WHERE pk = 4;
+----
+original value 1
+
+statement ok
+ALTER POLICY p_all ON ups WITH CHECK (comment = 'upsert');
+
+statement ok
+INSERT INTO ups VALUES (4, 'upsert', 4) ON CONFLICT (pk) DO NOTHING;
+
+statement ok
+ALTER TABLE ups NO FORCE ROW LEVEL SECURITY;
+
+query TI
+SELECT comment, c FROM ups WHERE pk = 4;
+----
+original value 1
+
+statement ok
+SET ROLE root;
+
+statement ok
+DROP TABLE ups;
+
+statement ok
+DROP USER ups;
+
 subtest end

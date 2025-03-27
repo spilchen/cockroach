@@ -310,11 +310,10 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 		mb.buildRowLevelBeforeTriggers(tree.TriggerEventInsert, false /* cascade */)
 
 		// Build the final insert statement, including any returned expressions.
-		mb.buildInsert(returning, ins.VectorInsert())
+		mb.buildInsert(returning, ins.VectorInsert(), false /* hasOnConflict */)
 
 	// Case 2: INSERT..ON CONFLICT DO NOTHING.
 	case ins.OnConflict.DoNothing:
-
 		// Project row-level BEFORE triggers for INSERT.
 		mb.buildRowLevelBeforeTriggers(tree.TriggerEventInsert, false /* cascade */)
 
@@ -325,7 +324,7 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 
 		// Since buildInputForDoNothing filters out rows with conflicts, always
 		// insert rows that are not filtered.
-		mb.buildInsert(returning, false /* vectorInsert */)
+		mb.buildInsert(returning, false /* vectorInsert */, true /* hasOnConflict */)
 
 	// Case 3: UPSERT statement.
 	case ins.OnConflict.IsUpsertAlias():
@@ -760,16 +759,20 @@ func (mb *mutationBuilder) addSynthesizedColsForInsert() {
 
 // buildInsert constructs an Insert operator, possibly wrapped by a Project
 // operator that corresponds to the given RETURNING clause.
-func (mb *mutationBuilder) buildInsert(returning *tree.ReturningExprs, vectorInsert bool) {
+func (mb *mutationBuilder) buildInsert(
+	returning *tree.ReturningExprs, vectorInsert bool, hasOnConflict bool,
+) {
 	// Disambiguate names so that references in any expressions, such as a
 	// check constraint, refer to the correct columns.
 	mb.disambiguateColumns()
 
-	// Add any check constraint boolean columns to the input.
+	// The policy scope requires SELECT privileges if rows are returned
+	// or if a scan is needed for conflict resolution.
 	cmd := cat.PolicyScopeInsert
-	if returning != nil {
+	if returning != nil || hasOnConflict {
 		cmd = cat.PolicyScopeInsertWithSelect
 	}
+	// Add any check constraint boolean columns to the input.
 	mb.addCheckConstraintCols(checkConstraintInput{
 		includeNormalChecks: true,
 		includeRLSBase:      true,
