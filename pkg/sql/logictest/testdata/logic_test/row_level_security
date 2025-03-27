@@ -2965,8 +2965,6 @@ CREATE POLICY p_ins ON ups FOR INSERT WITH CHECK (true);
 statement ok
 CREATE POLICY p_upd ON ups FOR UPDATE USING (comment = 'upsert') WITH CHECK (true);
 
-# SPILLY - add optbuilder tests
-
 # Okay because there is no conflict
 statement ok
 INSERT INTO ups VALUES (1, 'original value') ON CONFLICT (pk) DO UPDATE SET comment = 'upsert';
