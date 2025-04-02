@@ -239,21 +239,42 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 			i++
 		}
 
-		physicalPlan := planCtx.NewPhysicalPlan()
-		// Job progress is updated inside ttlProcessor, so we
-		// have an empty result stream.
-		physicalPlan.AddNoInputStage(
-			processorCorePlacements,
-			execinfrapb.PostProcessSpec{},
-			[]*types.T{},
-			execinfrapb.Ordering{},
-			nil, /* finalizeLastStageCb */
-		)
-		physicalPlan.PlanToStreamColMap = []int{}
+		// SPILLY - move to a separate function called createTTLPhysicalPlan
+		p := planCtx.NewPhysicalPlan()
+		var containsRemoteProcessor bool
+		for _, sp := range spanPartitions {
+			if sp.SQLInstanceID != p.GatewaySQLInstanceID {
+				containsRemoteProcessor = true
+				break
+			}
+		}
+		stageID := p.NewStage(containsRemoteProcessor, false /* allowPartialDistribution */)
+		p.ResultRouters = make([]physicalplan.ProcessorIdx, len(spanPartitions))
+		for i, sp := range spanPartitions {
+			ttlSpec := newTTLSpec(sp.Spans)
 
-		sql.FinalizePlan(ctx, planCtx, physicalPlan)
+			proc := physicalplan.Processor{
+				SQLInstanceID: sp.SQLInstanceID,
+				Spec: execinfrapb.ProcessorSpec{
+					Core:        execinfrapb.ProcessorCoreUnion{Ttl: ttlSpec},
+					Output:      []execinfrapb.OutputRouterSpec{{Type: execinfrapb.OutputRouterSpec_PASS_THROUGH}},
+					StageID:     stageID,
+					ResultTypes: []*types.T{},
+				},
+			}
+			pIdx := p.AddProcessor(proc)
+			p.ResultRouters[i] = pIdx
+		}
+		sql.FinalizePlan(ctx, planCtx, p)
 
-		metadataCallbackWriter := sql.NewMetadataOnlyMetadataCallbackWriter()
+		updateFunc := func(ctx context.Context, meta *execinfrapb.ProducerMetadata) error {
+			if meta.BulkProcessorProgress == nil {
+				return nil
+			}
+			// SPILLY - update progress
+			return nil
+		}
+		metadataCallbackWriter := sql.NewMetdataOnlyMetadataCallbackWriterWithMetaFunction(updateFunc)
 
 		distSQLReceiver := sql.MakeDistSQLReceiver(
 			ctx,

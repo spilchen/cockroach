@@ -9,13 +9,10 @@ import (
 	"bytes"
 	"context"
 	"math"
-	"math/rand"
 	"runtime"
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/jobs"
-	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -39,6 +36,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/quotapool"
 	"github.com/cockroachdb/cockroach/pkg/util/retry"
+	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 )
@@ -64,11 +62,14 @@ type ttlProcessor struct {
 	ttlSpec execinfrapb.TTLSpec
 }
 
-var _ execinfra.RowSource = (*ttlProcessor)(nil)
+// SPILLY - wondering what breaks if Start() is left out!
+//var _ execinfra.RowSource = (*ttlProcessor)(nil)
 
-func (t *ttlProcessor) Start(ctx context.Context) {
+var _ execinfra.Processor = (*ttlProcessor)(nil)
+
+func (t *ttlProcessor) Run(ctx context.Context, output execinfra.RowReceiver) {
 	ctx = t.StartInternal(ctx, "ttl")
-	err := t.work(ctx)
+	err := t.work(ctx, output)
 	t.MoveToDraining(err)
 }
 
@@ -127,8 +128,8 @@ func getTableInfo(
 	return relationName, pkColIDs, pkColNames, pkColTypes, pkColDirs, numFamilies, labelMetrics, err
 }
 
-func (t *ttlProcessor) work(ctx context.Context) error {
-
+func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) error {
+	defer output.ProducerDone()
 	ttlSpec := t.ttlSpec
 	flowCtx := t.FlowCtx
 	serverCfg := flowCtx.Cfg
@@ -182,58 +183,89 @@ func (t *ttlProcessor) work(ctx context.Context) error {
 	var processorRowCount atomic.Int64
 	var spansProccessedSinceLastUpdate atomic.Int64
 	var rowsProccessedSinceLastUpdate atomic.Int64
+	mu := struct {
+		syncutil.Mutex
+		completedSpans   []roachpb.Span
+		completedSpanIdx []int32
+	}{}
 
 	// Update progress for approximately every 1% of spans processed, at least
 	// 60 seconds apart with jitter.
-	updateEvery := max(1, processorSpanCount/100)
-	updateEveryDuration := 60*time.Second + time.Duration(rand.Int63n(10*1000))*time.Millisecond
-	lastUpdated := timeutil.Now()
-	updateFractionCompleted := func() error {
-		jobID := ttlSpec.JobID
-		lastUpdated = timeutil.Now()
-		spansToAdd := spansProccessedSinceLastUpdate.Swap(0)
-		rowsToAdd := rowsProccessedSinceLastUpdate.Swap(0)
+	// SPILLY remove me
+	//updateEvery := max(1, processorSpanCount/100)
+	//updateEveryDuration := 60*time.Second + time.Duration(rand.Int63n(10*1000))*time.Millisecond
+	//lastUpdated := timeutil.Now()
 
-		var deletedRowCount, processedSpanCount, totalSpanCount int64
-		var fractionCompleted float32
+	storeProcProgress := func(bound QueryBounds) {
+		mu.Lock()
+		defer mu.Unlock()
+		mu.completedSpans = append(mu.completedSpans, bound.Span)
+		mu.completedSpanIdx = append(mu.completedSpanIdx, bound.SpanIdx)
+	}
+	getProcProgress := func() execinfrapb.RemoteProducerMetadata_BulkProcessorProgress {
+		var prog execinfrapb.RemoteProducerMetadata_BulkProcessorProgress
+		mu.Lock()
+		defer mu.Unlock()
 
-		err := jobRegistry.UpdateJobWithTxn(
-			ctx,
-			jobID,
-			nil, /* txn */
-			func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-				progress := md.Progress
-				rowLevelTTL := progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
-				rowLevelTTL.JobProcessedSpanCount += spansToAdd
-				rowLevelTTL.JobDeletedRowCount += rowsToAdd
-				deletedRowCount = rowLevelTTL.JobDeletedRowCount
-				processedSpanCount = rowLevelTTL.JobProcessedSpanCount
-				totalSpanCount = rowLevelTTL.JobTotalSpanCount
-
-				fractionCompleted = float32(rowLevelTTL.JobProcessedSpanCount) / float32(rowLevelTTL.JobTotalSpanCount)
-				progress.Progress = &jobspb.Progress_FractionCompleted{
-					FractionCompleted: fractionCompleted,
-				}
-
-				ju.UpdateProgress(progress)
-				return nil
-			},
-		)
-		if err != nil {
-			return err
-		}
-		processorID := t.ProcessorID
-		log.Infof(
-			ctx,
-			"TTL fractionCompleted updated processorID=%d tableID=%d deletedRowCount=%d processedSpanCount=%d totalSpanCount=%d fractionCompleted=%.3f",
-			processorID, tableID, deletedRowCount, processedSpanCount, totalSpanCount, fractionCompleted,
-		)
-		return nil
+		// SPILLY - fill in ProgressDetails with the TTL protobuf so that we can
+		// flow deleted row count back to the coordinator.
+		// SPILLY - get rid of CompletedSpanIdx. I don't know if the caller will
+		// properly now the index. This was taken from merge code, and I remember
+		// seeing a mapping function to ge the index.
+		prog.CompletedSpans = append(prog.CompletedSpans, mu.completedSpans...)
+		prog.CompletedSpanIdx = append(prog.CompletedSpanIdx, mu.completedSpanIdx...)
+		mu.completedSpans, mu.completedSpanIdx = nil, nil
+		return prog
 	}
 
+	//updateFractionCompleted := func() error {
+	//	jobID := ttlSpec.JobID
+	//	lastUpdated = timeutil.Now()
+	//	spansToAdd := spansProccessedSinceLastUpdate.Swap(0)
+	//	rowsToAdd := rowsProccessedSinceLastUpdate.Swap(0)
+	//
+	//	var deletedRowCount, processedSpanCount, totalSpanCount int64
+	//	var fractionCompleted float32
+	//
+	//	err := jobRegistry.UpdateJobWithTxn(
+	//		ctx,
+	//		jobID,
+	//		nil, /* txn */
+	//		func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+	//			progress := md.Progress
+	//			rowLevelTTL := progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
+	//			rowLevelTTL.JobProcessedSpanCount += spansToAdd
+	//			rowLevelTTL.JobDeletedRowCount += rowsToAdd
+	//			deletedRowCount = rowLevelTTL.JobDeletedRowCount
+	//			processedSpanCount = rowLevelTTL.JobProcessedSpanCount
+	//			totalSpanCount = rowLevelTTL.JobTotalSpanCount
+	//
+	//			fractionCompleted = float32(rowLevelTTL.JobProcessedSpanCount) / float32(rowLevelTTL.JobTotalSpanCount)
+	//			progress.Progress = &jobspb.Progress_FractionCompleted{
+	//				FractionCompleted: fractionCompleted,
+	//			}
+	//
+	//			// SPILLY - we need to flow this back for the caller to update
+	//			// SPILLY - we might not need a transaction if that's the case
+	//			//ju.UpdateProgress(progress)
+	//			return nil
+	//		},
+	//	)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	processorID := t.ProcessorID
+	//	log.Infof(
+	//		ctx,
+	//		"TTL fractionCompleted updated processorID=%d tableID=%d deletedRowCount=%d processedSpanCount=%d totalSpanCount=%d fractionCompleted=%.3f",
+	//		processorID, tableID, deletedRowCount, processedSpanCount, totalSpanCount, fractionCompleted,
+	//	)
+	//	return nil
+	//}
+
+	boundsChan := make(chan QueryBounds, processorConcurrency)
+
 	err = func() error {
-		boundsChan := make(chan QueryBounds, processorConcurrency)
-		defer close(boundsChan)
 		for i := int64(0); i < processorConcurrency; i++ {
 			group.GoCtx(func(ctx context.Context) error {
 				for bounds := range boundsChan {
@@ -270,6 +302,7 @@ func (t *ttlProcessor) work(ctx context.Context) error {
 						deleteBuilder,
 					)
 					// add before returning err in case of partial success
+					// SPILLY - need to consider partial success somehow
 					processorRowCount.Add(spanRowCount)
 					rowsProccessedSinceLastUpdate.Add(spanRowCount)
 					spansProccessedSinceLastUpdate.Add(1)
@@ -281,87 +314,110 @@ func (t *ttlProcessor) work(ctx context.Context) error {
 						return err
 					}
 					metrics.SpanTotalDuration.RecordValue(int64(timeutil.Since(start)))
+					storeProcProgress(bounds)
 				}
 				return nil
 			})
 		}
 
-		// Iterate over every span to feed work for the goroutine processors.
-		kvDB := db.KV()
-		var alloc tree.DatumAlloc
-		for i, span := range ttlSpec.Spans {
-			if bounds, hasRows, err := SpanToQueryBounds(
-				ctx,
-				kvDB,
-				codec,
-				pkColIDs,
-				pkColTypes,
-				pkColDirs,
-				numFamilies,
-				span,
-				&alloc,
-			); err != nil {
-				return errors.Wrapf(err, "SpanToQueryBounds error index=%d span=%s", i, span)
-			} else if hasRows {
-				// Only process bounds from spans with rows inside them.
-				boundsChan <- bounds
-			} else {
-				// If the span has no rows, we still need to increment the processed
-				// count.
-				spansProccessedSinceLastUpdate.Add(1)
+		// Start the goroutine that feeds bounds/spans to the processors.
+		group.GoCtx(func(ctx context.Context) error {
+			defer close(boundsChan)
+			// Iterate over every span to feed work for the goroutine processors.
+			kvDB := db.KV()
+			var alloc tree.DatumAlloc
+			for i, span := range ttlSpec.Spans {
+				if bounds, hasRows, err := SpanToQueryBounds(
+					ctx,
+					kvDB,
+					codec,
+					pkColIDs,
+					pkColTypes,
+					pkColDirs,
+					numFamilies,
+					int32(i),
+					span,
+					&alloc,
+				); err != nil {
+					return errors.Wrapf(err, "SpanToQueryBounds error index=%d span=%s", i, span)
+				} else if hasRows {
+					// Only process bounds from spans with rows inside them.
+					boundsChan <- bounds
+				} else {
+					// If the span has no rows, we still need to increment the processed
+					// count.
+					// SPILLY - consider getting rid of this old atomic counter
+					spansProccessedSinceLastUpdate.Add(1)
+					storeProcProgress(bounds)
+				}
 			}
+			return nil
+		})
 
-			if spansProccessedSinceLastUpdate.Load() >= updateEvery &&
-				timeutil.Since(lastUpdated) >= updateEveryDuration {
-				if err := updateFractionCompleted(); err != nil {
-					return err
+		workersDoneCh := make(chan error)
+		go func() { workersDoneCh <- group.Wait() }()
+
+		// SPILLY - consider moving to a const
+		tick := time.NewTicker(15 * time.Second)
+		defer tick.Stop()
+		var err error
+		for {
+			select {
+			case <-tick.C:
+				prog := getProcProgress()
+				// SPILLY - inder merger grabs a mutex for concurrency issues during test
+				output.Push(nil, &execinfrapb.ProducerMetadata{BulkProcessorProgress: &prog})
+			case err = <-workersDoneCh:
+				if err != nil {
+					output.Push(nil, &execinfrapb.ProducerMetadata{Err: err})
 				}
 			}
 		}
-		return nil
 	}()
 	if err != nil {
 		return err
 	}
 
-	if err := group.Wait(); err != nil {
-		return err
-	}
-	if err := updateFractionCompleted(); err != nil {
-		return err
-	}
+	// SPILLY - remove me
+	//if err := group.Wait(); err != nil {
+	//	return err
+	//}
+	//if err := updateFractionCompleted(); err != nil {
+	//	return err
+	//}
 
-	sqlInstanceID := flowCtx.NodeID.SQLInstanceID()
-	jobID := ttlSpec.JobID
-	return jobRegistry.UpdateJobWithTxn(
-		ctx,
-		jobID,
-		nil, /* txn */
-		func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-			progress := md.Progress
-			rowLevelTTL := progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
-			processorID := t.ProcessorID
-			rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, jobspb.RowLevelTTLProcessorProgress{
-				ProcessorID:          processorID,
-				SQLInstanceID:        sqlInstanceID,
-				ProcessorRowCount:    processorRowCount.Load(),
-				ProcessorSpanCount:   processorSpanCount,
-				ProcessorConcurrency: processorConcurrency,
-			})
-			var fractionCompleted float32
-			if f, ok := progress.Progress.(*jobspb.Progress_FractionCompleted); ok {
-				fractionCompleted = f.FractionCompleted
-			}
-			ju.UpdateProgress(progress)
-			log.VInfof(
-				ctx,
-				2, /* level */
-				"TTL processorRowCount updated processorID=%d sqlInstanceID=%d tableID=%d jobRowCount=%d processorRowCount=%d fractionCompleted=%.3f",
-				processorID, sqlInstanceID, tableID, rowLevelTTL.JobDeletedRowCount, processorRowCount.Load(), fractionCompleted,
-			)
-			return nil
-		},
-	)
+	//sqlInstanceID := flowCtx.NodeID.SQLInstanceID()
+	//jobID := ttlSpec.JobID
+	//return jobRegistry.UpdateJobWithTxn(
+	//	ctx,
+	//	jobID,
+	//	nil, /* txn */
+	//	func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+	//		progress := md.Progress
+	//		rowLevelTTL := progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
+	//		processorID := t.ProcessorID
+	//		rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, jobspb.RowLevelTTLProcessorProgress{
+	//			ProcessorID:          processorID,
+	//			SQLInstanceID:        sqlInstanceID,
+	//			ProcessorRowCount:    processorRowCount.Load(),
+	//			ProcessorSpanCount:   processorSpanCount,
+	//			ProcessorConcurrency: processorConcurrency,
+	//		})
+	//		var fractionCompleted float32
+	//		if f, ok := progress.Progress.(*jobspb.Progress_FractionCompleted); ok {
+	//			fractionCompleted = f.FractionCompleted
+	//		}
+	//		ju.UpdateProgress(progress)
+	//		log.VInfof(
+	//			ctx,
+	//			2, /* level */
+	//			"TTL processorRowCount updated processorID=%d sqlInstanceID=%d tableID=%d jobRowCount=%d processorRowCount=%d fractionCompleted=%.3f",
+	//			processorID, sqlInstanceID, tableID, rowLevelTTL.JobDeletedRowCount, processorRowCount.Load(), fractionCompleted,
+	//		)
+	//		return nil
+	//	},
+	//)
+	return nil
 }
 
 // runTTLOnQueryBounds runs the SELECT/DELETE loop for a single DistSQL span.
@@ -530,6 +586,7 @@ func SpanToQueryBounds(
 	pkColTypes []*types.T,
 	pkColDirs []catenumpb.IndexColumn_Direction,
 	numFamilies int,
+	spanIdx int32,
 	span roachpb.Span,
 	alloc *tree.DatumAlloc,
 ) (bounds QueryBounds, hasRows bool, _ error) {
@@ -558,6 +615,8 @@ func SpanToQueryBounds(
 		return bounds, false, errors.Wrapf(err, "decode startKeyValues error on %+v", startKeyValues)
 	}
 	bounds.End, err = rowenc.DecodeIndexKeyToDatums(codec, pkColIDs, pkColTypes, pkColDirs, endKeyValues, alloc)
+	bounds.Span = span
+	bounds.SpanIdx = spanIdx
 	if err != nil {
 		return bounds, false, errors.Wrapf(err, "decode endKeyValues error on %+v", endKeyValues)
 	}

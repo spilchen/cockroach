@@ -7,6 +7,7 @@ package rowexec
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
@@ -131,7 +132,12 @@ func (ib *indexBackfiller) constructIndexEntries(
 	var err error
 	var entries []rowenc.IndexEntry
 	for i := range ib.spec.Spans {
-		log.VEventf(ctx, 2, "index backfiller starting span %d of %d: %s",
+		if ib.desc.GetName() == "kv" {
+			fmt.Printf("SPILLY: slow kv backfiller span %d of %d\n", i, len(ib.spec.Spans))
+			log.Infof(ctx, "SPILLY: slow kv backfiller span %d of %d", i, len(ib.spec.Spans))
+			time.Sleep(20 * time.Second)
+		}
+		log.Infof(ctx, "index backfiller starting span %d of %d: %s",
 			i+1, len(ib.spec.Spans), ib.spec.Spans[i])
 		todo := ib.spec.Spans[i]
 		for todo.Key != nil {

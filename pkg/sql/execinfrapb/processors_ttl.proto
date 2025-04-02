@@ -50,6 +50,8 @@ message TTLSpec {
   // Spans determine which records are processed by which nodes in the DistSQL
   // flow.
   repeated roachpb.Span spans = 5 [(gogoproto.nullable) = false];
+  // SPILLY - here
+  repeated int32 spanIdx = 16;
 
   // RangeConcurrency is based on the number of spans and is no longer configurable.
   reserved 6;
@@ -88,4 +90,6 @@ message TTLSpec {
   // DisableChangefeedReplication controls whether the deletes performed
   // should not be replicated via changefeed.
   optional bool disable_changefeed_replication = 15 [(gogoproto.nullable) = false];
+
+  // Next ID: 17
 }

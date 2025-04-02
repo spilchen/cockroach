@@ -926,6 +926,31 @@ func TestRowLevelTTLJobRandomEntries(t *testing.T) {
 	}
 }
 
+func TestRowLevelTTLRestart(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	th, cleanupFunc := newRowLevelTTLTestJobTestHelper(
+		t,
+		&sql.TTLTestingKnobs{
+			AOSTDuration: &zeroDuration,
+		},
+		false, /* testMultiTenant */
+		3,     /* numNodes */
+	)
+	defer cleanupFunc()
+
+	th.sqlDB.Exec(t, `
+CREATE TABLE t (
+  id INT PRIMARY KEY,
+  expire_at TIMESTAMPTZ
+) WITH (
+  ttl_expiration_expression = 'expire_at',
+  ttl_row_stats_poll_interval = '1 minute'
+)`)
+	th.sqlDB.Exec(t, `INSERT INTO t (id, expire_at) VALUES (1, '2020-01-01')`)
+}
+
 func TestRowLevelTTLCancelStats(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)

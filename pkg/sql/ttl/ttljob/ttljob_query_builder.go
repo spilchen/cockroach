@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catenumpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
@@ -43,6 +44,10 @@ type QueryBounds struct {
 	// span's end key is exclusive because the end bounds are based on the first
 	// row < Span.EndKey.
 	End tree.Datums
+	// Span is the span that the query bounds is derived from.
+	Span roachpb.Span
+	// SpanIdx is the index of the span that the query bounds is derived from.
+	SpanIdx int32
 }
 
 type SelectQueryParams struct {

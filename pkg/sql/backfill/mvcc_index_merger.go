@@ -219,6 +219,11 @@ func (ibm *IndexBackfillMerger) Run(ctx context.Context, output execinfra.RowRec
 	g.GoCtx(func(ctx context.Context) error {
 		defer close(mergeCh)
 		for i := range ibm.spec.Spans {
+			//if ibm.spec.Table.GetName() == "kv" {
+			//	fmt.Printf("SPILLY: scanning span. Making this slow will sleep for 20 seconds\n")
+			//	log.Infof(ctx, "SPILLY: scanning span. Making this slow will sleep for 20 seconds")
+			//	time.Sleep(20 * time.Second)
+			//}
 			sp := ibm.spec.Spans[i]
 			idx := ibm.spec.SpanIdx[i]
 
