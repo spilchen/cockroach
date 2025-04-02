@@ -58,8 +58,20 @@ var ttlMaxKVAutoRetry = settings.RegisterIntSetting(
 // DeleteQueryBuilder which manage the state for the SELECT/DELETE loop
 // that is run by runTTLOnQueryBounds.
 type ttlProcessor struct {
-	execinfra.ProcessorBase
-	ttlSpec execinfrapb.TTLSpec
+	processorID int32
+	ttlSpec     execinfrapb.TTLSpec
+	desc        catalog.TableDescriptor
+	flowCtx     *execinfra.FlowCtx
+}
+
+// OutputTypes is always nil.
+func (ibm *ttlProcessor) OutputTypes() []*types.T {
+	return nil
+}
+
+// MustBeStreaming is always false.
+func (ibm *ttlProcessor) MustBeStreaming() bool {
+	return false
 }
 
 // SPILLY - wondering what breaks if Start() is left out!
@@ -68,9 +80,7 @@ type ttlProcessor struct {
 var _ execinfra.Processor = (*ttlProcessor)(nil)
 
 func (t *ttlProcessor) Run(ctx context.Context, output execinfra.RowReceiver) {
-	ctx = t.StartInternal(ctx, "ttl")
-	err := t.work(ctx, output)
-	t.MoveToDraining(err)
+	t.work(ctx, output)
 }
 
 func getTableInfo(
@@ -128,7 +138,7 @@ func getTableInfo(
 	return relationName, pkColIDs, pkColNames, pkColTypes, pkColDirs, numFamilies, labelMetrics, err
 }
 
-func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) error {
+func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) {
 	defer output.ProducerDone()
 	ttlSpec := t.ttlSpec
 	flowCtx := t.FlowCtx
@@ -375,7 +385,7 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 		}
 	}()
 	if err != nil {
-		return err
+		output.Push(nil, &execinfrapb.ProducerMetadata{Err: err})
 	}
 
 	// SPILLY - remove me
@@ -417,7 +427,6 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 	//		return nil
 	//	},
 	//)
-	return nil
 }
 
 // runTTLOnQueryBounds runs the SELECT/DELETE loop for a single DistSQL span.
