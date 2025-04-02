@@ -293,7 +293,7 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 			ctx,
 			planCtx,
 			nil, /* txn */
-			physicalPlan,
+			p,
 			distSQLReceiver,
 			evalCtxCopy,
 			nil, /* finishedSetupFn */

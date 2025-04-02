@@ -558,22 +558,9 @@ func (t *ttlProcessor) Next() (rowenc.EncDatumRow, *execinfrapb.ProducerMetadata
 func newTTLProcessor(
 	ctx context.Context, flowCtx *execinfra.FlowCtx, processorID int32, spec execinfrapb.TTLSpec,
 ) (execinfra.Processor, error) {
-	ttlProcessor := &ttlProcessor{
+	return &ttlProcessor{
 		ttlSpec: spec,
-	}
-	if err := ttlProcessor.Init(
-		ctx,
-		ttlProcessor,
-		&execinfrapb.PostProcessSpec{},
-		[]*types.T{},
-		flowCtx,
-		processorID,
-		nil, /* memMonitor */
-		execinfra.ProcStateOpts{},
-	); err != nil {
-		return nil, err
-	}
-	return ttlProcessor, nil
+	}, nil
 }
 
 // SpanToQueryBounds converts the span output of the DistSQL planner to
