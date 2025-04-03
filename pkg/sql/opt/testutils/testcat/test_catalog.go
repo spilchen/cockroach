@@ -336,6 +336,11 @@ func (tc *Catalog) HasRoleOption(ctx context.Context, roleOption roleoption.Opti
 	return true, nil
 }
 
+// UserHasRoleOption is part of the cat.Catalog interface.
+func (tc *Catalog) UserHasRoleOption(ctx context.Context, user username.SQLUsername, roleOption roleoption.Option) (bool, error) {
+	return true, nil
+}
+
 // FullyQualifiedName is part of the cat.Catalog interface.
 func (tc *Catalog) FullyQualifiedName(
 	ctx context.Context, ds cat.DataSource,

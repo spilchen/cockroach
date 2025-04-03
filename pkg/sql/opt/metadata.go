@@ -1187,10 +1187,10 @@ func (md *Metadata) TestingPrivileges() map[cat.StableID]privilegeBitmap {
 // SetRLSEnabled will update the metadata to indicate we came across a table
 // that had row-level security enabled.
 func (md *Metadata) SetRLSEnabled(
-	user username.SQLUsername, isAdmin bool, tableID TableID, isTableOwnerAndNotForced bool,
+	user username.SQLUsername, isAdmin bool, tableID TableID, exempt bool,
 ) {
 	md.rlsMeta.MaybeInit(user, isAdmin)
-	md.rlsMeta.AddTableUse(tableID, isTableOwnerAndNotForced)
+	md.rlsMeta.AddTableUse(tableID, exempt)
 }
 
 // ClearRLSEnabled will clear out the initialized state for the rls meta. This
@@ -1230,6 +1230,9 @@ func (md *Metadata) checkRLSDependencies(
 	} else if md.rlsMeta.HasAdminRole != hasAdminRole {
 		return false, nil
 	}
+
+	// SPILLY - I think we need to know if user is exempt or not. We can check
+	// force, but really the important one is roleoption. But the rlsmeta is for n tables.
 
 	// We do not check for specific policy changes. Any time a policy is modified
 	// on a table, a new version of the table descriptor is created. The metadata

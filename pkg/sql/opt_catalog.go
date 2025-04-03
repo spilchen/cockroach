@@ -470,6 +470,11 @@ func (oc *optCatalog) HasRoleOption(
 	return oc.planner.HasRoleOption(ctx, roleOption)
 }
 
+// UserHasRoleOption is part of the cat.Catalog interface.
+func (oc *optCatalog) UserHasRoleOption(ctx context.Context, user username.SQLUsername, roleOption roleoption.Option) (bool, error) {
+	return oc.planner.UserHasRoleOption(ctx, user, roleOption)
+}
+
 // FullyQualifiedName is part of the cat.Catalog interface.
 func (oc *optCatalog) FullyQualifiedName(
 	ctx context.Context, ds cat.DataSource,

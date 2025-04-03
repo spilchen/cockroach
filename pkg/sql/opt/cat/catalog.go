@@ -241,6 +241,10 @@ type Catalog interface {
 	// NOLOGIN instead of LOGIN.
 	HasRoleOption(ctx context.Context, roleOption roleoption.Option) (bool, error)
 
+	// UserHasRoleOption is similar to HasRoleOption but allows specifying the
+	// username to check.
+	UserHasRoleOption(ctx context.Context, user username.SQLUsername, roleOption roleoption.Option) (bool, error)
+
 	// FullyQualifiedName retrieves the fully qualified name of a data source.
 	// Note that:
 	//  - this call may involve a database operation so it shouldn't be used in
