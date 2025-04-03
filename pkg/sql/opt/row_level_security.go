@@ -54,12 +54,13 @@ func (r *RowLevelSecurityMeta) Clear() {
 // AddTableUse indicates that an RLS-enabled table was encountered while
 // building the query plan. If any policies are in use, they will be added
 // via the AddPolicyUse call.
-func (r *RowLevelSecurityMeta) AddTableUse(tableID TableID, exempt bool) {
+func (r *RowLevelSecurityMeta) AddTableUse(tableID TableID, isTableOwnerAndNotForced, bypassRLS bool) {
 	if _, found := r.PoliciesApplied[tableID]; !found {
 		r.PoliciesApplied[tableID] = PoliciesApplied{
-			Exempt: exempt,
-			Filter: PolicyIDSet{},
-			Check:  PolicyIDSet{},
+			NoForceExempt: isTableOwnerAndNotForced,
+			BypassRLS:     bypassRLS,
+			Filter:        PolicyIDSet{},
+			Check:         PolicyIDSet{},
 		}
 	}
 }
@@ -84,10 +85,12 @@ func (r *RowLevelSecurityMeta) AddPoliciesUsed(
 
 // PoliciesApplied stores the set of policies that were applied to a table.
 type PoliciesApplied struct {
-	// Exempt is true if the policies were exempt. This can happen if the query
-	// was run by the table owner and force RLS wasn't set, or the role had the
-	// BYPASSRLS option.
-	Exempt bool
+	// NoForceExempt is true if the policies were exempt because they were the
+	// table owner and force RLS wasn't set.
+	NoForceExempt bool
+	// BypassRLS is true if the policies were bypassed because the user had the
+	// BYPASSRLS option/privilege.
+	BypassRLS bool
 	// Filter is the set of policy IDs that were applied to filter out existing
 	// rows. The USING expression in each policy is used to derive the filter.
 	Filter PolicyIDSet
@@ -99,9 +102,10 @@ type PoliciesApplied struct {
 
 func (p *PoliciesApplied) Copy() PoliciesApplied {
 	return PoliciesApplied{
-		Exempt: p.Exempt,
-		Filter: p.Filter.Copy(),
-		Check:  p.Check.Copy(),
+		NoForceExempt: p.NoForceExempt,
+		BypassRLS:     p.BypassRLS,
+		Filter:        p.Filter.Copy(),
+		Check:         p.Check.Copy(),
 	}
 }
 

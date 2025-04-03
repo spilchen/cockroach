@@ -48,7 +48,7 @@ func (b *Builder) addRowLevelSecurityFilter(
 		panic(err)
 	}
 	b.factory.Metadata().SetRLSEnabled(b.checkPrivilegeUser, isAdmin, tabMeta.MetaID,
-		isOwnerAndNotForced || bypassRLS)
+		isOwnerAndNotForced, bypassRLS)
 	// Check if RLS filtering is exempt.
 	if isAdmin || isOwnerAndNotForced || bypassRLS {
 		return
@@ -237,7 +237,7 @@ func (r *optRLSConstraintBuilder) genExpression(ctx context.Context) (string, []
 	if err != nil {
 		panic(err)
 	}
-	r.md.SetRLSEnabled(r.user, isAdmin, r.tabMeta.MetaID, isOwnerAndNotForced || bypassRLS)
+	r.md.SetRLSEnabled(r.user, isAdmin, r.tabMeta.MetaID, isOwnerAndNotForced, bypassRLS)
 	if isAdmin || isOwnerAndNotForced || bypassRLS {
 		// Return a constraint check that always passes.
 		return "true", nil

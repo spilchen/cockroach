@@ -243,7 +243,7 @@ func TestLint(t *testing.T) {
 			}
 			switch name {
 			case "extract", "trim", "overlay", "position", "substring", "st_x", "st_y":
-				// Exempt special forms: EXTRACT(... FROM ...), etc.
+				// NoForceExempt special forms: EXTRACT(... FROM ...), etc.
 			default:
 				names = append(names, strings.ToUpper(name))
 			}
@@ -2826,8 +2826,8 @@ func TestLint(t *testing.T) {
 			"--",
 			"**testdata**",
 			"**/*_test.go",
-			":!testutils/lint/lint_test.go",     // false-positive: the lint itself.
-			":!sql/tests/testdata/initial_keys", // exempt: deliberate test of bootstrap catalog
+			":!testutils/lint/lint_test.go",                        // false-positive: the lint itself.
+			":!sql/tests/testdata/initial_keys",                    // exempt: deliberate test of bootstrap catalog
 			":!sql/catalog/systemschema_test/testdata/bootstrap*",  // exempt: deliberate test of bootstrap catalog.
 			":!sql/catalog/internal/catkv/testdata/",               // TODO(foundations): #137029.
 			":!cli/testdata/doctor/",                               // TODO(foundations): #137030.

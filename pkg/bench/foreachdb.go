@@ -82,7 +82,7 @@ func benchmarkSharedProcessTenantCockroach(b *testing.B, f BenchmarkFn) {
 		})
 	require.NoError(b, err)
 
-	// Exempt the tenant from rate limiting. We expect most
+	// NoForceExempt the tenant from rate limiting. We expect most
 	// shared-process tenants will run without rate limiting in
 	// the near term.
 	_, err = db.Exec(`ALTER TENANT benchtenant GRANT CAPABILITY exempt_from_rate_limiting`)
