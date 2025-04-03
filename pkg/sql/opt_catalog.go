@@ -470,13 +470,6 @@ func (oc *optCatalog) HasRoleOption(
 	return oc.planner.HasRoleOption(ctx, roleOption)
 }
 
-// UserHasRoleOption is part of the cat.Catalog interface.
-func (oc *optCatalog) UserHasRoleOption(
-	ctx context.Context, user username.SQLUsername, roleOption roleoption.Option,
-) (bool, error) {
-	return oc.planner.UserHasRoleOption(ctx, user, roleOption)
-}
-
 // UserHasGlobalPrivilegeOrRoleOption is part of the cat.Catalog interface.
 func (oc *optCatalog) UserHasGlobalPrivilegeOrRoleOption(
 	ctx context.Context, privilege privilege.Kind, user username.SQLUsername,

@@ -336,15 +336,6 @@ func (tc *Catalog) HasRoleOption(ctx context.Context, roleOption roleoption.Opti
 	return true, nil
 }
 
-// UserHasRoleOption is part of the cat.Catalog interface.
-func (tc *Catalog) UserHasRoleOption(
-	ctx context.Context, user username.SQLUsername, roleOption roleoption.Option,
-) (bool, error) {
-	return true, nil
-}
-
-// SPILLY - consider remove the UserHasRoleOption that I just added.
-
 // UserHasGlobalPrivilegeOrRoleOption is part of the cat.Catalog interface.
 func (tc *Catalog) UserHasGlobalPrivilegeOrRoleOption(
 	ctx context.Context, privilege privilege.Kind, user username.SQLUsername,
