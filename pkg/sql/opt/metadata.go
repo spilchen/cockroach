@@ -1231,8 +1231,23 @@ func (md *Metadata) checkRLSDependencies(
 		return false, nil
 	}
 
-	// SPILLY - I think we need to know if user is exempt or not. We can check
-	// force, but really the important one is roleoption. But the rlsmeta is for n tables.
+	// Check if the current user has a role option that changed that would affect
+	// exemption of policies.
+	for i := range md.tables {
+		table := &md.tables[i]
+		policiesApplied, ok := md.rlsMeta.PoliciesApplied[table.MetaID]
+		if !ok {
+			continue
+		}
+		bypassRLS, err := optCatalog.UserHasGlobalPrivilegeOrRoleOption(ctx, privilege.BYPASSRLS, md.rlsMeta.User)
+		if err != nil {
+			return false, err
+		}
+		// SPILLY - here is an argument for adding a separate bool rather than exempt
+		if bypassRLS != policiesApplied.Exempt {
+			return false, nil
+		}
+	}
 
 	// We do not check for specific policy changes. Any time a policy is modified
 	// on a table, a new version of the table descriptor is created. The metadata

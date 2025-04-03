@@ -3004,10 +3004,8 @@ ALTER ROLE bypassrls_user BYPASSRLS;
 statement ok
 SET ROLE bypassrls_user;
 
-# SPILLY - system level attributes
-# SPILLY - there is a query cache issue. Remove the 1 = 1 to see the issue.
 query IT
-SELECT * FROM bypassrls where 1 = 1 ORDER BY id;
+SELECT * FROM bypassrls ORDER BY id;
 ----
 0 visible: 0
 1 hidden: 1
@@ -3035,24 +3033,26 @@ ALTER ROLE bypassrls_user NOBYPASSRLS;
 statement ok
 GRANT SYSTEM BYPASSRLS TO bypassrls_user;
 
-query TTTTTB colnames,rowsort
-SHOW GRANTS FOR bypassrls_user;
+query TTB colnames
+SELECT * FROM [SHOW SYSTEM GRANTS] WHERE privilege_type = 'BYPASSRLS';
 ----
+grantee         privilege_type  is_grantable
+bypassrls_user  BYPASSRLS             false
 
 statement ok
 SET ROLE bypassrls_user;
 
-# SPILLY - remove the query hack
 query IT
-SELECT * FROM bypassrls WHERE 2 = 2 ORDER BY id;
+SELECT * FROM bypassrls ORDER BY id;
 ----
-0 visible: 0
-1 hidden: 1
-2 visible: 2
-10 hidden: value
-11 hidden: value
-20 hidden: value
-30 hidden: value
+0   visible: 0
+1   hidden: 1
+2   visible: 2
+10  hidden: value
+11  hidden: value
+20  hidden: value
+30  hidden: value
+31  hidden: value
 
 query IT
 SELECT * FROM insert_policy_violation_as_session_user(40);
@@ -3063,14 +3063,13 @@ statement ok
 SET ROLE root;
 
 statement ok
-GRANT SYSTEM NOBYPASSRLS TO bypassrls_user;
+REVOKE SYSTEM BYPASSRLS FROM bypassrls_user;
 
 statement ok
 SET ROLE bypassrls_user;
 
-# SPILLY - remove the query hack
 query IT
-SELECT * FROM bypassrls WHERE 3 = 3 ORDER BY id;
+SELECT * FROM bypassrls ORDER BY id;
 ----
 0 visible: 0
 2 visible: 2

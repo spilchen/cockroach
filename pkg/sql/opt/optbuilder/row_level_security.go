@@ -8,7 +8,6 @@ package optbuilder
 import (
 	"context"
 	"fmt"
-	"github.com/cockroachdb/cockroach/pkg/sql/roleoption"
 	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/security/username"
@@ -18,6 +17,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
 	"github.com/cockroachdb/cockroach/pkg/sql/parser"
+	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/intsets"
@@ -43,7 +43,7 @@ func (b *Builder) addRowLevelSecurityFilter(
 	if err != nil {
 		panic(err)
 	}
-	bypassRLS, err := b.catalog.UserHasRoleOption(b.ctx, b.checkPrivilegeUser, roleoption.BYPASSRLS)
+	bypassRLS, err := b.catalog.UserHasGlobalPrivilegeOrRoleOption(b.ctx, privilege.BYPASSRLS, b.checkPrivilegeUser)
 	if err != nil {
 		panic(err)
 	}
@@ -58,6 +58,8 @@ func (b *Builder) addRowLevelSecurityFilter(
 	tableScope.expr = b.factory.ConstructSelect(tableScope.expr,
 		memo.FiltersExpr{b.factory.ConstructFiltersItem(scalar)})
 }
+
+// SPILLY - can we create a helper to use in the staleness check?
 
 // buildRowLevelSecurityUsingExpression generates a scalar expression for read
 // operations by combining all applicable RLS policies. An expression is always
@@ -231,7 +233,7 @@ func (r *optRLSConstraintBuilder) genExpression(ctx context.Context) (string, []
 	if err != nil {
 		panic(err)
 	}
-	bypassRLS, err := r.oc.UserHasRoleOption(ctx, r.user, roleoption.BYPASSRLS)
+	bypassRLS, err := r.oc.UserHasGlobalPrivilegeOrRoleOption(ctx, privilege.BYPASSRLS, r.user)
 	if err != nil {
 		panic(err)
 	}

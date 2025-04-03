@@ -245,6 +245,12 @@ type Catalog interface {
 	// username to check.
 	UserHasRoleOption(ctx context.Context, user username.SQLUsername, roleOption roleoption.Option) (bool, error)
 
+	// SPILLY - confirm the order of parms makes sense. I want to be consisent, but I'm not sure what is sticking around.
+
+	// UserHasGlobalPrivilegeOrRoleOption returns a bool representing whether the given user
+	// has a global privilege or the corresponding legacy role option.
+	UserHasGlobalPrivilegeOrRoleOption(ctx context.Context, privilege privilege.Kind, user username.SQLUsername) (bool, error)
+
 	// FullyQualifiedName retrieves the fully qualified name of a data source.
 	// Note that:
 	//  - this call may involve a database operation so it shouldn't be used in
