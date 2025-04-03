@@ -68,8 +68,41 @@ var _ execinfra.RowSource = (*ttlProcessor)(nil)
 
 func (t *ttlProcessor) Start(ctx context.Context) {
 	ctx = t.StartInternal(ctx, "ttl")
-	err := t.work(ctx)
-	t.MoveToDraining(err)
+}
+
+// Run is part of the Processor interface.
+func (t *ttlProcessor) Run(ctx context.Context, output execinfra.RowReceiver) {
+	if output == nil {
+		panic("processor output is not provided for emitting rows")
+	}
+	t.Start(ctx)
+
+	// Startup the async goroutines to do the actual work.
+	completeCallback, workersDoneCh, err := t.startAsyncWork(t.Ctx())
+	if err != nil {
+		t.MoveToDraining(err)
+		return
+	}
+
+	// Synchronously wait for the worker to be done.
+	const metadataPushInterval = 15 * time.Second
+	tick := time.NewTicker(metadataPushInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			// Send an empty record to detect distributed failures. This ensures timely
+			// notification if another node goes down, preventing the processor from
+			// completing all spans before realizing the failure.
+			output.Push(nil, &execinfrapb.ProducerMetadata{})
+		case err = <-workersDoneCh:
+			if err == nil {
+				err = completeCallback()
+			}
+			t.MoveToDraining(err)
+			return
+		}
+	}
 }
 
 func getTableInfo(
@@ -127,7 +160,12 @@ func getTableInfo(
 	return relationName, pkColIDs, pkColNames, pkColTypes, pkColDirs, numFamilies, labelMetrics, err
 }
 
-func (t *ttlProcessor) work(ctx context.Context) error {
+// startAsyncWork initializes all the goroutines to handle the TTL job. It
+// returns a callback to be called once processing has finished successfully,
+// and a channel that signals when all work has completed.
+func (t *ttlProcessor) startAsyncWork(
+	ctx context.Context,
+) (completeCallback func() error, workersDoneCh chan error, retErr error) {
 
 	ttlSpec := t.ttlSpec
 	flowCtx := t.FlowCtx
@@ -164,7 +202,7 @@ func (t *ttlProcessor) work(ctx context.Context) error {
 		ctx, db, descsCol, tableID,
 	)
 	if err != nil {
-		return err
+		return completeCallback, workersDoneCh, err
 	}
 
 	jobRegistry := serverCfg.JobRegistry
@@ -231,61 +269,63 @@ func (t *ttlProcessor) work(ctx context.Context) error {
 		return nil
 	}
 
-	err = func() error {
-		boundsChan := make(chan QueryBounds, processorConcurrency)
-		defer close(boundsChan)
-		for i := int64(0); i < processorConcurrency; i++ {
-			group.GoCtx(func(ctx context.Context) error {
-				for bounds := range boundsChan {
-					start := timeutil.Now()
-					selectBuilder := MakeSelectQueryBuilder(
-						SelectQueryParams{
-							RelationName:      relationName,
-							PKColNames:        pkColNames,
-							PKColDirs:         pkColDirs,
-							Bounds:            bounds,
-							AOSTDuration:      ttlSpec.AOSTDuration,
-							SelectBatchSize:   ttlSpec.SelectBatchSize,
-							TTLExpr:           ttlExpr,
-							SelectDuration:    metrics.SelectDuration,
-							SelectRateLimiter: selectRateLimiter,
-						},
-						cutoff,
-					)
-					deleteBuilder := MakeDeleteQueryBuilder(
-						DeleteQueryParams{
-							RelationName:      relationName,
-							PKColNames:        pkColNames,
-							DeleteBatchSize:   ttlSpec.DeleteBatchSize,
-							TTLExpr:           ttlExpr,
-							DeleteDuration:    metrics.DeleteDuration,
-							DeleteRateLimiter: deleteRateLimiter,
-						},
-						cutoff,
-					)
-					spanRowCount, err := t.runTTLOnQueryBounds(
-						ctx,
-						metrics,
-						selectBuilder,
-						deleteBuilder,
-					)
-					// add before returning err in case of partial success
-					processorRowCount.Add(spanRowCount)
-					rowsProccessedSinceLastUpdate.Add(spanRowCount)
-					spansProccessedSinceLastUpdate.Add(1)
-					if err != nil {
-						// Continue until channel is fully read.
-						// Otherwise, the keys input will be blocked.
-						for bounds = range boundsChan {
-						}
-						return err
-					}
-					metrics.SpanTotalDuration.RecordValue(int64(timeutil.Since(start)))
-				}
-				return nil
-			})
-		}
+	boundsChan := make(chan QueryBounds, processorConcurrency)
 
+	for i := int64(0); i < processorConcurrency; i++ {
+		group.GoCtx(func(ctx context.Context) error {
+			for bounds := range boundsChan {
+				start := timeutil.Now()
+				selectBuilder := MakeSelectQueryBuilder(
+					SelectQueryParams{
+						RelationName:      relationName,
+						PKColNames:        pkColNames,
+						PKColDirs:         pkColDirs,
+						Bounds:            bounds,
+						AOSTDuration:      ttlSpec.AOSTDuration,
+						SelectBatchSize:   ttlSpec.SelectBatchSize,
+						TTLExpr:           ttlExpr,
+						SelectDuration:    metrics.SelectDuration,
+						SelectRateLimiter: selectRateLimiter,
+					},
+					cutoff,
+				)
+				deleteBuilder := MakeDeleteQueryBuilder(
+					DeleteQueryParams{
+						RelationName:      relationName,
+						PKColNames:        pkColNames,
+						DeleteBatchSize:   ttlSpec.DeleteBatchSize,
+						TTLExpr:           ttlExpr,
+						DeleteDuration:    metrics.DeleteDuration,
+						DeleteRateLimiter: deleteRateLimiter,
+					},
+					cutoff,
+				)
+				spanRowCount, err := t.runTTLOnQueryBounds(
+					ctx,
+					metrics,
+					selectBuilder,
+					deleteBuilder,
+				)
+				// add before returning err in case of partial success
+				processorRowCount.Add(spanRowCount)
+				rowsProccessedSinceLastUpdate.Add(spanRowCount)
+				spansProccessedSinceLastUpdate.Add(1)
+				if err != nil {
+					// Continue until channel is fully read.
+					// Otherwise, the keys input will be blocked.
+					for bounds = range boundsChan {
+					}
+					return err
+				}
+				metrics.SpanTotalDuration.RecordValue(int64(timeutil.Since(start)))
+			}
+			return nil
+		})
+	}
+
+	// Start the goroutine that feeds bounds/spans to the processors.
+	group.GoCtx(func(ctx context.Context) error {
+		defer close(boundsChan)
 		// Iterate over every span to feed work for the goroutine processors.
 		kvDB := db.KV()
 		var alloc tree.DatumAlloc
@@ -319,49 +359,51 @@ func (t *ttlProcessor) work(ctx context.Context) error {
 			}
 		}
 		return nil
-	}()
-	if err != nil {
-		return err
+	})
+
+	workersDoneCh = make(chan error)
+	go func() { workersDoneCh <- group.Wait() }()
+
+	// Setup a callback that is to be called when the work has finished.
+	completeCallback = func() error {
+		if err := updateFractionCompleted(); err != nil {
+			return err
+		}
+
+		sqlInstanceID := flowCtx.NodeID.SQLInstanceID()
+		jobID := ttlSpec.JobID
+		return jobRegistry.UpdateJobWithTxn(
+			ctx,
+			jobID,
+			nil, /* txn */
+			func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+				progress := md.Progress
+				rowLevelTTL := progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
+				processorID := t.ProcessorID
+				rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, jobspb.RowLevelTTLProcessorProgress{
+					ProcessorID:          processorID,
+					SQLInstanceID:        sqlInstanceID,
+					ProcessorRowCount:    processorRowCount.Load(),
+					ProcessorSpanCount:   processorSpanCount,
+					ProcessorConcurrency: processorConcurrency,
+				})
+				var fractionCompleted float32
+				if f, ok := progress.Progress.(*jobspb.Progress_FractionCompleted); ok {
+					fractionCompleted = f.FractionCompleted
+				}
+				ju.UpdateProgress(progress)
+				log.VInfof(
+					ctx,
+					2, /* level */
+					"TTL processorRowCount updated processorID=%d sqlInstanceID=%d tableID=%d jobRowCount=%d processorRowCount=%d fractionCompleted=%.3f",
+					processorID, sqlInstanceID, tableID, rowLevelTTL.JobDeletedRowCount, processorRowCount.Load(), fractionCompleted,
+				)
+				return nil
+			},
+		)
 	}
 
-	if err := group.Wait(); err != nil {
-		return err
-	}
-	if err := updateFractionCompleted(); err != nil {
-		return err
-	}
-
-	sqlInstanceID := flowCtx.NodeID.SQLInstanceID()
-	jobID := ttlSpec.JobID
-	return jobRegistry.UpdateJobWithTxn(
-		ctx,
-		jobID,
-		nil, /* txn */
-		func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-			progress := md.Progress
-			rowLevelTTL := progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
-			processorID := t.ProcessorID
-			rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, jobspb.RowLevelTTLProcessorProgress{
-				ProcessorID:          processorID,
-				SQLInstanceID:        sqlInstanceID,
-				ProcessorRowCount:    processorRowCount.Load(),
-				ProcessorSpanCount:   processorSpanCount,
-				ProcessorConcurrency: processorConcurrency,
-			})
-			var fractionCompleted float32
-			if f, ok := progress.Progress.(*jobspb.Progress_FractionCompleted); ok {
-				fractionCompleted = f.FractionCompleted
-			}
-			ju.UpdateProgress(progress)
-			log.VInfof(
-				ctx,
-				2, /* level */
-				"TTL processorRowCount updated processorID=%d sqlInstanceID=%d tableID=%d jobRowCount=%d processorRowCount=%d fractionCompleted=%.3f",
-				processorID, sqlInstanceID, tableID, rowLevelTTL.JobDeletedRowCount, processorRowCount.Load(), fractionCompleted,
-			)
-			return nil
-		},
-	)
+	return completeCallback, workersDoneCh, nil
 }
 
 // runTTLOnQueryBounds runs the SELECT/DELETE loop for a single DistSQL span.
