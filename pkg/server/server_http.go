@@ -210,7 +210,7 @@ func (s *httpServer) setupRoutes(
 	// The timeseries endpoint, used to produce graphs.
 	s.mux.Handle(ts.URLPrefix, authenticatedHandler)
 
-	// NoForceExempt the 2nd health check endpoint from authentication.
+	// Exempt the 2nd health check endpoint from authentication.
 	// (This simply mirrors /health and exists for backward compatibility.)
 	s.mux.Handle(apiconstants.AdminHealth, handleRequestsUnauthenticated)
 	// The /_status/vars endpoint is not authenticated either. Useful for monitoring.
