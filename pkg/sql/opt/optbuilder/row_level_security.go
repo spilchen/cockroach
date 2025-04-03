@@ -59,8 +59,6 @@ func (b *Builder) addRowLevelSecurityFilter(
 		memo.FiltersExpr{b.factory.ConstructFiltersItem(scalar)})
 }
 
-// SPILLY - can we create a helper to use in the staleness check?
-
 // buildRowLevelSecurityUsingExpression generates a scalar expression for read
 // operations by combining all applicable RLS policies. An expression is always
 // returned; if no policies apply, a 'false' expression is returned.
