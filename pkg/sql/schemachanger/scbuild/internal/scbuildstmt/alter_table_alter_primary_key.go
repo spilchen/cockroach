@@ -23,9 +23,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
-	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
@@ -279,13 +277,12 @@ func alterPKInPrimaryIndexAndItsTemp(
 // checkForEarlyExit asserts several precondition for a
 // `ALTER PRIMARY KEY`, including
 //  1. no expression columns allowed;
-//  2. no duplicate storage parameters;
-//  3. no columns that are in `DROPPED` state;
-//  4. no inaccessible columns;
-//  5. no nullable columns;
-//  6. no virtual columns (starting from v22.1);
-//  7. No columns that are scheduled to be dropped (target status set to `ABSENT`);
-//  8. add more here
+//  2. no columns that are in `DROPPED` state;
+//  3. no inaccessible columns;
+//  4. no nullable columns;
+//  5. no virtual columns (starting from v22.1);
+//  6. No columns that are scheduled to be dropped (target status set to `ABSENT`);
+//  7. add more here
 //
 // Panic if any precondition is found unmet.
 func checkForEarlyExit(b BuildCtx, tbl *scpb.Table, t alterPrimaryKeySpec) {
@@ -298,8 +295,6 @@ func checkForEarlyExit(b BuildCtx, tbl *scpb.Table, t alterPrimaryKeySpec) {
 	); err != nil {
 		panic(err)
 	}
-
-	maybeApplyStorageParameters(b, t.StorageParams, &indexSpec{})
 
 	usedColumns := make(map[tree.Name]bool, len(t.Columns))
 	for _, col := range t.Columns {
@@ -349,8 +344,12 @@ func checkForEarlyExit(b BuildCtx, tbl *scpb.Table, t alterPrimaryKeySpec) {
 		columnType := mustRetrieveColumnTypeElem(b, tbl.TableID, colElem.ColumnID)
 		// Check if the column type is indexable.
 		if !colinfo.ColumnTypeIsIndexable(columnType.Type) {
-			panic(sqlerrors.NewColumnNotIndexableError(
-				col.Column.String(), columnType.Type.Name(), columnType.Type.DebugString()))
+			panic(unimplemented.NewWithIssueDetailf(35730,
+				columnType.Type.DebugString(),
+				"column %s is of type %s and thus is not indexable",
+				col.Column,
+				columnType.Type),
+			)
 		}
 	}
 }
@@ -447,18 +446,12 @@ func fallBackIfRegionalByRowTable(b BuildCtx, t tree.NodeFormatter, tableID cati
 	}
 }
 
-// mustRetrieveCurrentPrimaryIndexElement retrieves the current primary index,
-// which must be public.
 func mustRetrieveCurrentPrimaryIndexElement(
 	b BuildCtx, tableID catid.DescID,
 ) (res *scpb.PrimaryIndex) {
 	scpb.ForEachPrimaryIndex(b.QueryByID(tableID), func(
 		current scpb.Status, target scpb.TargetStatus, e *scpb.PrimaryIndex,
 	) {
-		// TODO(fqazi): We don't support DROP CONSTRAINT PRIMARY KEY, so there is no
-		// risk of ever seeing a non-public PrimaryIndex element. In the future when
-		// we do support DROP CONSTRAINT PRIMARY KEY, we should adapt callers of
-		// this function to handle the absent primary index case.
 		if current == scpb.Status_PUBLIC {
 			res = e
 		}
@@ -698,7 +691,7 @@ func recreateAllSecondaryIndexes(
 						kind:      scpb.IndexColumn_KEY,
 						direction: ic.Direction,
 					})
-					if idx.Type == idxtype.INVERTED && ic.OrdinalInKind >= largestKeyOrdinal {
+					if idx.IsInverted && ic.OrdinalInKind >= largestKeyOrdinal {
 						largestKeyOrdinal = ic.OrdinalInKind
 						invertedColumnID = ic.ColumnID
 					}
@@ -710,7 +703,7 @@ func recreateAllSecondaryIndexes(
 				if !idxColIDs.Contains(ics.columnID) {
 					idxColIDs.Add(ics.columnID)
 					inColumns = append(inColumns, ics)
-				} else if idx.Type == idxtype.INVERTED && invertedColumnID == ics.columnID {
+				} else if idx.IsInverted && invertedColumnID == ics.columnID {
 					// In an inverted index, the inverted column's value is not equal to
 					// the actual data in the row for that column. As a result, if the
 					// inverted column happens to also be in the primary key, it's crucial
@@ -744,7 +737,6 @@ func recreateAllSecondaryIndexes(
 		}
 		in, temp := makeSwapIndexSpec(b, out, sourcePrimaryIndex.IndexID, inColumns, false /* inUseTempIDs */)
 		in.secondary.RecreateSourceIndexID = out.indexID()
-		in.secondary.RecreateTargetIndexID = newPrimaryIndex.IndexID
 		out.apply(b.Drop)
 		in.apply(b.Add)
 		temp.apply(b.AddTransient)
@@ -797,7 +789,6 @@ func addNewUniqueSecondaryIndexAndTempIndex(
 		IndexID:             nextRelationIndexID(b, tbl),
 		IsUnique:            true,
 		IsInverted:          oldPrimaryIndexElem.IsInverted,
-		Type:                oldPrimaryIndexElem.Type,
 		Sharding:            oldPrimaryIndexElem.Sharding,
 		IsCreatedExplicitly: false,
 		ConstraintID:        b.NextTableConstraintID(tbl.TableID),

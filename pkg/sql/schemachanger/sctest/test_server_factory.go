@@ -119,7 +119,7 @@ func newJobsKnobs() *jobs.TestingKnobs {
 		if sc == nil {
 			return nil
 		}
-		if orig.State != jobs.StateRunning || updated.State != jobs.StateSucceeded {
+		if orig.Status != jobs.StatusRunning || updated.Status != jobs.StatusSucceeded {
 			return nil
 		}
 		injectedFailures.Lock()

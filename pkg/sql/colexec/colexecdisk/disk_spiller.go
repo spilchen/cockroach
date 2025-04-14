@@ -15,8 +15,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra/execopnode"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
 	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
-	"github.com/cockroachdb/cockroach/pkg/util/mon"
 	"github.com/cockroachdb/errors"
+	"github.com/cockroachdb/redact"
 )
 
 // oneInputDiskSpiller is an Operator that manages the fallback from a one
@@ -80,7 +80,7 @@ import (
 func NewOneInputDiskSpiller(
 	input colexecop.Operator,
 	inMemoryOp colexecop.BufferingInMemoryOperator,
-	inMemoryMemMonitorName mon.Name,
+	inMemoryMemMonitorName redact.SafeString,
 	diskBackedOpConstructor func(input colexecop.Operator) colexecop.Operator,
 	diskBackedReuseMode colexecop.BufferingOpReuseMode,
 	spillingCallbackFn func(),
@@ -90,10 +90,9 @@ func NewOneInputDiskSpiller(
 		diskBackedReuseMode:     diskBackedReuseMode,
 	}
 	op.diskSpillerBase = diskSpillerBase{
-		inputs:     []colexecop.Operator{input},
-		inMemoryOp: inMemoryOp,
-		// TODO(mgartner): Do not convert the name to a string.
-		inMemoryMemMonitorNames: []string{inMemoryMemMonitorName.String()},
+		inputs:                  []colexecop.Operator{input},
+		inMemoryOp:              inMemoryOp,
+		inMemoryMemMonitorNames: []string{string(inMemoryMemMonitorName)},
 		diskBackedOpConstructor: op.constructDiskBackedOp,
 		spillingCallbackFn:      spillingCallbackFn,
 	}
@@ -170,7 +169,7 @@ func (d *oneInputDiskSpiller) constructDiskBackedOp() colexecop.Operator {
 func NewTwoInputDiskSpiller(
 	inputOne, inputTwo colexecop.Operator,
 	inMemoryOp colexecop.BufferingInMemoryOperator,
-	inMemoryMemMonitorNames []mon.Name,
+	inMemoryMemMonitorNames []redact.SafeString,
 	diskBackedOpConstructor func(inputOne, inputTwo colexecop.Operator) colexecop.Operator,
 	spillingCallbackFn func(),
 ) colexecop.ClosableOperator {
@@ -179,8 +178,7 @@ func NewTwoInputDiskSpiller(
 	}
 	names := make([]string, len(inMemoryMemMonitorNames))
 	for i := range names {
-		// TODO(mgartner): Do not convert the names to strings.
-		names[i] = inMemoryMemMonitorNames[i].String()
+		names[i] = string(inMemoryMemMonitorNames[i])
 	}
 	op.diskSpillerBase = diskSpillerBase{
 		inputs:                  []colexecop.Operator{inputOne, inputTwo},

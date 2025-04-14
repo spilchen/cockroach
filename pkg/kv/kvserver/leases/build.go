@@ -111,8 +111,8 @@ type BuildInput struct {
 	MinLeaseProposedTS hlc.ClockTimestamp
 
 	// Information about raft.
-	RaftStatus    *raft.Status
-	RaftCompacted kvpb.RaftIndex
+	RaftStatus     *raft.Status
+	RaftFirstIndex kvpb.RaftIndex
 
 	// Information about the previous lease.
 	PrevLease roachpb.Lease
@@ -132,9 +132,6 @@ type BuildInput struct {
 	// alive and caught up on its log (e.g. they just sent it a snapshot) and also
 	// can't tolerate rejected lease transfers.
 	BypassSafetyChecks bool
-
-	// DesiredLeaseType is the desired lease type for this replica.
-	DesiredLeaseType roachpb.LeaseType
 }
 
 // PrevLocal returns whether the previous lease was held by the local store.
@@ -254,12 +251,11 @@ func (i BuildInput) toVerifyInput() VerifyInput {
 		LocalReplicaID:     i.LocalReplicaID,
 		Desc:               i.Desc,
 		RaftStatus:         i.RaftStatus,
-		RaftCompacted:      i.RaftCompacted,
+		RaftFirstIndex:     i.RaftFirstIndex,
 		PrevLease:          i.PrevLease,
 		PrevLeaseExpired:   i.PrevLeaseExpired,
 		NextLeaseHolder:    i.NextLeaseHolder,
 		BypassSafetyChecks: i.BypassSafetyChecks,
-		DesiredLeaseType:   i.DesiredLeaseType,
 	}
 }
 

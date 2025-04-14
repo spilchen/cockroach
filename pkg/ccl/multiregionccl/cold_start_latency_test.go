@@ -22,7 +22,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/spanconfig"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/pgurlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils/regionlatency"
 	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
@@ -34,7 +33,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -153,6 +152,10 @@ func TestColdStartLatency(t *testing.T) {
 	tdb.Exec(t, `SET CLUSTER SETTING kv.rangefeed.closed_timestamp_refresh_interval = '200ms'`)
 	tdb.Exec(t, "SET CLUSTER SETTING kv.allocator.load_based_rebalancing = off")
 	tdb.Exec(t, "SET CLUSTER SETTING kv.allocator.min_lease_transfer_interval = '10ms'")
+	// Until a migration is added, we cannot guarantee that the descriptor will have
+	// the appropriate zone config for MR testing with fake latency. So, avoid using
+	// session based leases here.
+	tdb.Exec(t, "SET CLUSTER SETTING sql.catalog.experimental_use_session_based_leasing='off'")
 	// Lengthen the lead time for the global tables to prevent overload from
 	// resulting in delays in propagating closed timestamps and, ultimately
 	// forcing requests from being redirected to the leaseholder. Without this
@@ -319,7 +322,7 @@ COMMIT;`}
 		})
 		require.NoError(t, err)
 		defer tenant.AppStopper().Stop(ctx)
-		pgURL, cleanup, err := pgurlutils.PGUrlWithOptionalClientCertsE(
+		pgURL, cleanup, err := sqlutils.PGUrlWithOptionalClientCertsE(
 			tenant.AdvSQLAddr(), "tenantdata", url.UserPassword("foo", password),
 			false, "", // withClientCerts
 		)

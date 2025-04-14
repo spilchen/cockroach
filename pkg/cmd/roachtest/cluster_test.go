@@ -8,22 +8,23 @@ package main
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/task"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	test2 "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/vm/azure"
 	"github.com/cockroachdb/cockroach/pkg/testutils/datapathutils"
+	"github.com/cockroachdb/cockroach/pkg/util/version"
 	"github.com/cockroachdb/datadriven"
 	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/version"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,35 +68,6 @@ func TestClusterNodes(t *testing.T) {
 	}
 }
 
-func TestSeededRandGroups(t *testing.T) {
-	rng := rand.New(rand.NewSource(1))
-	testCases := []struct {
-		numNodes  int
-		numGroups int
-		expected  []string
-	}{
-		{numNodes: 1, numGroups: 1, expected: []string{":1"}},
-		{numNodes: 10, numGroups: 1, expected: []string{":1-10"}},
-		{numNodes: 10, numGroups: 2, expected: []string{":1,3,8,10", ":2,4-7,9"}},
-		{numNodes: 3, numGroups: 3, expected: []string{":3", ":2", ":1"}},
-		{numNodes: 5, numGroups: 3, expected: []string{":2", ":1,3-4", ":5"}},
-	}
-	for _, tc := range testCases {
-		t.Run("", func(t *testing.T) {
-			c := &clusterImpl{spec: spec.MakeClusterSpec(tc.numNodes)}
-			nodes := c.All()
-			groups, err := nodes.SeededRandGroups(rng, tc.numGroups)
-			require.NoError(t, err)
-			for i, group := range groups {
-				nodeList := c.MakeNodes(group)
-				if tc.expected[i] != nodeList {
-					t.Errorf("expected %s, but found %s", tc.expected[i], nodeList)
-				}
-			}
-		})
-	}
-}
-
 type testWrapper struct {
 	*testing.T
 	l *logger.Logger
@@ -103,10 +75,6 @@ type testWrapper struct {
 
 func (t testWrapper) GetRunId() string {
 	return "mock-run-id"
-}
-
-func (t testWrapper) Owner() string {
-	return "mock-owner"
 }
 
 func (t testWrapper) ExportOpenmetrics() bool {
@@ -184,11 +152,7 @@ func (t testWrapper) NewErrorGroup(_ ...task.Option) task.ErrorGroup {
 	panic("implement me")
 }
 
-func (t testWrapper) Monitor() test.Monitor {
-	panic("implement me")
-}
-
-var _ test.Test = testWrapper{}
+var _ test2.Test = testWrapper{}
 
 // ArtifactsDir is part of the test.Test interface.
 func (t testWrapper) ArtifactsDir() string {
@@ -712,6 +676,21 @@ func TestMachineTypes(t *testing.T) {
 			return out.String()
 		})
 	})
+}
+
+func TestCmdLogFileName(t *testing.T) {
+	ts := time.Date(2000, 1, 1, 15, 4, 12, 0, time.Local)
+
+	const exp = `run_150412.000000000_n1,3-4,9_cockroach-bla-foo-ba`
+	nodes := option.NodeListOption{1, 3, 4, 9}
+	assert.Equal(t,
+		exp,
+		cmdLogFileName(ts, nodes, "./cockroach", "bla", "--foo", "bar"),
+	)
+	assert.Equal(t,
+		exp,
+		cmdLogFileName(ts, nodes, "./cockroach bla --foo bar"),
+	)
 }
 
 func TestVerifyLibraries(t *testing.T) {

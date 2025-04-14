@@ -17,7 +17,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/schemaexpr"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/errors"
@@ -102,13 +101,8 @@ func indexForDisplay(
 	if index.Unique {
 		f.WriteString("UNIQUE ")
 	}
-	if !f.HasFlags(tree.FmtPGCatalog) {
-		switch index.Type {
-		case idxtype.INVERTED:
-			f.WriteString("INVERTED ")
-		case idxtype.VECTOR:
-			f.WriteString("VECTOR ")
-		}
+	if !f.HasFlags(tree.FmtPGCatalog) && index.Type == descpb.IndexDescriptor_INVERTED {
+		f.WriteString("INVERTED ")
 	}
 	f.WriteString("INDEX ")
 	f.FormatNameP(&index.Name)
@@ -119,12 +113,9 @@ func indexForDisplay(
 
 	if f.HasFlags(tree.FmtPGCatalog) {
 		f.WriteString(" USING")
-		switch index.Type {
-		case idxtype.INVERTED:
+		if index.Type == descpb.IndexDescriptor_INVERTED {
 			f.WriteString(" gin")
-		case idxtype.VECTOR:
-			f.WriteString(" cspann")
-		default:
+		} else {
 			f.WriteString(" btree")
 		}
 	}
@@ -248,20 +239,17 @@ func FormatIndexElements(
 		} else {
 			f.FormatNameP(&index.KeyColumnNames[i])
 		}
-		// TODO(drewk): we might need to print something like "vector_l2_ops" for
-		// vector indexes.
-		if index.Type == idxtype.INVERTED &&
+		if index.Type == descpb.IndexDescriptor_INVERTED &&
 			col.GetID() == index.InvertedColumnID() && len(index.InvertedColumnKinds) > 0 {
 			switch index.InvertedColumnKinds[0] {
 			case catpb.InvertedIndexColumnKind_TRIGRAM:
 				f.WriteString(" gin_trgm_ops")
 			}
 		}
-		// The last column of an inverted or vector index cannot have a DESC
-		// direction because it does not have a linear ordering. Since the default
-		// direction is ASC, we omit the direction entirely for inverted/vector
-		// index columns.
-		if i < n-1 || index.Type.HasLinearOrdering() {
+		// The last column of an inverted index cannot have a DESC direction.
+		// Since the default direction is ASC, we omit the direction entirely
+		// for inverted index columns.
+		if i < n-1 || index.Type != descpb.IndexDescriptor_INVERTED {
 			f.WriteByte(' ')
 			f.WriteString(index.KeyColumnDirections[i].String())
 		}

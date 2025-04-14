@@ -3031,7 +3031,7 @@ func TestReplicaLatchingOptimisticEvaluationSkipLocked(t *testing.T) {
 						resp := br.Responses[i]
 						if err := kvpb.ResponseKeyIterate(req.GetInner(), resp.GetInner(), func(k roachpb.Key) {
 							respKeys = append(respKeys, k)
-						}, false /* includeLockedNonExisting */); err != nil {
+						}); err != nil {
 							return kvpb.NewError(err)
 						}
 					}
@@ -7498,7 +7498,7 @@ func TestEntries(t *testing.T) {
 			// Case 19: lo and hi are available, but entry cache evicted.
 			{lo: indexes[5], hi: indexes[9], expResultCount: 4, expCacheCount: 0, setup: func() {
 				// Manually evict cache for the first 10 log entries.
-				repl.store.raftEntryCache.Clear(rangeID, indexes[9])
+				repl.store.raftEntryCache.Clear(rangeID, indexes[9]+1)
 				indexes = append(indexes, populateLogs(10, 40)...)
 			}},
 			// Case 20: lo and hi are available, entry cache evicted and hi available in cache.
@@ -7547,7 +7547,6 @@ func TestEntries(t *testing.T) {
 	})
 }
 
-// TODO(pav-kv): this test belongs to logstore. And requires a cleanup.
 func TestTerm(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -7588,7 +7587,7 @@ func TestTerm(t *testing.T) {
 		repl.mu.Lock()
 		defer repl.mu.Unlock()
 
-		firstIndex := repl.raftCompactedIndexRLocked() + 1
+		firstIndex := repl.raftFirstIndexRLocked()
 		if firstIndex != indexes[5] {
 			t.Fatalf("expected firstIndex %d to be %d", firstIndex, indexes[4])
 		}
@@ -7601,6 +7600,7 @@ func TestTerm(t *testing.T) {
 			t.Errorf("expected ErrCompacted, got %s", err)
 		}
 
+		// FirstIndex-1 should return the term of firstIndex.
 		firstIndexTerm, err := tc.repl.raftTermLocked(firstIndex)
 		if err != nil {
 			t.Errorf("expect no error, got %s", err)
@@ -8161,10 +8161,7 @@ func TestReplicaRefreshPendingCommandsTicks(t *testing.T) {
 	cfg.RaftTickInterval = time.Hour
 	// Disable pre-campaign store liveness checks because we're disabling ticking
 	// above, and we don't want the first election attempt to guaranteed fail.
-	cfg.TestingKnobs.RaftTestingKnobs = &raft.TestingKnobs{
-		DisablePreCampaignStoreLivenessCheck: true,
-	}
-
+	cfg.TestingDisablePreCampaignStoreLivenessCheck = true
 	stopper := stop.NewStopper()
 	defer stopper.Stop(ctx)
 	tc.StartWithStoreConfig(ctx, t, stopper, cfg)
@@ -9322,11 +9319,10 @@ func TestReplicaMetrics(t *testing.T) {
 			spanConfig := cfg.DefaultSpanConfig
 			spanConfig.NumReplicas = c.replicas
 
-			// Alternate between quiescent/asleep and non-quiescent/awake replicas to
-			// test the quiescent metric.
+			// Alternate between quiescent and non-quiescent replicas to test the
+			// quiescent metric.
 			c.expected.Quiescent = i%2 == 0
-			c.expected.Asleep = i%3 == 0
-			c.expected.Ticking = !c.expected.Quiescent && !c.expected.Asleep
+			c.expected.Ticking = !c.expected.Quiescent
 			metrics := calcReplicaMetrics(calcReplicaMetricsInput{
 				raftCfg:            &cfg.RaftConfig,
 				conf:               spanConfig,
@@ -9335,7 +9331,6 @@ func TestReplicaMetrics(t *testing.T) {
 				raftStatus:         c.raftStatus,
 				storeID:            c.storeID,
 				quiescent:          c.expected.Quiescent,
-				asleep:             c.expected.Asleep,
 				ticking:            c.expected.Ticking,
 				raftLogSize:        c.raftLogSize,
 				raftLogSizeTrusted: true,
@@ -11939,8 +11934,7 @@ func TestReplicaShouldTransferRaftLeadershipToLeaseholder(t *testing.T) {
 	defer log.Scope(t).Close(t)
 
 	type params struct {
-		raftStatus              raft.BasicStatus
-		progress                *tracker.Progress
+		raftStatus              raft.SparseStatus
 		leaseStatus             kvserverpb.LeaseStatus
 		leaseAcquisitionPending bool
 		storeID                 roachpb.StoreID
@@ -11953,19 +11947,23 @@ func TestReplicaShouldTransferRaftLeadershipToLeaseholder(t *testing.T) {
 	const localID = 1
 	const remoteID = 2
 	base := params{
-		raftStatus: raft.BasicStatus{
-			SoftState: raft.SoftState{
-				RaftState: raftpb.StateLeader,
+		raftStatus: raft.SparseStatus{
+			BasicStatus: raft.BasicStatus{
+				SoftState: raft.SoftState{
+					RaftState: raftpb.StateLeader,
+				},
+				HardState: raftpb.HardState{
+					Lead:   localID,
+					Commit: 10,
+				},
 			},
-			HardState: raftpb.HardState{
-				Lead:   localID,
-				Commit: 10,
+			Progress: map[raftpb.PeerID]tracker.Progress{
+				remoteID: {Match: 10},
 			},
 		},
-		progress: &tracker.Progress{Match: 10},
 		leaseStatus: kvserverpb.LeaseStatus{
 			Lease: roachpb.Lease{Replica: roachpb.ReplicaDescriptor{
-				StoreID: remoteID,
+				ReplicaID: remoteID,
 			}},
 			State: kvserverpb.LeaseState_VALID,
 		},
@@ -11997,23 +11995,23 @@ func TestReplicaShouldTransferRaftLeadershipToLeaseholder(t *testing.T) {
 			p.leaseStatus.State = kvserverpb.LeaseState_EXPIRED
 		}},
 		"local lease": {false, func(p *params) {
-			p.leaseStatus.Lease.Replica.StoreID = localID
+			p.leaseStatus.Lease.Replica.ReplicaID = localID
 		}},
 		"lease request pending": {false, func(p *params) {
 			p.leaseAcquisitionPending = true
 		}},
 		"no progress": {false, func(p *params) {
-			p.progress = nil
+			p.raftStatus.Progress = map[raftpb.PeerID]tracker.Progress{}
 		}},
 		"insufficient progress": {false, func(p *params) {
-			p.progress = &tracker.Progress{Match: 9}
+			p.raftStatus.Progress = map[raftpb.PeerID]tracker.Progress{remoteID: {Match: 9}}
 		}},
 		"no progress, draining": {true, func(p *params) {
-			p.progress = nil
+			p.raftStatus.Progress = map[raftpb.PeerID]tracker.Progress{}
 			p.draining = true
 		}},
 		"insufficient progress, draining": {true, func(p *params) {
-			p.progress = &tracker.Progress{Match: 9}
+			p.raftStatus.Progress = map[raftpb.PeerID]tracker.Progress{remoteID: {Match: 9}}
 			p.draining = true
 		}},
 	}
@@ -12023,7 +12021,7 @@ func TestReplicaShouldTransferRaftLeadershipToLeaseholder(t *testing.T) {
 			p := base
 			tc.modify(&p)
 			require.Equal(t, tc.expect, shouldTransferRaftLeadershipToLeaseholderLocked(
-				p.raftStatus, p.progress, p.leaseStatus, p.leaseAcquisitionPending, p.storeID, p.draining))
+				p.raftStatus, p.leaseStatus, p.leaseAcquisitionPending, p.storeID, p.draining))
 		})
 	}
 }
@@ -15400,44 +15398,4 @@ func TestLockAcquisitions1PCInteractions(t *testing.T) {
 			})
 		})
 	})
-}
-
-// TestLeaderlessWatcherInit tests that the leaderless watcher is initialized
-// correctly.
-func TestLeaderlessWatcherInit(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-	ctx := context.Background()
-	tc := testContext{}
-	stopper := stop.NewStopper()
-	defer stopper.Stop(ctx)
-
-	// Set the leaderless threshold to 10 second.
-	tsc := TestStoreConfig(nil /* clock */)
-	ReplicaLeaderlessUnavailableThreshold.Override(ctx, &tsc.Settings.SV, 10*time.Second)
-	tc.StartWithStoreConfig(ctx, t, stopper, tsc)
-
-	repl, err := tc.store.GetReplica(1)
-	require.NoError(t, err)
-
-	repl.LeaderlessWatcher.mu.RLock()
-	defer repl.LeaderlessWatcher.mu.RUnlock()
-
-	// Initially, the leaderWatcher doesn't consider the replica as unavailable.
-	require.False(t, repl.LeaderlessWatcher.mu.unavailable)
-
-	// The leaderless timestamp is not set.
-	require.Equal(t, time.Time{}, repl.LeaderlessWatcher.mu.leaderlessTimestamp)
-
-	// The error is always loaded.
-	require.Regexp(t, "replica has been leaderless for 10s", repl.LeaderlessWatcher.Err())
-
-	// The channel is closed.
-	c := repl.LeaderlessWatcher.C()
-	select {
-	case <-c:
-		// Channel is closed, which is expected
-	default:
-		t.Fatalf("expected LeaderlessWatcher channel to be closed")
-	}
 }

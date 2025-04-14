@@ -40,7 +40,6 @@ import (
     "github.com/cockroachdb/cockroach/pkg/sql/sem/tree/treebin"
     "github.com/cockroachdb/cockroach/pkg/sql/sem/tree/treecmp"
     "github.com/cockroachdb/cockroach/pkg/sql/sem/tree/treewindow"
-    "github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
     "github.com/cockroachdb/cockroach/pkg/sql/types"
     "github.com/cockroachdb/cockroach/pkg/util/vector"
     "github.com/cockroachdb/errors"
@@ -941,8 +940,8 @@ func (u *sqlSymUnion) triggerTransitions() []*tree.TriggerTransition {
 func (u *sqlSymUnion) triggerForEach() tree.TriggerForEach {
   return u.val.(tree.TriggerForEach)
 }
-func (u *sqlSymUnion) indexType() idxtype.T {
-  return u.val.(idxtype.T)
+func (u *sqlSymUnion) indexType() tree.IndexType {
+  return u.val.(tree.IndexType)
 }
 func (u *sqlSymUnion) doBlockOptions() tree.DoBlockOptions {
     return u.val.(tree.DoBlockOptions)
@@ -1060,7 +1059,7 @@ func (u *sqlSymUnion) doBlockOption() tree.DoBlockOption {
 %token <str> SERIALIZABLE SERVER SERVICE SESSION SESSIONS SESSION_USER SET SETOF SETS SETTING SETTINGS
 %token <str> SHARE SHARED SHOW SIMILAR SIMPLE SIZE SKIP SKIP_LOCALITIES_CHECK SKIP_MISSING_FOREIGN_KEYS
 %token <str> SKIP_MISSING_SEQUENCES SKIP_MISSING_SEQUENCE_OWNERS SKIP_MISSING_VIEWS SKIP_MISSING_UDFS SMALLINT SMALLSERIAL
-%token <str> SNAPSHOT SOME SOURCE SPLIT SQL SQLLOGIN
+%token <str> SNAPSHOT SOME SPLIT SQL SQLLOGIN
 %token <str> STABLE START STATE STATEMENT STATISTICS STATUS STDIN STDOUT STOP STRAIGHT STREAM STRICT STRING STORAGE STORE STORED STORING SUBJECT SUBSTRING SUPER
 %token <str> SUPPORT SURVIVE SURVIVAL SYMMETRIC SYNTAX SYSTEM SQRT SUBSCRIPTION STATEMENTS
 
@@ -1435,7 +1434,7 @@ func (u *sqlSymUnion) doBlockOption() tree.DoBlockOption {
 %type <[]tree.KVOption> kv_option_list opt_with_options var_set_list opt_with_schedule_options
 %type <*tree.BackupOptions> opt_with_backup_options backup_options backup_options_list
 %type <*tree.RestoreOptions> opt_with_restore_options restore_options restore_options_list
-%type <*tree.TenantReplicationOptions> opt_with_replication_options replication_options replication_options_list source_replication_options source_replication_options_list
+%type <*tree.TenantReplicationOptions> opt_with_replication_options replication_options replication_options_list
 %type <tree.ShowBackupDetails> show_backup_details
 %type <*tree.ShowJobOptions> show_job_options show_job_options_list
 %type <*tree.ShowBackupOptions> opt_with_show_backup_options show_backup_options show_backup_options_list
@@ -1547,7 +1546,7 @@ func (u *sqlSymUnion) doBlockOption() tree.DoBlockOption {
 %type <[]*tree.Order> sortby_list sortby_no_index_list
 %type <tree.IndexElemList> index_params create_as_params
 %type <tree.IndexInvisibility> opt_index_visible alter_index_visible
-%type <idxtype.T> opt_index_access_method
+%type <tree.IndexType> opt_index_access_method
 %type <tree.NameList> name_list privilege_list
 %type <[]int32> opt_array_bounds
 %type <*tree.Batch> opt_batch_clause
@@ -3061,6 +3060,7 @@ alter_table_cmd:
   }
 | table_rls_mode ROW LEVEL SECURITY
   {
+    /* SKIP DOC */
     $$.val = &tree.AlterTableSetRLSMode{
       Mode: $1.rlsTableMode(),
     }
@@ -3354,15 +3354,14 @@ alter_attribute_action:
 // %Help: REFRESH - recalculate a materialized view
 // %Category: Misc
 // %Text:
-// REFRESH MATERIALIZED VIEW [CONCURRENTLY] view_name [AS OF SYSTEM TIME <expr>>] [WITH [NO] DATA]
+// REFRESH MATERIALIZED VIEW [CONCURRENTLY] view_name [WITH [NO] DATA]
 refresh_stmt:
-  REFRESH MATERIALIZED VIEW opt_concurrently view_name opt_as_of_clause opt_clear_data
+  REFRESH MATERIALIZED VIEW opt_concurrently view_name opt_clear_data
   {
     $$.val = &tree.RefreshMaterializedView{
       Name: $5.unresolvedObjectName(),
       Concurrently: $4.bool(),
-      AsOf: $6.asOfClause(),
-      RefreshDataOption: $7.refreshDataOption(),
+      RefreshDataOption: $6.refreshDataOption(),
     }
   }
 | REFRESH error // SHOW HELP: REFRESH
@@ -4098,10 +4097,6 @@ restore_options:
   {
     $$.val = &tree.RestoreOptions{ExperimentalOnline: true}
   }
-| EXPERIMENTAL COPY
-{
-  $$.val = &tree.RestoreOptions{ExperimentalCopy: true}
-}
 | REMOVE_REGIONS
   {
     $$.val = &tree.RestoreOptions{RemoveRegions: true, SkipLocalitiesCheck: true}
@@ -4992,29 +4987,14 @@ replication_options:
   {
     $$.val = &tree.TenantReplicationOptions{Retention: $3.expr()}
   }
-| READ VIRTUAL CLUSTER
-  {
-    $$.val = &tree.TenantReplicationOptions{EnableReaderTenant: tree.MakeDBool(true)}
-  }
-
-source_replication_options_list:
-  // Require at least one option
-  source_replication_options
-  {
-    $$.val = $1.tenantReplicationOptions()
-  }
-| source_replication_options_list ',' source_replication_options
-  {
-    if err := $1.tenantReplicationOptions().CombineWith($3.tenantReplicationOptions()); err != nil {
-      return setErr(sqllex, err)
-    }
-  }
-
-  // List of valid tenant replication options.
-source_replication_options:
+|
   EXPIRATION WINDOW '=' d_expr
   {
       $$.val = &tree.TenantReplicationOptions{ExpirationWindow: $4.expr()}
+  }
+| READ VIRTUAL CLUSTER
+  {
+    $$.val = &tree.TenantReplicationOptions{EnableReaderTenant: tree.MakeDBool(true)}
   }
 
 // %Help: CREATE SCHEDULE
@@ -5061,6 +5041,7 @@ create_extension_stmt:
 alter_policy_stmt:
   ALTER POLICY name ON table_name RENAME TO name
   {
+    /* SKIP DOC */
     $$.val = &tree.AlterPolicy{
       PolicyName: tree.Name($3),
       TableName: $5.unresolvedObjectName(),
@@ -5069,6 +5050,7 @@ alter_policy_stmt:
   }
 | ALTER POLICY name ON table_name opt_policy_roles opt_policy_exprs
   {
+    /* SKIP DOC */
     $$.val = &tree.AlterPolicy{
       PolicyName: tree.Name($3),
       TableName: $5.unresolvedObjectName(),
@@ -5081,7 +5063,7 @@ alter_policy_stmt:
 // %Help: CREATE POLICY - define a new row-level security policy for a table
 // %Category: DDL
 // %Text:
-// CREATE POLICY [IF NOT EXISTS] name ON table_name
+// CREATE POLICY name ON table_name
 //     [ AS { PERMISSIVE | RESTRICTIVE } ]
 //     [ FOR { ALL | SELECT | INSERT | UPDATE | DELETE } ]
 //     [ TO { role_name | PUBLIC | CURRENT_USER | SESSION_USER } [, ...] ]
@@ -5092,26 +5074,14 @@ alter_policy_stmt:
 create_policy_stmt:
   CREATE POLICY name ON table_name opt_policy_type opt_policy_command opt_policy_roles opt_policy_exprs
   {
+    /* SKIP DOC */
     $$.val = &tree.CreatePolicy{
-      IfNotExists: false,
       PolicyName: tree.Name($3),
       TableName: $5.unresolvedObjectName(),
       Type: $6.policyType(),
       Cmd: $7.policyCommand(),
       Roles: $8.roleSpecList(),
       Exprs: $9.policyExpressions(),
-    }
-  }
- | CREATE POLICY IF NOT EXISTS name ON table_name opt_policy_type opt_policy_command opt_policy_roles opt_policy_exprs
-  {
-    $$.val = &tree.CreatePolicy{
-      IfNotExists: true,
-      PolicyName: tree.Name($6),
-      TableName: $8.unresolvedObjectName(),
-      Type: $9.policyType(),
-      Cmd: $10.policyCommand(),
-      Roles: $11.roleSpecList(),
-      Exprs: $12.policyExpressions(),
     }
   }
  | CREATE POLICY error // SHOW HELP: CREATE POLICY
@@ -5125,6 +5095,7 @@ create_policy_stmt:
 drop_policy_stmt:
   DROP POLICY name ON table_name opt_drop_behavior
   {
+    /* SKIP DOC */
     $$.val = &tree.DropPolicy{
       PolicyName: tree.Name($3),
       TableName: $5.unresolvedObjectName(),
@@ -5134,6 +5105,7 @@ drop_policy_stmt:
   }
 | DROP POLICY IF EXISTS name ON table_name opt_drop_behavior
   {
+    /* SKIP DOC */
     $$.val = &tree.DropPolicy{
       PolicyName: tree.Name($5),
       TableName: $7.unresolvedObjectName(),
@@ -7850,7 +7822,6 @@ alter_virtual_cluster_service_stmt:
 // ALTER VIRTUAL CLUSTER <virtual_cluster_spec> COMPLETE REPLICATION TO LATEST
 // ALTER VIRTUAL CLUSTER <virtual_cluster_spec> COMPLETE REPLICATION TO SYSTEM TIME 'time'
 // ALTER VIRTUAL CLUSTER <virtual_cluster_spec> SET REPLICATION opt=value,...
-// ALTER VIRTUAL CLUSTER <virtual_cluster_spec> SET SOURCE REPLICATION opt=value,...
 alter_virtual_cluster_replication_stmt:
   ALTER virtual_cluster virtual_cluster_spec PAUSE REPLICATION
   {
@@ -7894,15 +7865,6 @@ alter_virtual_cluster_replication_stmt:
     $$.val = &tree.AlterTenantReplication{
       TenantSpec: $3.tenantSpec(),
       Options: *$6.tenantReplicationOptions(),
-    }
-  }
-| ALTER virtual_cluster virtual_cluster_spec SET REPLICATION SOURCE source_replication_options_list
-  {
-    /* SKIP DOC */
-    $$.val = &tree.AlterTenantReplication{
-      TenantSpec: $3.tenantSpec(),
-      Producer: true,
-      Options: *$7.tenantReplicationOptions(),
     }
   }
 | ALTER virtual_cluster virtual_cluster_spec START REPLICATION OF d_expr ON d_expr opt_with_replication_options
@@ -11273,7 +11235,7 @@ index_def:
     $$.val = &tree.IndexTableDef{
       Name:             "",
       Columns:          $4.idxElems(),
-      Type:             idxtype.INVERTED,
+      Inverted:         true,
       PartitionByIndex: $6.partitionByIndex(),
       StorageParams:    $7.storageParams(),
       Predicate:        $8.expr(),
@@ -11285,7 +11247,7 @@ index_def:
     $$.val = &tree.IndexTableDef{
       Name:             tree.Name($3),
       Columns:          $5.idxElems(),
-      Type:             idxtype.INVERTED,
+      Inverted:         true,
       PartitionByIndex: $7.partitionByIndex(),
       StorageParams:    $8.storageParams(),
       Predicate:        $9.expr(),
@@ -11297,7 +11259,7 @@ index_def:
     $$.val = &tree.IndexTableDef{
       Name:             "",
       Columns:          $4.idxElems(),
-      Type:             idxtype.VECTOR,
+      Vector:           true,
       PartitionByIndex: $6.partitionByIndex(),
       StorageParams:    $7.storageParams(),
       Predicate:        $8.expr(),
@@ -11309,7 +11271,7 @@ index_def:
     $$.val = &tree.IndexTableDef{
       Name:             tree.Name($3),
       Columns:          $5.idxElems(),
-      Type:             idxtype.VECTOR,
+      Vector:           true,
       PartitionByIndex: $7.partitionByIndex(),
       StorageParams:    $8.storageParams(),
       Predicate:        $9.expr(),
@@ -12246,7 +12208,8 @@ create_index_stmt:
       PartitionByIndex: $14.partitionByIndex(),
       StorageParams:    $15.storageParams(),
       Predicate:        $16.expr(),
-      Type:             indexType,
+      Inverted:         indexType == tree.IndexTypeInverted,
+      Vector:           indexType == tree.IndexTypeVector,
       Concurrently:     $4.bool(),
       Invisibility:     $17.indexInvisibility(),
     }
@@ -12264,7 +12227,8 @@ create_index_stmt:
       Sharded:          $15.shardedIndexDef(),
       Storing:          $16.nameList(),
       PartitionByIndex: $17.partitionByIndex(),
-      Type:             indexType,
+      Inverted:         indexType == tree.IndexTypeInverted,
+      Vector:           indexType == tree.IndexTypeVector,
       StorageParams:    $18.storageParams(),
       Predicate:        $19.expr(),
       Concurrently:     $4.bool(),
@@ -12278,7 +12242,7 @@ create_index_stmt:
       Name:             tree.Name($6),
       Table:            table,
       Unique:           $2.bool(),
-      Type:             idxtype.INVERTED,
+      Inverted:         true,
       Columns:          $10.idxElems(),
       Storing:          $12.nameList(),
       PartitionByIndex: $13.partitionByIndex(),
@@ -12295,7 +12259,7 @@ create_index_stmt:
       Name:             tree.Name($9),
       Table:            table,
       Unique:           $2.bool(),
-      Type:             idxtype.INVERTED,
+      Inverted:         true,
       IfNotExists:      true,
       Columns:          $13.idxElems(),
       Storing:          $15.nameList(),
@@ -12313,7 +12277,7 @@ create_index_stmt:
       Name:             tree.Name($6),
       Table:            table,
       Unique:           $2.bool(),
-      Type:             idxtype.VECTOR,
+      Vector:           true,
       Columns:          $10.idxElems(),
       Storing:          $12.nameList(),
       PartitionByIndex: $13.partitionByIndex(),
@@ -12330,7 +12294,7 @@ create_index_stmt:
       Name:             tree.Name($9),
       Table:            table,
       Unique:           $2.bool(),
-      Type:             idxtype.VECTOR,
+      Vector:           true,
       IfNotExists:      true,
       Columns:          $13.idxElems(),
       Storing:          $15.nameList(),
@@ -12347,14 +12311,14 @@ opt_index_access_method:
   USING name
   {
     /* FORCE DOC */
-    var val idxtype.T
+    var val tree.IndexType
     switch $2 {
       case "gin", "gist":
-        val = idxtype.INVERTED
+        val = tree.IndexTypeInverted
       case "btree":
-        val = idxtype.FORWARD
+        val = tree.IndexTypeForward
       case "cspann":
-        val = idxtype.VECTOR
+        val = tree.IndexTypeVector
       case "hash", "spgist", "brin":
         return unimplemented(sqllex, "index using " + $2)
       default:
@@ -12365,7 +12329,7 @@ opt_index_access_method:
   }
 | /* EMPTY */
   {
-    $$.val = idxtype.FORWARD
+    $$.val = tree.IndexTypeForward
   }
 
 opt_concurrently:
@@ -18454,7 +18418,6 @@ unreserved_keyword:
 | SKIP_MISSING_SEQUENCE_OWNERS
 | SKIP_MISSING_VIEWS
 | SKIP_MISSING_UDFS
-| SOURCE
 | SNAPSHOT
 | SPLIT
 | SQL
@@ -19046,7 +19009,6 @@ bare_label_keywords:
 | SMALLINT
 | SNAPSHOT
 | SOME
-| SOURCE
 | SPLIT
 | SQL
 | SQLLOGIN

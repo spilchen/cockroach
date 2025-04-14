@@ -229,9 +229,6 @@ type Catalog interface {
 	// returns true. Returns an error if query on the `system.users` table failed
 	HasAdminRole(ctx context.Context) (bool, error)
 
-	// UserHasAdminRole checks if the specified user has admin privileges.
-	UserHasAdminRole(ctx context.Context, user username.SQLUsername) (bool, error)
-
 	// HasRoleOption converts the roleoption to its SQL column name and checks if
 	// the user belongs to a role where the option has value true. Requires a
 	// valid transaction to be open.
@@ -240,10 +237,6 @@ type Catalog interface {
 	// the role options table. Example: CREATEROLE instead of NOCREATEROLE.
 	// NOLOGIN instead of LOGIN.
 	HasRoleOption(ctx context.Context, roleOption roleoption.Option) (bool, error)
-
-	// UserHasGlobalPrivilegeOrRoleOption returns a bool representing whether the given user
-	// has a global privilege or the corresponding legacy role option.
-	UserHasGlobalPrivilegeOrRoleOption(ctx context.Context, privilege privilege.Kind, user username.SQLUsername) (bool, error)
 
 	// FullyQualifiedName retrieves the fully qualified name of a data source.
 	// Note that:
@@ -275,7 +268,4 @@ type Catalog interface {
 	// GetRoutineOwner returns the username.SQLUsername of the routine's
 	// (specified by routineOid) owner.
 	GetRoutineOwner(ctx context.Context, routineOid oid.Oid) (username.SQLUsername, error)
-
-	// IsOwner returns true if user is the owner of the object o
-	IsOwner(ctx context.Context, o Object, user username.SQLUsername) (bool, error)
 }

@@ -7,7 +7,6 @@ package server
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/rsa"
@@ -20,7 +19,6 @@ import (
 	"os/exec"
 	"reflect"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -124,7 +122,7 @@ const (
 
 type metricMarshaler interface {
 	json.Marshaler
-	PrintAsText(io.Writer, expfmt.Format, bool) error
+	PrintAsText(io.Writer, expfmt.Format) error
 	ScrapeIntoPrometheus(pm *metric.PrometheusExporter)
 }
 
@@ -552,8 +550,6 @@ type StmtDiagnosticsRequester interface {
 	// - expiresAfter, if non-zero, indicates for how long the request should
 	//   stay active.
 	// - redacted, if true, indicates that the redacted bundle is requested.
-	// - username, if set, specifies the user that initiated this request. It
-	//   must be normalized.
 	InsertRequest(
 		ctx context.Context,
 		stmtFingerprint string,
@@ -563,7 +559,6 @@ type StmtDiagnosticsRequester interface {
 		minExecutionLatency time.Duration,
 		expiresAfter time.Duration,
 		redacted bool,
-		username string,
 	) error
 	// CancelRequest updates an entry in system.statement_diagnostics_requests
 	// for tracing a query with the given fingerprint to be expired (thus,
@@ -726,21 +721,6 @@ func (s *statusServer) dialNode(
 	return serverpb.NewStatusClient(conn), nil
 }
 
-// Gossip returns current state of gossip information on the given node
-// which is crucial for monitoring and debugging the gossip protocol in
-// CockroachDB cluster.
-func (t *statusServer) Gossip(
-	ctx context.Context, req *serverpb.GossipRequest,
-) (*gossip.InfoStatus, error) {
-	ctx = t.AnnotateCtx(ctx)
-
-	if err := t.privilegeChecker.RequireViewClusterMetadataPermission(ctx); err != nil {
-		return nil, err
-	}
-
-	return t.sqlServer.tenantConnect.Gossip(ctx, req)
-}
-
 // Gossip returns gossip network status. It is implemented
 // in the systemStatusServer since the system tenant has
 // access to gossip.
@@ -788,22 +768,6 @@ func (s *statusServer) redactGossipResponse(resp *gossip.InfoStatus) *gossip.Inf
 	}
 
 	return resp
-}
-
-// EngineStats returns statistical information of storage layer on the given node
-// which is crucial for diagnosing issues related to disk usage,compaction efficiency,
-// read/write amplification and other storage engine metrics critical for database
-// performance.
-func (t *statusServer) EngineStats(
-	ctx context.Context, req *serverpb.EngineStatsRequest,
-) (*serverpb.EngineStatsResponse, error) {
-	ctx = t.AnnotateCtx(ctx)
-
-	if err := t.privilegeChecker.RequireViewClusterMetadataPermission(ctx); err != nil {
-		return nil, err
-	}
-
-	return t.sqlServer.tenantConnect.EngineStats(ctx, req)
 }
 
 func (s *systemStatusServer) EngineStats(
@@ -2155,31 +2119,6 @@ func (s *statusServer) NodeUI(
 	return &resp, nil
 }
 
-// NetworkConnectivity collects info about connection statuses across all nodes.
-// This isn't tenant-specific information; it's about networking activity across
-// all tenants between nodes. It's accessible via the system tenant, and here
-// made available to secondary tenants with the `can_debug_process` capability.
-// This works well for shared-process mode, but in external-process mode, this
-// endpoint won't give a complete picture of network connectivity since the SQL
-// server might run entirely outside the KV node. We might need to extend this
-// endpoint or create a new one for SQL-SQL servers and SQL server to KV nodes.
-// This work is for the future. Currently, this endpoint only shows KV-KV nodes
-// network connectivity. So, it's not ready for external-process mode and should
-// only be enabled for shared-process mode. There's nothing enforcing this, but
-// it shouldn't be a problem. See issue #138156
-func (t *statusServer) NetworkConnectivity(
-	ctx context.Context, req *serverpb.NetworkConnectivityRequest,
-) (*serverpb.NetworkConnectivityResponse, error) {
-	ctx = t.AnnotateCtx(ctx)
-
-	err := t.privilegeChecker.RequireViewClusterMetadataPermission(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return t.sqlServer.tenantConnect.NetworkConnectivity(ctx, req)
-}
-
 // NetworkConnectivity collects information about connections statuses across all nodes.
 func (s *systemStatusServer) NetworkConnectivity(
 	ctx context.Context, req *serverpb.NetworkConnectivityRequest,
@@ -2409,9 +2348,8 @@ func (s *systemStatusServer) RaftDebug(
 }
 
 type varsHandler struct {
-	metricSource    metricMarshaler
-	st              *cluster.Settings
-	useStaticLabels bool
+	metricSource metricMarshaler
+	st           *cluster.Settings
 }
 
 func (h varsHandler) handleVars(w http.ResponseWriter, r *http.Request) {
@@ -2419,7 +2357,7 @@ func (h varsHandler) handleVars(w http.ResponseWriter, r *http.Request) {
 
 	contentType := expfmt.Negotiate(r.Header)
 	w.Header().Set(httputil.ContentTypeHeader, string(contentType))
-	err := h.metricSource.PrintAsText(w, contentType, h.useStaticLabels)
+	err := h.metricSource.PrintAsText(w, contentType)
 	if err != nil {
 		log.Errorf(ctx, "%v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2582,7 +2520,6 @@ func (s *systemStatusServer) rangesHelper(
 				Value: tier.Value,
 			})
 		}
-		quiescentOrAsleep := metrics.Quiescent || metrics.Asleep
 		return serverpb.RangeInfo{
 			Span:          span,
 			RaftState:     convertRaftStatus(raftStatus),
@@ -2607,7 +2544,7 @@ func (s *systemStatusServer) rangesHelper(
 				Underreplicated:        metrics.Underreplicated,
 				Overreplicated:         metrics.Overreplicated,
 				NoLease:                metrics.Leader && !metrics.LeaseValid && !metrics.Quiescent,
-				QuiescentEqualsTicking: raftStatus != nil && quiescentOrAsleep == metrics.Ticking,
+				QuiescentEqualsTicking: raftStatus != nil && metrics.Quiescent == metrics.Ticking,
 				RaftLogTooLarge:        metrics.RaftLogTooLarge,
 				RangeTooLarge:          metrics.RangeTooLarge,
 				CircuitBreakerError:    len(state.CircuitBreakerError) > 0,
@@ -2849,6 +2786,71 @@ func (s *systemStatusServer) TenantRanges(
 	return resp, nil
 }
 
+// HotRanges returns the hottest ranges on each store on the requested node(s).
+func (s *systemStatusServer) HotRanges(
+	ctx context.Context, req *serverpb.HotRangesRequest,
+) (*serverpb.HotRangesResponse, error) {
+	ctx = authserver.ForwardSQLIdentityThroughRPCCalls(ctx)
+	ctx = s.AnnotateCtx(ctx)
+
+	if err := s.privilegeChecker.RequireViewClusterMetadataPermission(ctx); err != nil {
+		// NB: not using srverrors.ServerError() here since the priv checker
+		// already returns a proper gRPC error status.
+		return nil, err
+	}
+
+	response := &serverpb.HotRangesResponse{
+		NodeID:            roachpb.NodeID(s.serverIterator.getID()),
+		HotRangesByNodeID: make(map[roachpb.NodeID]serverpb.HotRangesResponse_NodeResponse),
+	}
+
+	if len(req.NodeID) > 0 {
+		requestedNodeID, local, err := s.parseNodeID(req.NodeID)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+
+		// Only hot ranges from the local node.
+		if local {
+			response.HotRangesByNodeID[requestedNodeID] = s.localHotRanges(ctx, roachpb.TenantID{})
+			return response, nil
+		}
+
+		// Only hot ranges from one non-local node.
+		status, err := s.dialNode(ctx, requestedNodeID)
+		if err != nil {
+			return nil, srverrors.ServerError(ctx, err)
+		}
+		return status.HotRanges(ctx, req)
+	}
+
+	// Hot ranges from all nodes.
+	remoteRequest := serverpb.HotRangesRequest{NodeID: "local"}
+	nodeFn := func(ctx context.Context, status serverpb.StatusClient, _ roachpb.NodeID) (*serverpb.HotRangesResponse, error) {
+		return status.HotRanges(ctx, &remoteRequest)
+	}
+	responseFn := func(nodeID roachpb.NodeID, hotRangesResp *serverpb.HotRangesResponse) {
+		response.HotRangesByNodeID[nodeID] = hotRangesResp.HotRangesByNodeID[nodeID]
+	}
+	errorFn := func(nodeID roachpb.NodeID, err error) {
+		response.HotRangesByNodeID[nodeID] = serverpb.HotRangesResponse_NodeResponse{
+			ErrorMessage: err.Error(),
+		}
+	}
+
+	if err := iterateNodes(ctx, s.serverIterator, s.stopper, "hot ranges",
+		noTimeout,
+		s.dialNode,
+		nodeFn,
+		responseFn,
+		errorFn,
+	); err != nil {
+		return nil, srverrors.ServerError(ctx, err)
+	}
+
+	return response, nil
+}
+
 func (t *statusServer) HotRangesV2(
 	ctx context.Context, req *serverpb.HotRangesRequest,
 ) (*serverpb.HotRangesResponseV2, error) {
@@ -2859,20 +2861,7 @@ func (t *statusServer) HotRangesV2(
 		return nil, err
 	}
 
-	resp, err := t.sqlServer.tenantConnect.HotRangesV2(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	ti, _ := t.sqlServer.tenantConnect.TenantInfo()
-	if ti.TenantID.IsSet() && !req.StatsOnly {
-		err = t.addDescriptorsToHotRanges(ctx, resp)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return resp, err
+	return t.sqlServer.tenantConnect.HotRangesV2(ctx, req)
 }
 
 // HotRangesV2 returns hot ranges from all stores on requested node or all nodes for specified tenant
@@ -2908,49 +2897,66 @@ func (s *systemStatusServer) HotRangesV2(
 		ErrorsByNodeID: make(map[roachpb.NodeID]string),
 	}
 
-	nodes := req.Nodes
-	if req.NodeID != "" {
-		nodes = append(nodes, req.NodeID)
-	}
-	requestedNodes := []roachpb.NodeID{}
-	for _, nodeID := range nodes {
-		requestedNodeID, _, err := s.parseNodeID(nodeID)
+	var requestedNodes []roachpb.NodeID
+	if len(req.NodeID) > 0 {
+		requestedNodeID, local, err := s.parseNodeID(req.NodeID)
 		if err != nil {
 			return nil, err
 		}
-		// Only execute the local call if the node is explicitly the local string.
-		if localRE.Match([]byte(nodeID)) {
-			// can only call one node if the local string is set.
-			if len(req.Nodes) > 1 {
-				return nil, errors.New("cannot call 'local' mixed with other nodes")
-			}
-
-			resp, err := s.localHotRanges(tenantID, requestedNodeID, int(req.PerNodeLimit))
-			if err != nil {
-				return nil, err
-			}
-
-			// If explicitly set as the system tenant, or unset, add descriptor data to the reposnse.
-			if !tenantID.IsSet() && !req.StatsOnly {
-				err = s.addDescriptorsToHotRanges(ctx, resp)
-				if err != nil {
+		if local {
+			resp := s.localHotRanges(ctx, tenantID)
+			var ranges []*serverpb.HotRangesResponseV2_HotRange
+			var rangeIndexMappings map[roachpb.RangeID]apiutil.IndexNamesList
+			for _, store := range resp.Stores {
+				rangeDescriptors := []roachpb.RangeDescriptor{}
+				for _, r := range store.HotRanges {
+					rangeDescriptors = append(rangeDescriptors, r.Desc)
+				}
+				if err = s.sqlServer.distSQLServer.DB.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
+					databases, err := txn.Descriptors().GetAllDatabaseDescriptorsMap(ctx, txn.KV())
+					if err != nil {
+						return err
+					}
+					rangeIndexMappings, err = apiutil.GetRangeIndexMapping(ctx, txn, s.sqlServer.execCfg.Codec, databases, rangeDescriptors)
+					return err
+				}); err != nil {
 					return nil, err
 				}
-			}
+				for _, r := range store.HotRanges {
+					var replicaNodeIDs []roachpb.NodeID
 
-			response.Ranges = append(response.Ranges, resp.Ranges...)
+					for _, repl := range r.Desc.Replicas().Descriptors() {
+						replicaNodeIDs = append(replicaNodeIDs, repl.NodeID)
+					}
+
+					databases, tables, indexes := rangeIndexMappings[r.Desc.RangeID].ToOutput()
+
+					ranges = append(ranges, &serverpb.HotRangesResponseV2_HotRange{
+						RangeID:             r.Desc.RangeID,
+						NodeID:              requestedNodeID,
+						QPS:                 r.QueriesPerSecond,
+						WritesPerSecond:     r.WritesPerSecond,
+						ReadsPerSecond:      r.ReadsPerSecond,
+						WriteBytesPerSecond: r.WriteBytesPerSecond,
+						ReadBytesPerSecond:  r.ReadBytesPerSecond,
+						CPUTimePerSecond:    r.CPUTimePerSecond,
+						ReplicaNodeIds:      replicaNodeIDs,
+						LeaseholderNodeID:   r.LeaseholderNodeID,
+						StoreID:             store.StoreID,
+						Databases:           databases,
+						Tables:              tables,
+						Indexes:             indexes,
+					})
+				}
+			}
+			response.Ranges = ranges
+			response.ErrorsByNodeID[requestedNodeID] = resp.ErrorMessage
 			return response, nil
 		}
-
-		requestedNodes = append(requestedNodes, requestedNodeID)
+		requestedNodes = []roachpb.NodeID{requestedNodeID}
 	}
 
-	remoteRequest := serverpb.HotRangesRequest{
-		Nodes:        []string{"local"},
-		TenantID:     req.TenantID,
-		PerNodeLimit: req.PerNodeLimit,
-		StatsOnly:    req.StatsOnly,
-	}
+	remoteRequest := serverpb.HotRangesRequest{NodeID: "local", TenantID: req.TenantID}
 	nodeFn := func(ctx context.Context, status serverpb.StatusClient, nodeID roachpb.NodeID) ([]*serverpb.HotRangesResponseV2_HotRange, error) {
 		nodeResp, err := status.HotRangesV2(ctx, &remoteRequest)
 		if err != nil {
@@ -2984,135 +2990,43 @@ func (s *systemStatusServer) HotRangesV2(
 	return response, nil
 }
 
-// localHotRanges returns information about the "hot" ranges (ranges with high activity)
-// for a specific node. If tenantID is set, it filters ranges for that specific tenant.
-// It collects range descriptors, replica information, performance metrics, and
-// database/table mapping details for each hot range.
-//
-// Parameters:
-//   - ctx: The context for the operation
-//   - tenantID: If set, filters hot ranges for the specific tenant
-//   - requestedNodeID: The ID of the node whose hot ranges are requested
-//
-// Returns a HotRangesResponseV2 containing detailed information about each hot range,
-// or an error if the operation fails.
 func (s *systemStatusServer) localHotRanges(
-	tenantID roachpb.TenantID, requestedNodeID roachpb.NodeID, localLimit int,
-) (*serverpb.HotRangesResponseV2, error) {
-	// Initialize response object
-	var resp serverpb.HotRangesResponseV2
-
-	// Visit each store in the node to collect hot range information
+	ctx context.Context, tenantID roachpb.TenantID,
+) serverpb.HotRangesResponse_NodeResponse {
+	var resp serverpb.HotRangesResponse_NodeResponse
 	err := s.stores.VisitStores(func(store *kvserver.Store) error {
-		// Get hot replicas from the store, filtered by tenant if specified
 		var ranges []kvserver.HotReplicaInfo
 		if tenantID.IsSet() {
 			ranges = store.HottestReplicasByTenant(tenantID)
 		} else {
 			ranges = store.HottestReplicas()
 		}
-
-		// Process each hot range and build the response
-		for _, r := range ranges {
-			// Get leaseholder information for the range
-			var leaseholderNodeID roachpb.NodeID
+		storeResp := &serverpb.HotRangesResponse_StoreResponse{
+			StoreID:   store.StoreID(),
+			HotRanges: make([]serverpb.HotRangesResponse_HotRange, len(ranges)),
+		}
+		for i, r := range ranges {
 			replica, err := store.GetReplica(r.Desc.GetRangeID())
 			if err == nil {
 				lease, _ := replica.GetLease()
-				leaseholderNodeID = lease.Replica.NodeID
+				storeResp.HotRanges[i].LeaseholderNodeID = lease.Replica.NodeID
 			}
-
-			// Collect node IDs for all replicas of this range
-			var replicaNodeIDs []roachpb.NodeID
-			for _, repl := range r.Desc.Replicas().Descriptors() {
-				replicaNodeIDs = append(replicaNodeIDs, repl.NodeID)
-			}
-
-			// Create and append the hot range entry to the response
-			rp := &serverpb.HotRangesResponseV2_HotRange{
-				// Range and node identification
-				Desc:              r.Desc,
-				RangeID:           r.Desc.RangeID,
-				NodeID:            requestedNodeID,
-				StoreID:           store.StoreID(),
-				ReplicaNodeIds:    replicaNodeIDs,
-				LeaseholderNodeID: leaseholderNodeID,
-
-				// Performance metrics
-				QPS:                 r.QPS,
-				WritesPerSecond:     r.WriteKeysPerSecond,
-				ReadsPerSecond:      r.ReadKeysPerSecond,
-				WriteBytesPerSecond: r.WriteBytesPerSecond,
-				ReadBytesPerSecond:  r.ReadBytesPerSecond,
-				CPUTimePerSecond:    r.CPUTimePerSecond,
-			}
-			resp.Ranges = append(resp.Ranges, rp)
+			storeResp.HotRanges[i].Desc = *r.Desc
+			storeResp.HotRanges[i].QueriesPerSecond = r.QPS
+			storeResp.HotRanges[i].RequestsPerSecond = r.RequestsPerSecond
+			storeResp.HotRanges[i].WritesPerSecond = r.WriteKeysPerSecond
+			storeResp.HotRanges[i].ReadsPerSecond = r.ReadKeysPerSecond
+			storeResp.HotRanges[i].WriteBytesPerSecond = r.WriteBytesPerSecond
+			storeResp.HotRanges[i].ReadBytesPerSecond = r.ReadBytesPerSecond
+			storeResp.HotRanges[i].CPUTimePerSecond = r.CPUTimePerSecond
 		}
+		resp.Stores = append(resp.Stores, storeResp)
 		return nil
 	})
-
 	if err != nil {
-		return nil, err
+		return serverpb.HotRangesResponse_NodeResponse{ErrorMessage: err.Error()}
 	}
-
-	// sort the slices by cpu
-	slices.SortFunc(resp.Ranges, func(a, b *serverpb.HotRangesResponseV2_HotRange) int {
-		return cmp.Compare(a.CPUTimePerSecond, b.CPUTimePerSecond)
-	})
-	// truncate the response if localLimit is set
-	if localLimit != 0 && localLimit < len(resp.Ranges) {
-		resp.Ranges = resp.Ranges[:localLimit]
-	}
-
-	return &resp, nil
-}
-
-// addDescriptorsToHotRanges adds database/table/index mappings to the hot ranges response.
-// It's necessary, because of how calls can be propogated. The hot ranges endpoint
-// specifically can follow one of the below pathways:
-//   - incoming -> statusServer -> systemStatusServer
-//   - incoming -> systemStatusServer
-//
-// One of the tricky parts of this is that once a tenant call has gone to the
-// systemStatusServer, the appropriate catalog utilities will be locked to the
-// system tenant, and escaping them is incompatible with our multi-tenant security
-// story.
-//
-// Because of this, we need to add the descriptors to the payload either:
-//   - in the localHotRanges call for system tenants.
-//   - in the statusServer.HotRangesV2 call for app tenants.
-func (s *statusServer) addDescriptorsToHotRanges(
-	ctx context.Context, hr *serverpb.HotRangesResponseV2,
-) error {
-	codec := s.sqlServer.execCfg.Codec
-	// Extract range descriptors from hot replicas
-	rangeDescriptors := []roachpb.RangeDescriptor{}
-	for _, r := range hr.Ranges {
-		if r.Desc != nil {
-			rangeDescriptors = append(rangeDescriptors, *r.Desc)
-		}
-	}
-	// Get database/table/index mappings for all the ranges
-	var rangeIndexMappings map[roachpb.RangeID]apiutil.IndexNamesList
-	if err := s.sqlServer.distSQLServer.DB.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
-		// Get all database descriptors
-		databases, err := txn.Descriptors().GetAllDatabaseDescriptorsMap(ctx, txn.KV())
-		if err != nil {
-			return err
-		}
-		// Map ranges to database objects
-		rangeIndexMappings, err = apiutil.GetRangeIndexMapping(ctx, txn, codec, databases, rangeDescriptors)
-		return err
-	}); err != nil {
-		return err
-	}
-
-	// Add descriptors back into hot ranges object.
-	for _, r := range hr.Ranges {
-		// Get database/table/index names for this range
-		r.Databases, r.Tables, r.Indexes = rangeIndexMappings[r.Desc.RangeID].ToOutput()
-	}
-	return nil
+	return resp
 }
 
 func (s *statusServer) KeyVisSamples(
@@ -3229,7 +3143,9 @@ func (s *statusServer) ListLocalSessions(
 	return &serverpb.ListSessionsResponse{Sessions: sessions}, nil
 }
 
-// iterateNodes calls iterateNodesExt with max concurrency
+// iterateNodes iterates nodeFn over all non-removed nodes concurrently.
+// It then calls nodeResponse for every valid result of nodeFn, and
+// nodeError on every error result.
 func iterateNodes[Client, Result any](
 	ctx context.Context,
 	iter ServerIterator,
@@ -3240,36 +3156,6 @@ func iterateNodes[Client, Result any](
 	nodeFn func(ctx context.Context, client Client, nodeID roachpb.NodeID) (Result, error),
 	responseFn func(nodeID roachpb.NodeID, resp Result),
 	errorFn func(nodeID roachpb.NodeID, nodeFnError error),
-) error {
-	return iterateNodesExt(ctx,
-		iter,
-		stopper,
-		errorCtx,
-		dialFn,
-		nodeFn,
-		responseFn,
-		errorFn,
-		iterateNodesOpts{nodeFnTimeout: nodeFnTimeout, maxConcurrency: apiconstants.MaxConcurrentRequests})
-}
-
-type iterateNodesOpts struct {
-	nodeFnTimeout  time.Duration
-	maxConcurrency uint64
-}
-
-// iterateNodesExt iterates nodeFn over all non-removed nodes with a max
-// concurrency of iterateNodesOpts.maxConcurreny. It then calls nodeResponse
-// for every valid result of nodeFn, and nodeError on every error result.
-func iterateNodesExt[Client, Result any](
-	ctx context.Context,
-	iter ServerIterator,
-	stopper *stop.Stopper,
-	errorCtx redact.RedactableString,
-	dialFn func(ctx context.Context, nodeID roachpb.NodeID) (Client, error),
-	nodeFn func(ctx context.Context, client Client, nodeID roachpb.NodeID) (Result, error),
-	responseFn func(nodeID roachpb.NodeID, resp Result),
-	errorFn func(nodeID roachpb.NodeID, nodeFnError error),
-	opts iterateNodesOpts,
 ) error {
 	nodeStatuses, err := iter.getAllNodes(ctx)
 	if err != nil {
@@ -3301,11 +3187,11 @@ func iterateNodesExt[Client, Result any](
 		}
 
 		var res Result
-		if opts.nodeFnTimeout == noTimeout {
+		if nodeFnTimeout == noTimeout {
 			res, err = nodeFn(ctx, client, nodeID)
 		} else {
 			err = timeutil.RunWithTimeout(ctx, "iterate-nodes-fn",
-				opts.nodeFnTimeout, func(ctx context.Context) error {
+				nodeFnTimeout, func(ctx context.Context) error {
 					var _err error
 					res, _err = nodeFn(ctx, client, nodeID)
 					return _err
@@ -3320,11 +3206,7 @@ func iterateNodesExt[Client, Result any](
 	}
 
 	// Issue the requests concurrently.
-	var maxConcurrency uint64 = apiconstants.MaxConcurrentRequests
-	if opts.maxConcurrency > 0 {
-		maxConcurrency = opts.maxConcurrency
-	}
-	sem := quotapool.NewIntPool("node status", maxConcurrency)
+	sem := quotapool.NewIntPool("node status", apiconstants.MaxConcurrentRequests)
 	ctx, cancel := stopper.WithCancelOnQuiesce(ctx)
 	defer cancel()
 	for nodeID := range nodeStatuses {
@@ -3623,7 +3505,7 @@ func (s *statusServer) CancelQuery(
 // endpoint is rate-limited by a semaphore.
 func (s *statusServer) CancelQueryByKey(
 	ctx context.Context, req *serverpb.CancelQueryByKeyRequest,
-) (*serverpb.CancelQueryByKeyResponse, error) {
+) (resp *serverpb.CancelQueryByKeyResponse, retErr error) {
 	local := req.SQLInstanceID == s.sqlServer.SQLInstanceID()
 
 	// Acquiring the semaphore here helps protect both the source and destination
@@ -3641,40 +3523,39 @@ func (s *statusServer) CancelQueryByKey(
 	if err != nil {
 		return nil, status.Errorf(codes.ResourceExhausted, "exceeded rate limit of pgwire cancellation requests")
 	}
-	defer alloc.Release()
+	defer func() {
+		// If we acquired the semaphore but the cancellation request failed, then
+		// hold on to the semaphore for longer. This helps mitigate a DoS attack
+		// of random cancellation requests.
+		if err != nil || (resp != nil && !resp.Canceled) {
+			time.Sleep(1 * time.Second)
+		}
+		alloc.Release()
+	}()
 
-	resp, retErr := func() (*serverpb.CancelQueryByKeyResponse, error) {
-		if local {
-			cancelQueryKey := req.CancelQueryKey
-			session, ok := s.sessionRegistry.GetSessionByCancelKey(cancelQueryKey)
-			if !ok {
-				return &serverpb.CancelQueryByKeyResponse{
-					Error: fmt.Sprintf("session for cancel key %d not found", cancelQueryKey),
-				}, nil
-			}
-
-			isCanceled := session.CancelActiveQueries()
+	if local {
+		cancelQueryKey := req.CancelQueryKey
+		session, ok := s.sessionRegistry.GetSessionByCancelKey(cancelQueryKey)
+		if !ok {
 			return &serverpb.CancelQueryByKeyResponse{
-				Canceled: isCanceled,
+				Error: fmt.Sprintf("session for cancel key %d not found", cancelQueryKey),
 			}, nil
 		}
 
-		// This request needs to be forwarded to another node.
-		ctx = authserver.ForwardSQLIdentityThroughRPCCalls(ctx)
-		ctx = s.AnnotateCtx(ctx)
-		client, err := s.dialNode(ctx, roachpb.NodeID(req.SQLInstanceID))
-		if err != nil {
-			return nil, err
-		}
-		return client.CancelQueryByKey(ctx, req)
-	}()
-	// If the cancellation request failed, then hold on to the semaphore for
-	// longer. This helps mitigate a DoS attack of random cancellation requests.
-	if retErr != nil || (resp != nil && !resp.Canceled) {
-		time.Sleep(1 * time.Second)
+		isCanceled := session.CancelActiveQueries()
+		return &serverpb.CancelQueryByKeyResponse{
+			Canceled: isCanceled,
+		}, nil
 	}
 
-	return resp, retErr
+	// This request needs to be forwarded to another node.
+	ctx = authserver.ForwardSQLIdentityThroughRPCCalls(ctx)
+	ctx = s.AnnotateCtx(ctx)
+	client, err := s.dialNode(ctx, roachpb.NodeID(req.SQLInstanceID))
+	if err != nil {
+		return nil, err
+	}
+	return client.CancelQueryByKey(ctx, req)
 }
 
 // ListContentionEvents returns a list of contention events on all nodes in the

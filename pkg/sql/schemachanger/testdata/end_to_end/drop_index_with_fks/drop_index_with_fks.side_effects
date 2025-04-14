@@ -97,7 +97,6 @@ upsert descriptor #104
   -      name: crdb_internal_i_j_shard_16
   -      shardBuckets: 16
   -    unique: true
-  -    vecConfig: {}
   -    version: 4
   +    validity: Dropping
   +  indexes: []
@@ -150,7 +149,6 @@ upsert descriptor #104
   +        name: crdb_internal_i_j_shard_16
   +        shardBuckets: 16
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: WRITE_ONLY
@@ -322,7 +320,6 @@ upsert descriptor #104
   -      name: crdb_internal_i_j_shard_16
   -      shardBuckets: 16
   -    unique: true
-  -    vecConfig: {}
   -    version: 4
   +    validity: Dropping
   +  indexes: []
@@ -375,7 +372,6 @@ upsert descriptor #104
   +        name: crdb_internal_i_j_shard_16
   +        shardBuckets: 16
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: WRITE_ONLY
@@ -680,7 +676,6 @@ upsert descriptor #104
   -        name: crdb_internal_i_j_shard_16
   -        shardBuckets: 16
   -      unique: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: DELETE_ONLY

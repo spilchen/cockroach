@@ -61,7 +61,6 @@ upsert descriptor #104
   -    name: t_expr_k_idx
   -    partitioning: {}
   -    sharded: {}
-  -    vecConfig: {}
   -    version: 3
   +  indexes: []
      modificationTime: {}
@@ -87,7 +86,6 @@ upsert descriptor #104
   +      name: t_expr_k_idx
   +      partitioning: {}
   +      sharded: {}
-  +      vecConfig: {}
   +      version: 3
   +    mutationId: 1
   +    state: WRITE_ONLY
@@ -114,7 +112,6 @@ upsert descriptor #104
   +      storeColumnNames:
   +      - k
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -142,7 +139,6 @@ upsert descriptor #104
   +      - k
   +      unique: true
   +      useDeletePreservingEncoding: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: DELETE_ONLY
@@ -225,7 +221,7 @@ upsert descriptor #104
   +      storeColumnIds: []
   +      storeColumnNames: []
          unique: true
-         vecConfig: {}
+         version: 4
   ...
          - 3
          storeColumnNames:
@@ -257,7 +253,7 @@ upsert descriptor #104
   -    - k
   +    - crdb_internal_column_3_name_placeholder
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 101
@@ -357,7 +353,6 @@ upsert descriptor #104
   -    name: t_expr_k_idx
   -    partitioning: {}
   -    sharded: {}
-  -    vecConfig: {}
   -    version: 3
   +  indexes: []
      modificationTime: {}
@@ -383,7 +378,6 @@ upsert descriptor #104
   +      name: t_expr_k_idx
   +      partitioning: {}
   +      sharded: {}
-  +      vecConfig: {}
   +      version: 3
   +    mutationId: 1
   +    state: WRITE_ONLY
@@ -407,7 +401,6 @@ upsert descriptor #104
   +      sharded: {}
   +      storeColumnNames: []
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -432,7 +425,6 @@ upsert descriptor #104
   +      storeColumnNames: []
   +      unique: true
   +      useDeletePreservingEncoding: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: DELETE_ONLY
@@ -478,7 +470,7 @@ upsert descriptor #104
   -    - k
   +    - crdb_internal_column_3_name_placeholder
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 101
@@ -602,7 +594,6 @@ upsert descriptor #104
   +      name: crdb_internal_index_2_name_placeholder
          partitioning: {}
          sharded: {}
-  ...
          version: 3
        mutationId: 1
   -    state: WRITE_ONLY
@@ -633,7 +624,6 @@ upsert descriptor #104
   -      storeColumnNames: []
   -      unique: true
   -      useDeletePreservingEncoding: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: DELETE_ONLY
@@ -708,7 +698,6 @@ upsert descriptor #104
   -      name: crdb_internal_index_2_name_placeholder
   -      partitioning: {}
   -      sharded: {}
-  -      vecConfig: {}
   -      version: 3
   +  - column:
   +      defaultExpr: 32:::INT8
@@ -752,7 +741,7 @@ upsert descriptor #104
   +      - crdb_internal_column_2_name_placeholder
   +      - crdb_internal_column_3_name_placeholder
          unique: true
-         vecConfig: {}
+         version: 4
   ...
        state: WRITE_ONLY
      - column:
@@ -811,7 +800,7 @@ upsert descriptor #104
   -    - crdb_internal_column_3_name_placeholder
   +    storeColumnNames: []
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 101
@@ -936,7 +925,6 @@ upsert descriptor #104
   -      - crdb_internal_column_2_name_placeholder
   -      - crdb_internal_column_3_name_placeholder
   -      unique: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: DELETE_ONLY

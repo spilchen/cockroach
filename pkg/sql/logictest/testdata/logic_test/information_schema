@@ -2,7 +2,7 @@
 # the tenant table for tenants. Legacy schema changer is also skipped, because
 # some of the queries relating internal state will be impacted in terms of
 # descriptor versions, etc..
-# LogicTest: !3node-tenant-default-configs !local-legacy-schema-changer !local-mixed-25.1
+# LogicTest: !3node-tenant-default-configs !local-legacy-schema-changer
 
 # Verify information_schema database handles mutation statements correctly.
 
@@ -1347,7 +1347,6 @@ system              public             29_33_4_not_null                         
 system              public             29_34_1_not_null                                                                                                id IS NOT NULL
 system              public             29_34_3_not_null                                                                                                data IS NOT NULL
 system              public             29_35_11_not_null                                                                                               redacted IS NOT NULL
-system              public             29_35_12_not_null                                                                                               username IS NOT NULL
 system              public             29_35_1_not_null                                                                                                id IS NOT NULL
 system              public             29_35_2_not_null                                                                                                completed IS NOT NULL
 system              public             29_35_3_not_null                                                                                                statement_fingerprint IS NOT NULL
@@ -1669,7 +1668,6 @@ system              public             29_33_4_not_null                         
 system              public             29_34_1_not_null                                                                                                id IS NOT NULL
 system              public             29_34_3_not_null                                                                                                data IS NOT NULL
 system              public             29_35_11_not_null                                                                                               redacted IS NOT NULL
-system              public             29_35_12_not_null                                                                                               username IS NOT NULL
 system              public             29_35_1_not_null                                                                                                id IS NOT NULL
 system              public             29_35_2_not_null                                                                                                completed IS NOT NULL
 system              public             29_35_3_not_null                                                                                                statement_fingerprint IS NOT NULL
@@ -3215,33 +3213,29 @@ DROP DATABASE other_db CASCADE
 query TTTT colnames,rowsort
 SELECT * FROM information_schema.user_privileges ORDER BY grantee,privilege_type
 ----
-grantee  table_catalog  privilege_type     is_grantable
-admin    test           ALL                NULL
-admin    test           BACKUP             NULL
-admin    test           CHANGEFEED         NULL
-admin    test           CREATE             NULL
-admin    test           DELETE             NULL
-admin    test           DROP               NULL
-admin    test           INSERT             NULL
-admin    test           REPLICATIONDEST    NULL
-admin    test           REPLICATIONSOURCE  NULL
-admin    test           SELECT             NULL
-admin    test           TRIGGER            NULL
-admin    test           UPDATE             NULL
-admin    test           ZONECONFIG         NULL
-root     test           ALL                NULL
-root     test           BACKUP             NULL
-root     test           CHANGEFEED         NULL
-root     test           CREATE             NULL
-root     test           DELETE             NULL
-root     test           DROP               NULL
-root     test           INSERT             NULL
-root     test           REPLICATIONDEST    NULL
-root     test           REPLICATIONSOURCE  NULL
-root     test           SELECT             NULL
-root     test           TRIGGER            NULL
-root     test           UPDATE             NULL
-root     test           ZONECONFIG         NULL
+grantee  table_catalog  privilege_type  is_grantable
+admin    test           ALL             NULL
+admin    test           BACKUP          NULL
+admin    test           CHANGEFEED      NULL
+admin    test           CREATE          NULL
+admin    test           DELETE          NULL
+admin    test           DROP            NULL
+admin    test           INSERT          NULL
+admin    test           SELECT          NULL
+admin    test           TRIGGER         NULL
+admin    test           UPDATE          NULL
+admin    test           ZONECONFIG      NULL
+root     test           ALL             NULL
+root     test           BACKUP          NULL
+root     test           CHANGEFEED      NULL
+root     test           CREATE          NULL
+root     test           DELETE          NULL
+root     test           DROP            NULL
+root     test           INSERT          NULL
+root     test           SELECT          NULL
+root     test           TRIGGER         NULL
+root     test           UPDATE          NULL
+root     test           ZONECONFIG      NULL
 
 # information_schema.sequences
 
@@ -3904,7 +3898,6 @@ WHERE
 ORDER BY variable
 ----
 variable                                                   value
-allow_create_trigger_function_with_argv_references         off
 allow_ordinal_column_references                            off
 allow_role_memberships_to_change_during_transaction        off
 alter_primary_region_super_region_override                 off
@@ -3914,7 +3907,6 @@ authentication_method                                      cert-password
 avoid_buffering                                            off
 avoid_full_table_scans_in_mutations                        on
 backslash_quote                                            safe_encoding
-buffered_writes_use_locking_on_non_unique_indexes          off
 bypass_pcr_reader_catalog_aost                             off
 bytea_output                                               hex
 check_function_bodies                                      on
@@ -3990,7 +3982,6 @@ is_superuser                                               on
 join_reader_index_join_strategy_batch_size                 4.0 MiB
 join_reader_no_ordering_strategy_batch_size                2.0 MiB
 join_reader_ordering_strategy_batch_size                   100 KiB
-kv_transaction_buffered_writes_enabled                     off
 large_full_scan_rows                                       0
 lc_collate                                                 C.UTF-8
 lc_ctype                                                   C.UTF-8
@@ -4014,18 +4005,15 @@ on_update_rehome_row_enabled                               on
 opt_split_scan_limit                                       2048
 optimizer                                                  on
 optimizer_always_use_histograms                            on
-optimizer_check_input_min_row_count                        1
-optimizer_enable_lock_elision                              on
+optimizer_check_input_min_row_count                        0
 optimizer_hoist_uncorrelated_equality_subqueries           on
 optimizer_merge_joins_enabled                              on
 optimizer_min_row_count                                    0
-optimizer_plan_lookup_joins_with_reverse_scans             on
 optimizer_prefer_bounded_cardinality                       off
 optimizer_prove_implication_with_virtual_computed_columns  on
 optimizer_push_limit_into_project_filtered_scan            on
 optimizer_push_offset_into_index_join                      on
 optimizer_use_conditional_hoist_fix                        on
-optimizer_use_delete_range_fast_path                       on
 optimizer_use_forecasts                                    on
 optimizer_use_histograms                                   on
 optimizer_use_improved_computed_column_filters_derivation  on
@@ -4037,9 +4025,8 @@ optimizer_use_improved_split_disjunction_for_joins         on
 optimizer_use_improved_trigram_similarity_selectivity      on
 optimizer_use_improved_zigzag_join_costing                 on
 optimizer_use_limit_ordering_for_streaming_group_by        on
-optimizer_use_lock_elision_multiple_families               off
 optimizer_use_lock_op_for_serializable                     off
-optimizer_use_merged_partial_statistics                    on
+optimizer_use_merged_partial_statistics                    off
 optimizer_use_multicol_stats                               on
 optimizer_use_not_visible_indexes                          off
 optimizer_use_polymorphic_parameter_fix                    on
@@ -4050,13 +4037,12 @@ override_multi_region_zone_config                          off
 parallelize_multi_key_lookup_joins_enabled                 off
 password_encryption                                        scram-sha-256
 pg_trgm.similarity_threshold                               0.3
-plan_cache_mode                                            auto
+plan_cache_mode                                            force_custom_plan
 plpgsql_use_strict_into                                    off
 prefer_lookup_joins_for_fks                                off
 prepared_statements_cache_size                             0 B
 propagate_input_ordering                                   off
 recursion_depth_limit                                      1000
-register_latch_wait_contention_events                      off
 reorder_joins_limit                                        8
 require_explicit_primary_keys                              off
 results_buffer_size                                        524288
@@ -4101,7 +4087,6 @@ troubleshooting_mode                                       off
 unbounded_parallel_scans                                   off
 unconstrained_non_covering_index_scan_enabled              off
 unsafe_allow_triggers_modifying_cascades                   off
-use_cputs_on_non_unique_indexes                            off
 variable_inequality_lookup_join_enabled                    on
 xmloption                                                  content
 

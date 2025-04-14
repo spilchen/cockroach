@@ -35,9 +35,6 @@ import (
 // times to cause tokens to be set in the testGranterWithIOTokens:
 // set-state admitted=<int> l0-bytes=<int> l0-added=<int> l0-files=<int> l0-sublevels=<int> ...
 func TestIOLoadListener(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
 	req := &testRequesterForIOLL{}
 	kvGranter := &testGranterWithIOTokens{}
 	var ioll *ioLoadListener
@@ -258,9 +255,6 @@ func TestIOLoadListener(t *testing.T) {
 }
 
 func TestIOLoadListenerOverflow(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
 	req := &testRequesterForIOLL{}
 	kvGranter := &testGranterWithIOTokens{}
 	ctx := context.Background()
@@ -297,9 +291,6 @@ func TestIOLoadListenerOverflow(t *testing.T) {
 // of what is logged below, and the rest is logged with 0 values. Expand this
 // test to call adjustTokens.
 func TestAdjustTokensInnerAndLogging(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
 	const mb = 12 + 1<<20
 	tests := []struct {
 		name      redact.SafeString
@@ -348,9 +339,6 @@ func TestAdjustTokensInnerAndLogging(t *testing.T) {
 // TestBadIOLoadListenerStats tests that bad stats (non-monotonic cumulative
 // stats and negative values) don't cause panics or tokens to be negative.
 func TestBadIOLoadListenerStats(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
 	var m pebble.Metrics
 	var d DiskStats
 	req := &testRequesterForIOLL{}
@@ -545,9 +533,6 @@ func (g *testGranterNonNegativeTokens) setLinearModels(
 // Tests if the tokenAllocationTicker produces correct adjustment interval
 // durations for both loaded and unloaded systems.
 func TestTokenAllocationTickerAdjustmentCalculation(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
 	// TODO(bananabrick): We might want to use a timeutil.TimeSource and
 	// ManualTime for the tokenAllocationTicker, so that we can run this test
 	// without any worry about flakes.
@@ -559,7 +544,7 @@ func TestTokenAllocationTickerAdjustmentCalculation(t *testing.T) {
 	ticker.adjustmentStart(true /* loaded */)
 	adjustmentChanged := false
 	for {
-		<-ticker.ticker.C
+		ticker.tick()
 		remainingTicks := ticker.remainingTicks()
 		if remainingTicks == 0 {
 			if adjustmentChanged {
@@ -585,9 +570,6 @@ func TestTokenAllocationTickerAdjustmentCalculation(t *testing.T) {
 }
 
 func TestTokenAllocationTickerErrorAdjustmentThreshold(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
 	ticker := tokenAllocationTicker{}
 	defer ticker.stop()
 	ticker.adjustmentStart(false /* loaded */)
@@ -615,9 +597,6 @@ func TestTokenAllocationTickerErrorAdjustmentThreshold(t *testing.T) {
 }
 
 func TestTokenAllocationTicker(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
 	// TODO(bananabrick): This might be flaky, in which case we should use a
 	// timeutil.TimeSource and ManualTime in the tokenAllocationTicker for these
 	// tests.

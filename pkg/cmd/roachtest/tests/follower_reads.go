@@ -125,7 +125,7 @@ func registerFollowerReads(r registry.Registry) {
 			4, /* nodeCount */
 			spec.CPU(2),
 		),
-		CompatibleClouds: registry.OnlyGCE,
+		CompatibleClouds: registry.AllExceptAWS,
 		Suites:           registry.Suites(registry.MixedVersion, registry.Nightly),
 		Randomized:       true,
 		Run:              runFollowerReadsMixedVersionSingleRegionTest,
@@ -232,7 +232,7 @@ func runFollowerReadsTest(
 	for i := 0; i < c.Spec().NodeCount; i++ {
 		isoLevel := isoLevels[rng.Intn(len(isoLevels))]
 		conn := c.Conn(ctx, l, i+1, option.ConnectionOption("default_transaction_isolation", isoLevel))
-		defer conn.Close() //nolint:deferloop
+		defer conn.Close()
 		conns = append(conns, conn)
 	}
 	db := conns[0]

@@ -4,6 +4,7 @@
 // included in the /LICENSE file.
 
 //go:build lint
+// +build lint
 
 package lint
 
@@ -251,7 +252,7 @@ func TestLint(t *testing.T) {
 
 		cmd, stderr, filter, err := dirCmd(crdbDir,
 			"git", "grep", "-nE", fmt.Sprintf(`[^_a-zA-Z](%s)\(`, strings.Join(names, "|")),
-			"--", "pkg", ":!pkg/cmd/roachtest/testdata/pg_regress/*")
+			"--", "pkg", ":!pkg/cmd/roachtest/testdata/regression.diffs")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -703,7 +704,7 @@ func TestLint(t *testing.T) {
 					":!acceptance/test_acceptance.go",           // For COCKROACH_RUN_ACCEPTANCE
 					":!compose/compare/compare/compare_test.go", // For COCKROACH_RUN_COMPOSE_COMPARE
 					":!compose/compose_test.go",                 // For COCKROACH_RUN_COMPOSE
-					":!testutils/sideeye/sideeye.go",            // For SIDE_EYE_API_TOKEN
+					":!testutils/sideeye.go",                    // For SIDE_EYE_API_TOKEN
 				},
 			},
 		} {
@@ -758,8 +759,8 @@ func TestLint(t *testing.T) {
 			":!testutils/lint/passes/deferunlockcheck/testdata/src/github.com/cockroachdb/cockroach/pkg/util/syncutil/mutex_sync.go",
 			// Exception needed for goroutineStalledStates.
 			":!kv/kvserver/concurrency/concurrency_manager_test.go",
-			// See comment in memLock class.
-			":!sql/vecindex/cspann/memstore/memstore_lock.go",
+			// See comment in inMemoryLock class.
+			":!sql/vecindex/vecstore/in_memory_lock.go",
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1767,7 +1768,7 @@ func TestLint(t *testing.T) {
 			}
 		}
 
-		ignore := `zcgo*|\.(pb(\.gw)?)|(\.[eo]g)\.go|/testdata/|^sql/parser/sql\.go$|(_)?generated(_test)?\.go$|^sql/pgrepl/pgreplparser/pgrepl\.go$|^sql/plpgsql/parser/plpgsql\.go$|^util/jsonpath/parser/jsonpath\.go$`
+		ignore := `zcgo*|\.(pb(\.gw)?)|(\.[eo]g)\.go|/testdata/|^sql/parser/sql\.go$|(_)?generated(_test)?\.go$|^sql/pgrepl/pgreplparser/pgrepl\.go$|^sql/plpgsql/parser/plpgsql\.go$`
 		cmd, stderr, filter, err := dirCmd(pkgDir, crlfmt, "-fast", "-ignore", ignore, "-tab", "2", ".")
 		if err != nil {
 			t.Fatal(err)
@@ -2090,8 +2091,6 @@ func TestLint(t *testing.T) {
 			stream.GrepNot(`pkg/cmd/mirror/go/mirror.go`),
 			// As above, the bazel build tag has an impact here.
 			stream.GrepNot(`pkg/testutils/docker/single_node_docker_test.go`),
-			// TODO(#143870): remove uses of this package.
-			stream.GrepNot(`"golang.org/x/exp/rand" is deprecated`),
 		}
 		for analyzerName, config := range nogoConfig {
 			if !staticcheckCheckNameRe.MatchString(analyzerName) {
@@ -2833,7 +2832,7 @@ func TestLint(t *testing.T) {
 			":!sql/catalog/systemschema_test/testdata/bootstrap*",  // exempt: deliberate test of bootstrap catalog.
 			":!sql/catalog/internal/catkv/testdata/",               // TODO(foundations): #137029.
 			":!cli/testdata/doctor/",                               // TODO(foundations): #137030.
-			":!cmd/roachtest/testdata/pg_regress/*",                // TODO(queries): #137026.
+			":!cmd/roachtest/testdata/regression.diffs",            // TODO(queries): #137026.
 			":!cli/testdata/zip/file-filters/testzip_file_filters", // exempt: deliberate test to fetch all tables in debug zip.
 		)
 		if err != nil {
@@ -2862,13 +2861,10 @@ func TestLint(t *testing.T) {
 		t.Parallel()
 
 		roachprodLoggerPkg := "github.com/cockroachdb/cockroach/pkg/roachprod/logger"
-		roachtestTaskPkg := "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/task"
 		// forbiddenImportPkg -> permittedReplacementPkg
 		forbiddenImports := map[string]string{
 			"github.com/cockroachdb/cockroach/pkg/util/log": roachprodLoggerPkg,
 			"log": roachprodLoggerPkg,
-			"github.com/cockroachdb/cockroach/pkg/util/ctxgroup": roachtestTaskPkg,
-			"golang.org/x/sync/errgroup":                         roachtestTaskPkg,
 		}
 
 		// grepBuf creates a grep string that matches any forbidden import pkgs.

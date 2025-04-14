@@ -90,14 +90,16 @@ func (dbc *dbAdapter) RangeFeedFromFrontier(
 	opts ...kvcoord.RangeFeedOption,
 ) error {
 	timedSpans := make([]kvcoord.SpanTimePair, 0, frontier.Len())
-	for sp, ts := range frontier.Entries() {
-		timedSpans = append(timedSpans, kvcoord.SpanTimePair{
-			// Clone the span as the rangefeed progress tracker will manipulate the
-			// original frontier.
-			Span:       sp.Clone(),
-			StartAfter: ts,
+	frontier.Entries(
+		func(sp roachpb.Span, ts hlc.Timestamp) (done span.OpResult) {
+			timedSpans = append(timedSpans, kvcoord.SpanTimePair{
+				// Clone the span as the rangefeed progress tracker will manipulate the
+				// original frontier.
+				Span:       sp.Clone(),
+				StartAfter: ts,
+			})
+			return false
 		})
-	}
 	return dbc.distSender.RangeFeed(ctx, timedSpans, eventC, opts...)
 }
 

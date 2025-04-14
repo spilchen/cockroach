@@ -28,6 +28,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlclustersettings"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
+	"github.com/cockroachdb/cockroach/pkg/util/envutil"
+	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
@@ -106,7 +108,7 @@ func undroppedElements(b BuildCtx, id catid.DescID) ElementResultSet {
 			}
 			// Ignore any other elements with undefined targets.
 			return false
-		case scpb.ToAbsent, scpb.TransientAbsent:
+		case scpb.ToAbsent, scpb.Transient:
 			// If the target is already ABSENT or TRANSIENT then the element is going
 			// away anyway and so it doesn't need to have a target set for this DROP.
 			return false
@@ -234,8 +236,6 @@ func dropCascadeDescriptor(b BuildCtx, id catid.DescID) {
 			dropCascadeDescriptor(next, t.FuncID)
 		case *scpb.TriggerDeps:
 			dropCascadeDescriptor(next, t.TableID)
-		case *scpb.PolicyDeps:
-			dropCascadeDescriptor(next, t.TableID)
 		case *scpb.Column, *scpb.ColumnType, *scpb.SecondaryIndexPartial:
 			// These only have type references.
 			break
@@ -247,8 +247,6 @@ func dropCascadeDescriptor(b BuildCtx, id catid.DescID) {
 			*scpb.ColumnDefaultExpression,
 			*scpb.ColumnOnUpdateExpression,
 			*scpb.ColumnComputeExpression,
-			*scpb.PolicyUsingExpr,
-			*scpb.PolicyWithCheckExpr,
 			*scpb.CheckConstraint,
 			*scpb.CheckConstraintUnvalidated,
 			*scpb.ForeignKeyConstraint,
@@ -257,7 +255,7 @@ func dropCascadeDescriptor(b BuildCtx, id catid.DescID) {
 			*scpb.DatabaseRegionConfig:
 			b.Drop(e)
 		default:
-			panic(errors.AssertionFailedf("un-dropped backref %T (%v) should either be "+
+			panic(errors.AssertionFailedf("un-dropped backref %T (%v) should be either be"+
 				"dropped or skipped", e, target))
 		}
 	})
@@ -306,8 +304,8 @@ func getSortedColumnIDsInIndex(
 	return ret
 }
 
-// getSortedColumnIDsInIndexByKind return an index's key column IDs, key suffix
-// column IDs, and storing column IDs, in sorted order.
+// indexColumnIDs return an index's key column IDs, key suffix column IDs,
+// and storing column IDs, in sorted order.
 func getSortedColumnIDsInIndexByKind(
 	b BuildCtx, tableID catid.DescID, indexID catid.IndexID,
 ) (
@@ -317,13 +315,14 @@ func getSortedColumnIDsInIndexByKind(
 ) {
 	// Retrieve all columns of this index.
 	allColumns := make([]*scpb.IndexColumn, 0)
-	b.QueryByID(tableID).Filter(notFilter(ghostElementFilter)).FilterIndexColumn().
-		ForEach(func(current scpb.Status, target scpb.TargetStatus, e *scpb.IndexColumn) {
-			if e.IndexID != indexID {
-				return
-			}
-			allColumns = append(allColumns, e)
-		})
+	scpb.ForEachIndexColumn(b.QueryByID(tableID).Filter(notFilter(ghostElementFilter)), func(
+		current scpb.Status, target scpb.TargetStatus, ice *scpb.IndexColumn,
+	) {
+		if ice.TableID != tableID || ice.IndexID != indexID {
+			return
+		}
+		allColumns = append(allColumns, ice)
+	})
 
 	// Sort all columns by their (Kind, OrdinalInKind).
 	sort.Slice(allColumns, func(i, j int) bool {
@@ -441,7 +440,7 @@ func absentTargetFilter(_ scpb.Status, target scpb.TargetStatus, _ scpb.Element)
 }
 
 func transientTargetFilter(_ scpb.Status, target scpb.TargetStatus, _ scpb.Element) bool {
-	return target == scpb.TransientAbsent
+	return target == scpb.Transient
 }
 
 func validTargetFilter(_ scpb.Status, target scpb.TargetStatus, _ scpb.Element) bool {
@@ -970,30 +969,22 @@ func shouldSkipValidatingConstraint(
 	return skip, err
 }
 
-// checkTableSchemaChangePrerequisites checks any pre-requisites before a table
-// schema change is allowed. This function panics if a schema change is not
-// allowed on this table. A schema change is disallowed if one of the following
-// is true:
+// panicIfSchemaChangeIsDisallowed panics if a schema change is not allowed on
+// this table. A schema change is disallowed if one of the following is true:
+//   - The schema_locked table storage parameter is true, and this statement is
+//     not modifying the value of schema_locked.
 //   - The table is referenced by logical data replication jobs, and the statement
 //     is not in the allow list of LDR schema changes.
-//   - schema_locked if the current version does not support transient drops
-//     of the lock.
-//
-// If the table in question is schema_locked, this logic removes the schema_locked
-// in a transient manner, allowing it to restore after the schema change.
-func checkTableSchemaChangePrerequisites(
-	b BuildCtx, tableElements ElementResultSet, n tree.Statement,
-) {
-	schemaLocked := tableElements.FilterTableSchemaLocked().MustGetZeroOrOneElement()
+func panicIfSchemaChangeIsDisallowed(tableElements ElementResultSet, n tree.Statement) {
+	_, _, schemaLocked := scpb.FindTableSchemaLocked(tableElements)
 	if schemaLocked != nil && !tree.IsSetOrResetSchemaLocked(n) {
-		// Before 25.2 we don't support auto-unsetting schema locked.
-		if !b.ClusterSettings().Version.IsActive(b, clusterversion.V25_2) {
-			ns := tableElements.FilterNamespace().MustGetOneElement()
-			panic(sqlerrors.NewSchemaChangeOnLockedTableErr(ns.Name))
+		_, _, ns := scpb.FindNamespace(tableElements)
+		if ns == nil {
+			panic(errors.AssertionFailedf("programming error: Namespace element not found"))
 		}
-		// Unset schema_locked for the user.
-		b.DropTransient(schemaLocked)
+		panic(sqlerrors.NewSchemaChangeOnLockedTableErr(ns.Name))
 	}
+
 	_, _, ldrJobIDs := scpb.FindLDRJobIDs(tableElements)
 	if ldrJobIDs != nil && len(ldrJobIDs.JobIDs) > 0 {
 		var virtualColNames []string
@@ -1831,6 +1822,23 @@ func mustRetrievePartitioningFromIndexPartitioning(
 		partition = tabledesc.NewPartitioning(&idxPart.PartitioningDescriptor)
 	}
 	return partition
+}
+
+// enableRLSEnvVar is true if row-level security is enabled. This override is a
+// convenience for dev as it allows you to set an environment variable and not
+// have to worry about changing a local setting each time. This should be removed
+// once RLS is enabled by default.
+var enableRLSEnvVar = envutil.EnvOrDefaultBool("COCKROACH_ENABLE_ROW_LEVEL_SECURITY", false)
+
+// failIfRLSIsNotEnabled will fail if row-level security is not active
+func failIfRLSIsNotEnabled(b BuildCtx) {
+	if enableRLSEnvVar {
+		return
+	}
+	if !b.SessionData().RowLevelSecurityEnabled ||
+		!b.EvalCtx().Settings.Version.ActiveVersion(b).IsActive(clusterversion.V25_1) {
+		panic(unimplemented.NewWithIssue(136696, "CREATE POLICY is not yet implemented"))
+	}
 }
 
 // failIfSafeUpdates checks if the sql_safe_updates is present, and if so, it

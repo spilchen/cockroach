@@ -856,7 +856,7 @@ func ProcessorSpan(
 	eventListeners ...tracing.EventListener,
 ) (context.Context, *tracing.Span) {
 	sp := tracing.SpanFromContext(ctx)
-	if sp == nil {
+	if sp == nil || sp.IsNoop() {
 		return ctx, nil
 	}
 	var listenersOpt tracing.SpanOption
@@ -963,7 +963,9 @@ func (pb *ProcessorBaseNoHelper) ConsumerClosed() {
 // NewMonitor is a utility function used by processors to create a new
 // memory monitor with the given name and start it. The returned monitor must
 // be closed.
-func NewMonitor(ctx context.Context, parent *mon.BytesMonitor, name mon.Name) *mon.BytesMonitor {
+func NewMonitor(
+	ctx context.Context, parent *mon.BytesMonitor, name redact.SafeString,
+) *mon.BytesMonitor {
 	monitor := mon.NewMonitorInheritWithLimit(name, 0 /* limit */, parent, false /* longLiving */)
 	monitor.StartNoReserved(ctx, parent)
 	return monitor
@@ -976,7 +978,7 @@ func NewMonitor(ctx context.Context, parent *mon.BytesMonitor, name mon.Name) *m
 // ServerConfig.TestingKnobs.ForceDiskSpill is set or
 // ServerConfig.TestingKnobs.MemoryLimitBytes if not.
 func NewLimitedMonitor(
-	ctx context.Context, parent *mon.BytesMonitor, flowCtx *FlowCtx, name mon.Name,
+	ctx context.Context, parent *mon.BytesMonitor, flowCtx *FlowCtx, name redact.SafeString,
 ) *mon.BytesMonitor {
 	limitedMon := mon.NewMonitorInheritWithLimit(name, GetWorkMemLimit(flowCtx), parent, false /* longLiving */)
 	limitedMon.StartNoReserved(ctx, parent)
@@ -993,8 +995,7 @@ func NewLimitedMonitorWithLowerBound(
 	if memoryLimit < minMemoryLimit {
 		memoryLimit = minMemoryLimit
 	}
-	limitedMon := mon.NewMonitorInheritWithLimit(mon.MakeName(name), memoryLimit, flowCtx.Mon,
-		false /* longLiving */)
+	limitedMon := mon.NewMonitorInheritWithLimit(name, memoryLimit, flowCtx.Mon, false /* longLiving */)
 	limitedMon.StartNoReserved(ctx, flowCtx.Mon)
 	return limitedMon
 }
@@ -1006,7 +1007,7 @@ func NewLimitedMonitorNoFlowCtx(
 	parent *mon.BytesMonitor,
 	config *ServerConfig,
 	sd *sessiondata.SessionData,
-	name mon.Name,
+	name redact.SafeString,
 ) *mon.BytesMonitor {
 	// Create a fake FlowCtx populating only the required fields.
 	flowCtx := &FlowCtx{

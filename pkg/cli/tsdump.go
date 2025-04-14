@@ -82,7 +82,7 @@ will then convert it to the --format requested in the current invocation.
 		}
 
 		var w tsWriter
-		switch cmd := debugTimeSeriesDumpOpts.format; cmd {
+		switch debugTimeSeriesDumpOpts.format {
 		case tsDumpRaw:
 			if convertFile != "" {
 				return errors.Errorf("input file is already in raw format")
@@ -104,11 +104,7 @@ will then convert it to the --format requested in the current invocation.
 				10_000_000, /* threshold */
 				doRequest,
 			)
-		case tsDumpDatadogInit, tsDumpDatadog:
-			if len(args) < 1 {
-				return errors.New("no input file provided")
-			}
-
+		case tsDumpDatadog:
 			targetURL, err := getDatadogTargetURL(debugTimeSeriesDumpOpts.ddSite)
 			if err != nil {
 				return err
@@ -116,7 +112,22 @@ will then convert it to the --format requested in the current invocation.
 
 			var datadogWriter = makeDatadogWriter(
 				targetURL,
-				cmd == tsDumpDatadogInit,
+				false,
+				debugTimeSeriesDumpOpts.ddApiKey,
+				100,
+				doDDRequest,
+			)
+			return datadogWriter.upload(args[0])
+
+		case tsDumpDatadogInit:
+			targetURL, err := getDatadogTargetURL(debugTimeSeriesDumpOpts.ddSite)
+			if err != nil {
+				return err
+			}
+
+			var datadogWriter = makeDatadogWriter(
+				targetURL,
+				true,
 				debugTimeSeriesDumpOpts.ddApiKey,
 				100,
 				doDDRequest,
@@ -204,6 +215,7 @@ will then convert it to the --format requested in the current invocation.
 			}
 
 			dec := gob.NewDecoder(f)
+			gob.Register(&roachpb.KeyValue{})
 			decodeOne := func() (*tspb.TimeSeriesData, error) {
 				var v roachpb.KeyValue
 				err := dec.Decode(&v)

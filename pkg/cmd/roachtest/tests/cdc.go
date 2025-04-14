@@ -143,7 +143,7 @@ func (ct *cdcTester) startStatsCollection() func() {
 			startTime,
 			endTime,
 			[]clusterstats.AggQuery{sqlServiceLatencyAgg, changefeedThroughputAgg, cpuUsageAgg},
-			func(stats map[string]clusterstats.StatSummary) *roachtestutil.AggregatedMetric {
+			func(stats map[string]clusterstats.StatSummary) (string, float64) {
 				// TODO(jayant): update this metric to be more accurate.
 				// It may be worth plugging in real latency values from the latency
 				// verifier here in the future for more accuracy. However, it may not be
@@ -151,14 +151,7 @@ func (ct *cdcTester) startStatsCollection() func() {
 				// up as roachtest failures, we don't need to make them very apparent in
 				// roachperf. Note that other roachperf stats, such as the aggregate stats
 				// above, will be accurate.
-				duration := endTime.Sub(startTime).Minutes()
-				return &roachtestutil.AggregatedMetric{
-					Name:             "Total Run Time (mins)",
-					Value:            roachtestutil.MetricPoint(duration),
-					Unit:             "minutes",
-					IsHigherBetter:   false,
-					AdditionalLabels: nil,
-				}
+				return "Total Run Time (mins)", endTime.Sub(startTime).Minutes()
 			},
 		)
 		if err != nil {
@@ -524,7 +517,6 @@ func makeDefaultFeatureFlags() cdcFeatureFlags {
 type feedArgs struct {
 	sinkType        sinkType
 	targets         []string
-	envelope        string
 	opts            map[string]string
 	assumeRole      string
 	tolerateErrors  bool
@@ -555,15 +547,15 @@ func (ct *cdcTester) newChangefeed(args feedArgs) changefeedJob {
 
 	targetsStr := strings.Join(args.targets, ", ")
 
-	if args.envelope == "" {
-		args.envelope = "wrapped"
-	}
-
 	feedOptions := make(map[string]string)
 	feedOptions["min_checkpoint_frequency"] = "'10s'"
-	feedOptions["envelope"] = args.envelope
 	if args.sinkType == cloudStorageSink || args.sinkType == webhookSink {
+		// Webhook and cloudstorage don't have a concept of keys and therefore
+		// require envelope=wrapped
+		feedOptions["envelope"] = "wrapped"
+
 		feedOptions["resolved"] = "'10s'"
+
 	} else {
 		feedOptions["resolved"] = ""
 	}
@@ -934,7 +926,7 @@ func runCDCBank(ctx context.Context, t test.Test, c cluster.Cluster) {
 		if err != nil {
 			return errors.Wrap(err, "error creating validator")
 		}
-		baV, err := cdctest.NewBeforeAfterValidator(db, `bank.bank`, true)
+		baV, err := cdctest.NewBeforeAfterValidator(db, `bank.bank`)
 		if err != nil {
 			return err
 		}
@@ -1905,6 +1897,10 @@ func registerCDC(r registry.Registry) {
 			ct := newCDCTester(ctx, t, c)
 			defer ct.Close()
 
+			// The deprecated pubsub sink is unable to handle the throughput required for 100 warehouses
+			if _, err := ct.DB().Exec("SET CLUSTER SETTING changefeed.new_pubsub_sink_enabled = true;"); err != nil {
+				ct.t.Fatal(err)
+			}
 			ct.runTPCCWorkload(tpccArgs{warehouses: 100, duration: "30m"})
 
 			feed := ct.newChangefeed(feedArgs{
@@ -2020,6 +2016,11 @@ func registerCDC(r registry.Registry) {
 			}
 
 			ct.runTPCCWorkload(tpccArgs{warehouses: 100, duration: "30m"})
+
+			// The deprecated webhook sink is unable to handle the throughput required for 100 warehouses
+			if _, err := ct.DB().Exec("SET CLUSTER SETTING changefeed.new_webhook_sink_enabled = true;"); err != nil {
+				ct.t.Fatal(err)
+			}
 
 			feed := ct.newChangefeed(feedArgs{
 				sinkType: webhookSink,
@@ -2318,40 +2319,6 @@ func registerCDC(r registry.Registry) {
 		Suites:           registry.Suites(registry.Nightly),
 		Timeout:          1 * time.Hour,
 		Run:              runCDCMultipleSchemaChanges,
-	})
-	r.Add(registry.TestSpec{
-		Name:             "cdc/tpcc-100/10min/sink=kafka/envelope=enriched",
-		Owner:            registry.OwnerCDC,
-		Benchmark:        true,
-		Cluster:          r.MakeClusterSpec(4, spec.WorkloadNode(), spec.CPU(16)),
-		Leases:           registry.MetamorphicLeases,
-		CompatibleClouds: registry.AllClouds,
-		Suites:           registry.Suites(registry.Nightly),
-		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
-			ct := newCDCTester(ctx, t, c)
-			defer ct.Close()
-
-			ct.runTPCCWorkload(tpccArgs{warehouses: 100, duration: "10m"})
-
-			feed := ct.newChangefeed(feedArgs{
-				sinkType: kafkaSink,
-				envelope: "enriched",
-				targets:  allTpccTargets,
-				kafkaArgs: kafkaFeedArgs{
-					validateOrder: true,
-				},
-				opts: map[string]string{
-					"initial_scan":        "'no'",
-					"updated":             "",
-					"enriched_properties": "source",
-				},
-			})
-			ct.runFeedLatencyVerifier(feed, latencyTargets{
-				initialScanLatency: 3 * time.Minute,
-				steadyLatency:      10 * time.Minute,
-			})
-			ct.waitForWorkload()
-		},
 	})
 }
 
@@ -3807,7 +3774,7 @@ const createMSKTopicBinPath = "/tmp/create-msk-topic"
 var setupMskTopicScript = fmt.Sprintf(`
 #!/bin/bash
 set -e -o pipefail
-wget https://go.dev/dl/go1.23.7.linux-amd64.tar.gz -O /tmp/go.tar.gz
+wget https://go.dev/dl/go1.22.8.linux-amd64.tar.gz -O /tmp/go.tar.gz
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf /tmp/go.tar.gz
 echo export PATH=$PATH:/usr/local/go/bin >> ~/.profile

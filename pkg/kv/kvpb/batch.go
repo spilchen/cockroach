@@ -504,7 +504,7 @@ func LockSpanIterate(req Request, resp Response, fn func(roachpb.Span, lock.Dura
 	if canIterateResponseKeys(req, resp) {
 		return ResponseKeyIterate(req, resp, func(key roachpb.Key) {
 			fn(roachpb.Span{Key: key}, dur)
-		}, true /* includeLockedNonExisting */)
+		})
 	}
 	if span, ok := actualSpan(req, resp); ok {
 		fn(span, dur)
@@ -548,7 +548,7 @@ func (ba *BatchRequest) RefreshSpanIterate(br *BatchResponse, fn func(roachpb.Sp
 			// transaction ever needs to refresh.
 			if err := ResponseKeyIterate(req, resp, func(k roachpb.Key) {
 				fn(roachpb.Span{Key: k})
-			}, false /* includeLockedNonExisting */); err != nil {
+			}); err != nil {
 				return err
 			}
 		} else {
@@ -608,19 +608,13 @@ func canIterateResponseKeys(req Request, resp Response) bool {
 // the function will not be called.
 // NOTE: it is assumed that req (if it is a Scan or a ReverseScan) didn't use
 // COL_BATCH_RESPONSE scan format.
-func ResponseKeyIterate(
-	req Request, resp Response, fn func(roachpb.Key), includeLockedNonExisting bool,
-) error {
+func ResponseKeyIterate(req Request, resp Response, fn func(roachpb.Key)) error {
 	if resp == nil {
 		return errors.Errorf("cannot iterate over response keys of %s request with nil response", req.Method())
 	}
 	switch v := resp.(type) {
 	case *GetResponse:
-		getReq, ok := req.(*GetRequest)
-		if !ok {
-			return errors.AssertionFailedf("GetRequest expected for GetResponse: %#+v", req)
-		}
-		if (v.Value != nil) || (includeLockedNonExisting && getReq.LockNonExisting) {
+		if v.Value != nil {
 			fn(req.Header().Key)
 		}
 	case *ScanResponse:

@@ -11,9 +11,6 @@ if [[ "$GOOGLE_EPHEMERAL_CREDENTIALS" ]]; then
   echo "$GOOGLE_EPHEMERAL_CREDENTIALS" > creds.json
   gcloud auth activate-service-account --key-file=creds.json
   export ROACHPROD_USER=teamcity
-
-  # Set GOOGLE_APPLICATION_CREDENTIALS so that gcp go libraries can find it.
-  export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/creds.json"
 else
   echo 'warning: GOOGLE_EPHEMERAL_CREDENTIALS not set' >&2
   echo "Assuming that you've run \`gcloud auth login\` from inside the builder." >&2
@@ -34,8 +31,6 @@ EXPORT_OPENMETRICS="${EXPORT_OPENMETRICS:-false}"
 if [[ "${EXPORT_OPENMETRICS}" == "true" ]]; then
   stats_file_name="stats.om"
 fi
-
-COMMIT_SHA=$(git rev-parse --short HEAD)
 
 # Set up a function we'll invoke at the end.
 function upload_stats {

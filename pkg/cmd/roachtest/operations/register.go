@@ -5,10 +5,7 @@
 
 package operations
 
-import (
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/operations/changefeeds"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
-)
+import "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 
 // RegisterOperations registers all operations to the Registry. This powers `roachtest run-operations`.
 func RegisterOperations(r registry.Registry) {
@@ -20,7 +17,6 @@ func RegisterOperations(r registry.Registry) {
 	registerDiskStall(r)
 	registerNodeKill(r)
 	registerClusterSettings(r)
-	registerCreateSQLOperations(r)
 	registerBackupRestore(r)
 	registerManualCompaction(r)
 	registerResize(r)
@@ -28,5 +24,4 @@ func RegisterOperations(r registry.Registry) {
 	registerLicenseThrottle(r)
 	registerSessionVariables(r)
 	registerDebugZip(r)
-	changefeeds.RegisterChangefeeds(r)
 }

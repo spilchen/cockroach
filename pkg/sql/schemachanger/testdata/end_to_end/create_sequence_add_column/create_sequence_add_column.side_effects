@@ -60,7 +60,6 @@ upsert descriptor #105
   +    sharded: {}
   +    storeColumnNames: []
   +    unique: true
-  +    vecConfig: {}
   +    version: 4
   +  privileges:
   +    ownerProto: root
@@ -148,7 +147,6 @@ upsert descriptor #104
   +      storeColumnNames:
   +      - j
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -176,7 +174,6 @@ upsert descriptor #104
   +      - j
   +      unique: true
   +      useDeletePreservingEncoding: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: DELETE_ONLY
@@ -279,7 +276,6 @@ upsert descriptor #105
   +    sharded: {}
   +    storeColumnNames: []
   +    unique: true
-  +    vecConfig: {}
   +    version: 4
   +  privileges:
   +    ownerProto: root
@@ -388,7 +384,6 @@ upsert descriptor #104
   +      storeColumnNames:
   +      - j
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -416,7 +411,6 @@ upsert descriptor #104
   +      - j
   +      unique: true
   +      useDeletePreservingEncoding: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: DELETE_ONLY
@@ -632,7 +626,6 @@ upsert descriptor #104
   -      storeColumnNames:
   -      - j
   -      unique: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: WRITE_ONLY
@@ -662,7 +655,6 @@ upsert descriptor #104
   -      - j
          unique: true
   -      useDeletePreservingEncoding: true
-         vecConfig: {}
          version: 4
        mutationId: 1
   -    state: DELETE_ONLY
@@ -691,7 +683,7 @@ upsert descriptor #104
   +    storeColumnNames:
   +    - j
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 101
@@ -800,7 +792,6 @@ upsert descriptor #104
   -      partitioning: {}
   -      sharded: {}
   -      unique: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: DELETE_ONLY

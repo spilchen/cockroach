@@ -27,7 +27,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/storage"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
 	"github.com/cockroachdb/cockroach/pkg/storage/fs"
-	"github.com/cockroachdb/cockroach/pkg/storage/mvccencoding"
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/humanizeutil"
@@ -581,7 +580,7 @@ func (r *Replica) leasePostApplyLocked(
 
 	// Inform the store of this lease.
 	if iAmTheLeaseHolder {
-		r.store.registerLeaseholderAndRefreshPolicy(ctx, r, newLease.Sequence)
+		r.store.registerLeaseholder(ctx, r, newLease.Sequence)
 	} else {
 		r.store.unregisterLeaseholder(ctx, r)
 	}
@@ -778,7 +777,7 @@ func linkExternalSStablePreApply(
 	}
 	var syntheticSuffix []byte
 	if sst.RemoteRewriteTimestamp.IsSet() {
-		syntheticSuffix = mvccencoding.EncodeMVCCTimestampSuffix(sst.RemoteRewriteTimestamp)
+		syntheticSuffix = storage.EncodeMVCCTimestampSuffix(sst.RemoteRewriteTimestamp)
 	}
 	var syntheticPrefix []byte
 	if len(sst.RemoteSyntheticPrefix) > 0 {

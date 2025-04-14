@@ -14,7 +14,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/closedts"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/closedts/ctpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/concurrency/isolation"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
@@ -104,11 +103,6 @@ type Txn struct {
 		// The txn has to be committed by this deadline. A zero value indicates no
 		// deadline.
 		deadline hlc.Timestamp
-
-		// maxAutoRetries is the number of times this transaction can be retried
-		// automatically in the KV layer. If it is zero, then the
-		// kv.transaction.internal.max_auto_retries setting is used.
-		maxAutoRetries int
 	}
 
 	// admissionHeader is used for admission control for work done in this
@@ -268,28 +262,6 @@ func (txn *Txn) ID() uuid.UUID {
 	return txn.mu.ID
 }
 
-// SetMaxAutoRetries sets the maximum number of times the transaction can
-// be retried internally in the KV layer.
-func (txn *Txn) SetMaxAutoRetries(maxAutoRetries int) {
-	txn.mu.Lock()
-	defer txn.mu.Unlock()
-	txn.mu.maxAutoRetries = maxAutoRetries
-}
-
-// MaxAutoRetries returns the maximum number of times the transaction can be
-// retried internally in the KV layer.
-func (txn *Txn) MaxAutoRetries() int {
-	txn.mu.Lock()
-	defer txn.mu.Unlock()
-	if r := txn.mu.maxAutoRetries; r != 0 {
-		return r
-	} else if txn.db.ctx.Settings != nil {
-		// txn.db.ctx.Settings == nil is only expected in tests.
-		return int(MaxInternalTxnAutoRetries.Get(&txn.db.ctx.Settings.SV))
-	}
-	return math.MaxInt64
-}
-
 // Key returns the current "anchor" key of the transaction, or nil if no such
 // key has been set because the transaction has not yet acquired any locks.
 func (txn *Txn) Key() roachpb.Key {
@@ -423,24 +395,6 @@ func (txn *Txn) DebugName() string {
 
 func (txn *Txn) debugNameLocked() string {
 	return fmt.Sprintf("%s (id: %s)", txn.mu.debugName, txn.mu.ID)
-}
-
-func (txn *Txn) SetBufferedWritesEnabled(enabled bool) {
-	if txn.typ != RootTxn {
-		panic(errors.AssertionFailedf("SetBufferedWritesEnabled() called on leaf txn"))
-	}
-
-	txn.mu.Lock()
-	defer txn.mu.Unlock()
-
-	txn.mu.sender.SetBufferedWritesEnabled(enabled)
-}
-
-func (txn *Txn) BufferedWritesEnabled() bool {
-	txn.mu.Lock()
-	defer txn.mu.Unlock()
-
-	return txn.mu.sender.BufferedWritesEnabled()
 }
 
 // String returns a string version of this transaction.
@@ -941,13 +895,9 @@ func (txn *Txn) DeadlineLikelySufficient() bool {
 		lagTargetDuration := closedts.TargetDuration.Get(sv)
 		leadTargetOverride := closedts.LeadForGlobalReadsOverride.Get(sv)
 		sideTransportCloseInterval := closedts.SideTransportCloseInterval.Get(sv)
-		// Pass the DefaultMaxNetworkRTT regardless of leadTargetAutoTune because we
-		// don't have a good way to estimate the network RTT here. We choose to be
-		// more conservative as this is just for an optimization if the deadline is
-		// far in the future. Missing the optimization is not a big deal.
 		return closedts.TargetForPolicy(now, maxClockOffset,
 			lagTargetDuration, leadTargetOverride, sideTransportCloseInterval,
-			ctpb.LEAD_FOR_GLOBAL_READS_WITH_NO_LATENCY_INFO).Add(int64(time.Second), 0)
+			roachpb.LEAD_FOR_GLOBAL_READS).Add(int64(time.Second), 0)
 	}
 
 	return !txn.mu.deadline.IsEmpty() &&
@@ -1172,7 +1122,11 @@ func (txn *Txn) exec(ctx context.Context, fn func(context.Context, *Txn) error) 
 		// automatic retries. We check this after each failed attempt to allow the
 		// cluster setting to be changed while a transaction is stuck in a retry
 		// loop.
-		maxRetries := txn.MaxAutoRetries()
+		maxRetries := math.MaxInt64
+		if txn.db.ctx.Settings != nil {
+			// txn.db.ctx.Settings == nil is only expected in tests.
+			maxRetries = int(MaxInternalTxnAutoRetries.Get(&txn.db.ctx.Settings.SV))
+		}
 		// Add 1 because r.CurrentAttempt() starts at 0.
 		attempt := r.CurrentAttempt() + 1
 		if attempt > maxRetries {
@@ -1182,12 +1136,9 @@ func (txn *Txn) exec(ctx context.Context, fn func(context.Context, *Txn) error) 
 			// to terminate it here. Instead, we mark the error to allow callers to
 			// detect this condition and avoid automatic retries. We also include the
 			// original error in the error message.
-			err = errors.Mark(
-				errors.Errorf("have retried transaction: %s %d times, most recently because of the "+
-					"retryable error: %s. Terminating retry loop and returning error due to max retry limit (%d). "+
-					"Rollback error: %v.",
-					txn.DebugName(), attempt, err, maxRetries, rollbackErr,
-				),
+			err = errors.Mark(errors.Errorf("have retried transaction: %s %d times, most recently because of the "+
+				"retryable error: %s. Terminating retry loop and returning error due to cluster setting %s (%d). "+
+				"Rollback error: %v.", txn.DebugName(), attempt, err, MaxInternalTxnAutoRetries.Name(), maxRetries, rollbackErr),
 				ErrAutoRetryLimitExhausted)
 			log.Warningf(ctx, "%v", err)
 			break

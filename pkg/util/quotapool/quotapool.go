@@ -277,7 +277,6 @@ func (qp *AbstractPool) Acquire(ctx context.Context, r Request) (err error) {
 		case <-slowTimerC:
 			slowTimer.MarkRead()
 			slowTimerC = nil
-			//nolint:deferloop (this happens at most once).
 			defer qp.onSlowAcquisition(ctx, qp.name, r, start)()
 			continue
 		case <-n.c:

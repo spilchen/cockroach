@@ -347,7 +347,7 @@ func (mb *mutationBuilder) buildUpdate(returning *tree.ReturningExprs) {
 	mb.projectPartialIndexPutAndDelCols()
 
 	// Project vector index PUT and DEL columns.
-	mb.projectVectorIndexColsForUpdate()
+	mb.projectVectorIndexCols()
 
 	mb.buildUniqueChecksForUpdate()
 
@@ -355,7 +355,7 @@ func (mb *mutationBuilder) buildUpdate(returning *tree.ReturningExprs) {
 
 	mb.buildRowLevelAfterTriggers(opt.UpdateOp)
 
-	private := mb.makeMutationPrivate(returning != nil, false /* vectorInsert */)
+	private := mb.makeMutationPrivate(returning != nil)
 	for _, col := range mb.extraAccessibleCols {
 		if col.id != 0 {
 			private.PassthroughCols = append(private.PassthroughCols, col.id)

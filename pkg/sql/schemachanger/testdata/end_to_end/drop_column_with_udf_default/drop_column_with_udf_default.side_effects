@@ -83,7 +83,6 @@ upsert descriptor #105
   +      sharded: {}
   +      storeColumnNames: []
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -108,7 +107,6 @@ upsert descriptor #105
   +      storeColumnNames: []
   +      unique: true
   +      useDeletePreservingEncoding: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: DELETE_ONLY
@@ -127,7 +125,7 @@ upsert descriptor #105
   -    - b
   +    - crdb_internal_column_2_name_placeholder
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 101
@@ -246,7 +244,6 @@ upsert descriptor #105
   +      sharded: {}
   +      storeColumnNames: []
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -271,7 +268,6 @@ upsert descriptor #105
   +      storeColumnNames: []
   +      unique: true
   +      useDeletePreservingEncoding: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: DELETE_ONLY
@@ -290,7 +286,7 @@ upsert descriptor #105
   -    - b
   +    - crdb_internal_column_2_name_placeholder
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 101
@@ -472,7 +468,6 @@ upsert descriptor #105
   -      sharded: {}
   -      storeColumnNames: []
   -      unique: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: WRITE_ONLY
@@ -504,7 +499,6 @@ upsert descriptor #105
   +      - crdb_internal_column_2_name_placeholder
          unique: true
   -      useDeletePreservingEncoding: true
-         vecConfig: {}
          version: 4
        mutationId: 1
   -    state: DELETE_ONLY
@@ -534,7 +528,7 @@ upsert descriptor #105
   -    - crdb_internal_column_2_name_placeholder
   +    storeColumnNames: []
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 101
@@ -671,7 +665,6 @@ upsert descriptor #105
   -      storeColumnNames:
   -      - crdb_internal_column_2_name_placeholder
   -      unique: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: DELETE_ONLY

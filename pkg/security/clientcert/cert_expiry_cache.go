@@ -90,7 +90,7 @@ func NewClientCertExpirationCache(
 
 	c.mu.cache = make(map[string]map[string]certInfo)
 	c.mon = mon.NewMonitorInheritWithLimit(
-		mon.MakeName("client-expiration-cache"), 0 /* limit */, parentMon, true, /* longLiving */
+		"client-expiration-cache", 0 /* limit */, parentMon, true, /* longLiving */
 	)
 	c.mu.acc = c.mon.MakeBoundAccount()
 	c.mon.StartNoReserved(ctx, parentMon)
@@ -294,8 +294,17 @@ func ttlFunc(now func() int64, exp int64) func() int64 {
 func (c *ClientCertExpirationCache) upsertMetricsLocked(user string) {
 	expiration := c.getExpirationLocked(user)
 	// the update functions on the metrics objects act as upserts.
-	c.mu.expirationMetrics.Update(expiration, user)
-	c.mu.ttlMetrics.UpdateFn(ttlFunc(c.timeNow, expiration), user)
+	expMetric := c.mu.expirationMetrics.GetChild(user)
+	if expMetric == nil {
+		expMetric = c.mu.expirationMetrics.AddChild(user)
+	}
+
+	ttlMetric := c.mu.ttlMetrics.GetChild(user)
+	if ttlMetric == nil {
+		ttlMetric = c.mu.ttlMetrics.AddChild(user)
+	}
+	expMetric.Update(expiration)
+	ttlMetric.UpdateFn(ttlFunc(c.timeNow, expiration))
 }
 
 // removeMetricsLocked removes the expiration and ttl for a given user from the cache.

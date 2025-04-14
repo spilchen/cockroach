@@ -26,31 +26,22 @@ type EngineMetrics struct {
 	// The subset of SELECTs that were executed by DistSQL with full or partial
 	// distribution.
 	DistSQLSelectDistributedCount *metric.Counter
-	DistSQLExecLatency            metric.IHistogram
-	DistSQLServiceLatency         metric.IHistogram
-
-	SQLOptPlanCacheHits   *metric.Counter
-	SQLOptPlanCacheMisses *metric.Counter
-
+	// The subset of queries which we attempted and failed to plan with the
+	// cost-based optimizer.
+	SQLOptFallbackCount       *metric.Counter
+	SQLOptPlanCacheHits       *metric.Counter
+	SQLOptPlanCacheMisses     *metric.Counter
 	StatementFingerprintCount *metric.UniqueCounter
-	SQLExecLatencyDetail      *metric.HistogramVec
 
-	SQLExecLatency metric.IHistogram
-	// Exec Latency of only non-AOST queries
-	SQLExecLatencyConsistent metric.IHistogram
-	// Exec Latency of only AOST queries
-	SQLExecLatencyHistorical metric.IHistogram
-
-	SQLServiceLatency metric.IHistogram
-	// Service Latency of only non-AOST queries
-	SQLServiceLatencyConsistent metric.IHistogram
-	// Service Latency of only AOST queries
-	SQLServiceLatencyHistorical metric.IHistogram
-
-	SQLTxnLatency       metric.IHistogram
-	SQLTxnsOpen         *metric.Gauge
-	SQLActiveStatements *metric.Gauge
-	SQLContendedTxns    *metric.Counter
+	SQLExecLatencyDetail  *metric.HistogramVec
+	DistSQLExecLatency    metric.IHistogram
+	SQLExecLatency        metric.IHistogram
+	DistSQLServiceLatency metric.IHistogram
+	SQLServiceLatency     metric.IHistogram
+	SQLTxnLatency         metric.IHistogram
+	SQLTxnsOpen           *metric.Gauge
+	SQLActiveStatements   *metric.Gauge
+	SQLContendedTxns      *metric.Counter
 
 	// TxnAbortCount counts transactions that were aborted, either due
 	// to non-retriable errors, or retriable errors when the client-side
@@ -162,6 +153,16 @@ func (ex *connExecutor) recordStatementSummary(
 	ex.recordStatementLatencyMetrics(stmt, flags, automaticRetryCount, runLatRaw, svcLatRaw)
 
 	fullScan := flags.IsSet(planFlagContainsFullIndexScan) || flags.IsSet(planFlagContainsFullTableScan)
+	recordedStmtStatsKey := appstatspb.StatementStatisticsKey{
+		Query:        stmt.StmtNoConstants,
+		QuerySummary: stmt.StmtSummary,
+		DistSQL:      flags.ShouldBeDistributed(),
+		Vec:          flags.IsSet(planFlagVectorized),
+		ImplicitTxn:  flags.IsSet(planFlagImplicitTxn),
+		FullScan:     fullScan,
+		Database:     planner.SessionData().Database,
+		PlanHash:     planner.instrumentation.planGist.Hash(),
+	}
 
 	idxRecommendations := idxrecommendations.FormatIdxRecommendations(planner.instrumentation.indexRecs)
 	queryLevelStats, queryLevelStatsOk := planner.instrumentation.GetQueryLevelStats()
@@ -175,17 +176,9 @@ func (ex *connExecutor) recordStatementSummary(
 		}
 		kvNodeIDs = queryLevelStats.KVNodeIDs
 	}
+
 	startTime := phaseTimes.GetSessionPhaseTime(sessionphase.PlannerStartExecStmt).ToUTC()
-	implicitTxn := flags.IsSet(planFlagImplicitTxn)
-	stmtFingerprintID := appstatspb.ConstructStatementFingerprintID(
-		stmt.StmtNoConstants, implicitTxn, planner.SessionData().Database)
-	recordedStmtStats := &sqlstats.RecordedStmtStats{
-		FingerprintID:        stmtFingerprintID,
-		QuerySummary:         stmt.StmtSummary,
-		DistSQL:              flags.ShouldBeDistributed(),
-		Vec:                  flags.IsSet(planFlagVectorized),
-		ImplicitTxn:          implicitTxn,
-		PlanHash:             planner.instrumentation.planGist.Hash(),
+	recordedStmtStats := sqlstats.RecordedStmtStats{
 		SessionID:            ex.planner.extendedEvalCtx.SessionID,
 		StatementID:          stmt.QueryID,
 		AutoRetryCount:       automaticRetryCount,
@@ -204,6 +197,7 @@ func (ex *connExecutor) recordStatementSummary(
 		Nodes:                sqlInstanceIDs,
 		KVNodeIDs:            kvNodeIDs,
 		StatementType:        stmt.AST.StatementType(),
+		Plan:                 planner.instrumentation.PlanForStats(ctx),
 		PlanGist:             planner.instrumentation.planGist.String(),
 		StatementError:       stmtErr,
 		IndexRecommendations: idxRecommendations,
@@ -218,7 +212,12 @@ func (ex *connExecutor) recordStatementSummary(
 		Database: planner.SessionData().Database,
 	}
 
-	err := ex.statsCollector.RecordStatement(ctx, recordedStmtStats)
+	stmtFingerprintID, err :=
+		ex.statsCollector.RecordStatement(ctx, recordedStmtStatsKey, recordedStmtStats)
+
+	// TODO(xinhaoz): This can be set directly within statsCollector once
+	// https://github.com/cockroachdb/cockroach/pull/123698 is merged.
+	ex.statsCollector.SetStatementFingerprintID(stmtFingerprintID)
 
 	if err != nil {
 		if log.V(1) {
@@ -231,11 +230,6 @@ func (ex *connExecutor) recordStatementSummary(
 	// encountered while collecting query-level statistics.
 	if queryLevelStatsOk {
 		for _, ev := range queryLevelStats.ContentionEvents {
-			if ev.IsLatch && !planner.SessionData().RegisterLatchWaitContentionEvents {
-				// This event should be included in the trace and contention time
-				// metrics, but not registered with the *_contention_events tables.
-				continue
-			}
 			contentionEvent := contentionpb.ExtendedContentionEvent{
 				BlockingEvent:            ev,
 				WaitingTxnID:             planner.txn.ID(),
@@ -251,6 +245,17 @@ func (ex *connExecutor) recordStatementSummary(
 			ex.planner.DistSQLPlanner().distSQLSrv.Metrics.ContendedQueriesCount.Inc(1)
 			ex.planner.DistSQLPlanner().distSQLSrv.Metrics.CumulativeContentionNanos.Inc(queryLevelStats.ContentionTime.Nanoseconds())
 		}
+
+		err = ex.statsCollector.RecordStatementExecStats(recordedStmtStatsKey, *queryLevelStats)
+		if err != nil {
+			if log.V(2 /* level */) {
+				log.Warningf(ctx, "unable to record statement exec stats: %s", err)
+			}
+		}
+	}
+
+	if stmtFingerprintID != 0 {
+		ex.statsCollector.ObserveStatement(stmtFingerprintID, recordedStmtStats)
 	}
 
 	// Do some transaction level accounting for the transaction this statement is
@@ -331,13 +336,6 @@ func (ex *connExecutor) recordStatementLatencyMetrics(
 			}
 			m.SQLExecLatency.RecordValue(runLatRaw.Nanoseconds())
 			m.SQLServiceLatency.RecordValue(svcLatRaw.Nanoseconds())
-			if ex.state.isHistorical.Load() {
-				m.SQLExecLatencyHistorical.RecordValue(runLatRaw.Nanoseconds())
-				m.SQLServiceLatencyHistorical.RecordValue(svcLatRaw.Nanoseconds())
-			} else {
-				m.SQLExecLatencyConsistent.RecordValue(runLatRaw.Nanoseconds())
-				m.SQLServiceLatencyConsistent.RecordValue(svcLatRaw.Nanoseconds())
-			}
 		}
 	}
 }

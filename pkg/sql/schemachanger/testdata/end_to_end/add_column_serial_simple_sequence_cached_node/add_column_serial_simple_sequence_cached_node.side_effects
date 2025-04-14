@@ -80,7 +80,6 @@ upsert descriptor #107
   +    sharded: {}
   +    storeColumnNames: []
   +    unique: true
-  +    vecConfig: {}
   +    version: 4
   +  privileges:
   +    ownerProto: root
@@ -159,7 +158,6 @@ upsert descriptor #106
   +      storeColumnNames:
   +      - serial_id
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -187,7 +185,6 @@ upsert descriptor #106
   +      - serial_id
   +      unique: true
   +      useDeletePreservingEncoding: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: DELETE_ONLY
@@ -278,7 +275,6 @@ upsert descriptor #107
   +    sharded: {}
   +    storeColumnNames: []
   +    unique: true
-  +    vecConfig: {}
   +    version: 4
   +  privileges:
   +    ownerProto: root
@@ -387,7 +383,6 @@ upsert descriptor #106
   +      storeColumnNames:
   +      - serial_id
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -415,7 +410,6 @@ upsert descriptor #106
   +      - serial_id
   +      unique: true
   +      useDeletePreservingEncoding: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: DELETE_ONLY
@@ -672,7 +666,6 @@ upsert descriptor #106
   -      storeColumnNames:
   -      - serial_id
   -      unique: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: WRITE_ONLY
@@ -702,7 +695,6 @@ upsert descriptor #106
   -      - serial_id
          unique: true
   -      useDeletePreservingEncoding: true
-         vecConfig: {}
          version: 4
        mutationId: 1
   -    state: DELETE_ONLY
@@ -745,7 +737,7 @@ upsert descriptor #106
   +    storeColumnNames:
   +    - serial_id
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 105
@@ -849,7 +841,6 @@ upsert descriptor #106
   -      partitioning: {}
   -      sharded: {}
   -      unique: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: DELETE_ONLY

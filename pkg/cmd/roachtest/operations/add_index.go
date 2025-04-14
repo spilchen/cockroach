@@ -12,7 +12,6 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/operation"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/operations/helpers"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestflags"
@@ -35,8 +34,8 @@ func (cl *cleanupAddedIndex) Cleanup(
 	defer conn.Close()
 
 	if cl.locked {
-		helpers.SetSchemaLocked(ctx, o, conn, cl.db, cl.table, false /* lock */)
-		defer helpers.SetSchemaLocked(ctx, o, conn, cl.db, cl.table, true /* lock */)
+		setSchemaLocked(ctx, o, conn, cl.db, cl.table, false /* lock */)
+		defer setSchemaLocked(ctx, o, conn, cl.db, cl.table, true /* lock */)
 	}
 	o.Status(fmt.Sprintf("dropping index %s", cl.index))
 	_, err := conn.ExecContext(ctx, fmt.Sprintf("DROP INDEX %s.%s@%s", cl.db, cl.table, cl.index))
@@ -52,12 +51,8 @@ func runAddIndex(
 	defer conn.Close()
 
 	rng, _ := randutil.NewPseudoRand()
-	dbName := helpers.PickRandomDB(ctx, o, conn, helpers.SystemDBs)
-	tableName := helpers.PickRandomTable(ctx, o, conn, dbName)
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE %s", dbName)); err != nil {
-		o.Fatal(err)
-	}
-
+	dbName := pickRandomDB(ctx, o, conn, systemDBs)
+	tableName := pickRandomTable(ctx, o, conn, dbName)
 	rows, err := conn.QueryContext(ctx, fmt.Sprintf(
 		`
 SELECT
@@ -85,10 +80,10 @@ WHERE
 	// If the table's schema is locked, then unlock the table and make sure it will
 	// be re-locked during cleanup.
 	// TODO(#129694): Remove schema unlocking/re-locking once automation is internalized.
-	locked := helpers.IsSchemaLocked(o, conn, dbName, tableName)
+	locked := isSchemaLocked(o, conn, dbName, tableName)
 	if locked {
-		helpers.SetSchemaLocked(ctx, o, conn, dbName, tableName, false /* lock */)
-		defer helpers.SetSchemaLocked(ctx, o, conn, dbName, tableName, true /* lock */)
+		setSchemaLocked(ctx, o, conn, dbName, tableName, false /* lock */)
+		defer setSchemaLocked(ctx, o, conn, dbName, tableName, true /* lock */)
 	}
 
 	predicateClause := ""

@@ -77,11 +77,12 @@ func (r *replicaLogStorage) entriesLocked(
 	//
 	// TODO(pav-kv): we need better safety guardrails here. The log storage type
 	// can remember the readable bounds, and assert that reads do not cross them.
+	// TODO(pav-kv): r.raftMu.bytesAccount is broken - can't rely on raftMu here.
 	entries, _, loadedSize, err := logstore.LoadEntries(
 		r.AnnotateCtx(context.TODO()),
 		r.mu.stateLoader.StateLoader, r.store.TODOEngine(), r.RangeID,
 		r.store.raftEntryCache, r.raftMu.sideloaded, lo, hi, maxBytes,
-		nil, // bytesAccount is not used when reading under Replica.mu
+		&r.raftMu.bytesAccount,
 	)
 	r.store.metrics.RaftStorageReadBytes.Inc(int64(loadedSize))
 	return entries, err
@@ -108,7 +109,11 @@ func (r *replicaLogStorage) Term(i uint64) (uint64, error) {
 func (r *replicaLogStorage) termLocked(i kvpb.RaftIndex) (kvpb.RaftTerm, error) {
 	// TODO(pav-kv): make it possible to read with only raftMu held.
 	r.mu.AssertHeld()
-	if r.shMu.lastIndexNotDurable == i {
+	// TODO(nvanbenschoten): should we set r.mu.lastTermNotDurable when
+	//   r.mu.lastIndexNotDurable == i && r.mu.lastTermNotDurable == invalidLastTerm?
+	// TODO(pav-kv): we should rather always remember the last entry term, and
+	// remove invalidLastTerm special case.
+	if r.shMu.lastIndexNotDurable == i && r.shMu.lastTermNotDurable != invalidLastTerm {
 		return r.shMu.lastTermNotDurable, nil
 	}
 	return logstore.LoadTerm(r.AnnotateCtx(context.TODO()),
@@ -149,23 +154,23 @@ func (r *Replica) GetLastIndex() kvpb.RaftIndex {
 	return r.raftLastIndexRLocked()
 }
 
-// Compacted implements the raft.LogStorage interface.
+// FirstIndex implements the raft.LogStorage interface.
 // Requires that r.mu is held for reading.
-func (r *replicaLogStorage) Compacted() uint64 {
-	return uint64((*Replica)(r).raftCompactedIndexRLocked())
+func (r *replicaLogStorage) FirstIndex() uint64 {
+	return uint64((*Replica)(r).raftFirstIndexRLocked())
 }
 
-// raftCompactedIndexRLocked implements the Compacted() call.
-func (r *Replica) raftCompactedIndexRLocked() kvpb.RaftIndex {
-	return r.shMu.raftTruncState.Index
+// raftFirstIndexRLocked implements the FirstIndex() call.
+func (r *Replica) raftFirstIndexRLocked() kvpb.RaftIndex {
+	return r.shMu.raftTruncState.Index + 1
 }
 
-// GetCompactedIndex returns the compacted index of the raft log.
+// GetFirstIndex returns the index of the first entry in the raft log.
 // Requires that r.mu is not held.
-func (r *Replica) GetCompactedIndex() kvpb.RaftIndex {
+func (r *Replica) GetFirstIndex() kvpb.RaftIndex {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.raftCompactedIndexRLocked()
+	return r.raftFirstIndexRLocked()
 }
 
 // LogSnapshot returns an immutable point-in-time snapshot of the log storage.
@@ -243,7 +248,7 @@ func (r *replicaRaftMuLogSnap) termRaftMuLocked(i kvpb.RaftIndex) (kvpb.RaftTerm
 	r.raftMu.AssertHeld()
 	// NB: the r.mu fields accessed here are always written under both r.raftMu
 	// and r.mu, and the reads are safe under r.raftMu.
-	if r.shMu.lastIndexNotDurable == i {
+	if r.shMu.lastIndexNotDurable == i && r.shMu.lastTermNotDurable != invalidLastTerm {
 		return r.shMu.lastTermNotDurable, nil
 	}
 	return logstore.LoadTerm(r.AnnotateCtx(context.TODO()),
@@ -262,11 +267,11 @@ func (r *replicaRaftMuLogSnap) LastIndex() uint64 {
 	return uint64(r.shMu.lastIndexNotDurable)
 }
 
-// Compacted implements the raft.LogStorageSnapshot interface.
+// FirstIndex implements the raft.LogStorageSnapshot interface.
 // Requires that r.raftMu is held.
-func (r *replicaRaftMuLogSnap) Compacted() uint64 {
+func (r *replicaRaftMuLogSnap) FirstIndex() uint64 {
 	r.raftMu.AssertHeld()
-	return uint64(r.shMu.raftTruncState.Index)
+	return uint64(r.shMu.raftTruncState.Index + 1)
 }
 
 // LogSnapshot implements the raft.LogStorageSnapshot interface.

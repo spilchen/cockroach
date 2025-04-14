@@ -134,9 +134,8 @@ func TestUploadZipEndToEnd(t *testing.T) {
 	// those two in this list to avoid unnecessary errors
 	origTableDumps := clusterWideTableDumps
 	clusterWideTableDumps = map[string]columnParserMap{
-		"system.namespace.txt":            {},
-		"crdb_internal.system_jobs.txt":   origTableDumps["crdb_internal.system_jobs.txt"],
-		"crdb_internal.cluster_locks.txt": origTableDumps["crdb_internal.cluster_locks.txt"],
+		"system.namespace.txt":          {},
+		"crdb_internal.system_jobs.txt": origTableDumps["crdb_internal.system_jobs.txt"],
 	}
 	defer func() {
 		clusterWideTableDumps = origTableDumps
@@ -147,7 +146,7 @@ func TestUploadZipEndToEnd(t *testing.T) {
 			defer req.Body.Close()
 
 			switch req.URL.Path {
-			case "/api/v2/profile":
+			case "/v1/input":
 				return uploadProfileHook(t, req)
 			case "/api/v2/logs/config/archives":
 				return setupDDArchiveHook(t, req)
@@ -208,8 +207,6 @@ func TestUploadZipEndToEnd(t *testing.T) {
 				}
 			case "upload-tables":
 				includeFlag = "--include=tables"
-			case "upload-misc":
-				includeFlag = "--include=misc"
 			}
 
 			debugDir, cleanup := setupZipDir(t, testInput)
@@ -400,8 +397,10 @@ func setupDDLogsHook(t *testing.T, req *http.Request) ([]byte, error) {
 
 			fmt.Println("Logs API Hook:", string(raw))
 		}
-	} else if bytes.Contains(body.Bytes(), []byte("source:debug-zip")) {
-		// capture the body contents for the table dump upload use case
+	}
+
+	// capture the body contents for the table dump upload use case
+	if bytes.Contains(body.Bytes(), []byte("source:debug-zip")) {
 		var lines []map[string]any
 		require.NoError(t, json.Unmarshal(body.Bytes(), &lines))
 
@@ -419,8 +418,6 @@ func setupDDLogsHook(t *testing.T, req *http.Request) ([]byte, error) {
 			}
 			fmt.Println()
 		}
-	} else {
-		fmt.Printf("body: %s\n", body.String())
 	}
 
 	return []byte("200 OK"), nil
@@ -570,14 +567,38 @@ func TestLogUploadSigSplit(t *testing.T) {
 	}
 }
 
+func TestTableDumpColumnParsing(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	datadriven.RunTest(t, "testdata/table_dump_column_parsing", func(t *testing.T, d *datadriven.TestData) string {
+		table, ok := clusterWideTableDumps[d.Cmd]
+		require.True(t, ok, "table dump not found: %s", d.Cmd)
+
+		var buf bytes.Buffer
+		for _, line := range strings.Split(strings.TrimSpace(d.Input), "\n") {
+			cols := strings.Fields(strings.TrimSpace(line))
+			fn, ok := table[cols[0]]
+			require.True(t, ok, "column not found: %s", cols[0])
+
+			decoded, err := fn(strings.TrimSpace(cols[1]))
+			require.NoError(t, err)
+
+			raw, err := json.Marshal(decoded)
+			require.NoError(t, err)
+
+			buf.Write(append(raw, '\n'))
+		}
+
+		return buf.String()
+	})
+}
+
 func copyZipFiles(t *testing.T, src, dest string) {
 	t.Helper()
 
 	paths, err := expandPatterns([]string{
 		path.Join(src, "*.txt"),
 		path.Join(src, "nodes/*/*.txt"),
-		path.Join(src, "*.json"),
-		path.Join(src, "reports/*.json"),
 	})
 	require.NoError(t, err)
 

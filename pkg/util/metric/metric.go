@@ -39,17 +39,10 @@ const (
 	CardinalityLimit = 2000
 )
 
-// Maintaining a list of static label names here to avoid duplication and
-// encourage reuse of label names across the codebase.
-const (
-	LabelQueryType     = "query_type"
-	LabelQueryInternal = "query_internal"
-)
-
 // Iterable provides a method for synchronized access to interior objects.
 type Iterable interface {
 	// GetName returns the fully-qualified name of the metric.
-	GetName(useStaticLabels bool) string
+	GetName() string
 	// GetHelp returns the help text for the metric.
 	GetHelp() string
 	// GetMeasurement returns the label for the metric, which describes the entity
@@ -66,13 +59,13 @@ type Iterable interface {
 
 type PrometheusCompatible interface {
 	// GetName is a method on Metadata
-	GetName(useStaticLabels bool) string
+	GetName() string
 	// GetHelp is a method on Metadata
 	GetHelp() string
 	// GetType returns the prometheus type enum for this metric.
 	GetType() *prometheusgo.MetricType
 	// GetLabels is a method on Metadata
-	GetLabels(useStaticLabels bool) []*prometheusgo.LabelPair
+	GetLabels() []*prometheusgo.LabelPair
 }
 
 // PrometheusExportable is the standard interface for an individual metric
@@ -143,13 +136,8 @@ type CumulativeHistogram interface {
 	CumulativeSnapshot() HistogramSnapshot
 }
 
-// GetName returns the metric's name. When `useStaticLabels` is true, it returns
-// the metric's labeled name if it's non-empty. Otherwise, it returns the metric's
-// name.
-func (m *Metadata) GetName(useStaticLabels bool) string {
-	if useStaticLabels && m.LabeledName != "" {
-		return m.LabeledName
-	}
+// GetName returns the metric's name.
+func (m *Metadata) GetName() string {
 	return m.Name
 }
 
@@ -171,23 +159,12 @@ func (m *Metadata) GetUnit() Unit {
 // GetLabels returns the metric's labels. For rationale behind the conversion
 // from metric.LabelPair to prometheusgo.LabelPair, see the LabelPair comment
 // in pkg/util/metric/metric.proto.
-func (m *Metadata) GetLabels(useStaticLabels bool) []*prometheusgo.LabelPair {
+func (m *Metadata) GetLabels() []*prometheusgo.LabelPair {
+	lps := make([]*prometheusgo.LabelPair, len(m.Labels))
 	// x satisfies the field XXX_unrecognized in prometheusgo.LabelPair.
 	var x []byte
-
-	var lps []*prometheusgo.LabelPair
-	numStaticLabels := 0
-	if useStaticLabels {
-		numStaticLabels = len(m.StaticLabels)
-		lps = make([]*prometheusgo.LabelPair, len(m.Labels)+numStaticLabels)
-		for i, v := range m.StaticLabels {
-			lps[i] = &prometheusgo.LabelPair{Name: v.Name, Value: v.Value, XXX_unrecognized: x}
-		}
-	} else {
-		lps = make([]*prometheusgo.LabelPair, len(m.Labels))
-	}
 	for i, v := range m.Labels {
-		lps[i+numStaticLabels] = &prometheusgo.LabelPair{Name: v.Name, Value: v.Value, XXX_unrecognized: x}
+		lps[i] = &prometheusgo.LabelPair{Name: v.Name, Value: v.Value, XXX_unrecognized: x}
 	}
 	return lps
 }
@@ -376,12 +353,8 @@ func newHistogram(
 		// intervals within a histogram's total duration.
 		duration/WindowedHistogramWrapNum,
 		func() {
-			h.windowed.Lock()
-			defer h.windowed.Unlock()
-			if h.windowed.cur.Load() != nil {
-				h.windowed.prev.Store(h.windowed.cur.Load())
-			}
-			h.windowed.cur.Store(prometheus.NewHistogram(opts))
+			h.windowed.prev = h.windowed.cur
+			h.windowed.cur = prometheus.NewHistogram(opts)
 		})
 	h.windowed.Ticker.OnTick()
 	return h
@@ -400,7 +373,7 @@ var _ IHistogram = (*Histogram)(nil)
 // New buckets are created using TestHistogramBuckets.
 type Histogram struct {
 	Metadata
-	cum prometheus.HistogramInternal
+	cum prometheus.Histogram
 
 	// TODO(obs-inf): the way we implement windowed histograms is not great.
 	// We could "just" double the rotation interval (so that the histogram really
@@ -410,9 +383,12 @@ type Histogram struct {
 	// it up right now. It should be doable though, since there is only one
 	// consumer of windowed histograms - our internal timeseries system.
 	windowed struct {
+		// prometheus.Histogram is thread safe, so we only
+		// need an RLock to record into it. But write lock
+		// is held while rotating.
+		syncutil.RWMutex
 		*tick.Ticker
-		syncutil.Mutex
-		prev, cur atomic.Value
+		prev, cur prometheus.Histogram
 	}
 }
 
@@ -439,6 +415,8 @@ type IHistogram interface {
 // fix and should be expected to be removed.
 // TODO(obs-infra): remove this once pkg/util/aggmetric is merged with this package.
 func (h *Histogram) NextTick() time.Time {
+	h.windowed.RLock()
+	defer h.windowed.RUnlock()
 	return h.windowed.NextTick()
 }
 
@@ -448,16 +426,26 @@ func (h *Histogram) NextTick() time.Time {
 // as part of the public API.
 // TODO(obs-infra): remove this once pkg/util/aggmetric is merged with this package.
 func (h *Histogram) Tick() {
+	h.windowed.Lock()
+	defer h.windowed.Unlock()
 	h.windowed.Tick()
+}
+
+// Windowed returns a copy of the current windowed histogram.
+func (h *Histogram) Windowed() prometheus.Histogram {
+	h.windowed.RLock()
+	defer h.windowed.RUnlock()
+	return h.windowed.cur
 }
 
 // RecordValue adds the given value to the histogram.
 func (h *Histogram) RecordValue(n int64) {
 	v := float64(n)
-	b := h.cum.FindBucket(v)
-	h.cum.ObserveInternal(v, b)
+	h.cum.Observe(v)
 
-	h.windowed.cur.Load().(prometheus.HistogramInternal).ObserveInternal(v, b)
+	h.windowed.RLock()
+	defer h.windowed.RUnlock()
+	h.windowed.cur.Observe(v)
 }
 
 // GetType returns the prometheus type enum for this metric.
@@ -481,22 +469,18 @@ func (h *Histogram) CumulativeSnapshot() HistogramSnapshot {
 func (h *Histogram) WindowedSnapshot() HistogramSnapshot {
 	h.windowed.Lock()
 	defer h.windowed.Unlock()
-	cur := h.windowed.cur.Load().(prometheus.Histogram)
-	// Can't cast here since prev might be nil.
-	prev := h.windowed.prev.Load()
-
-	curMetric := &prometheusgo.Metric{}
-	if err := cur.Write(curMetric); err != nil {
+	cur := &prometheusgo.Metric{}
+	prev := &prometheusgo.Metric{}
+	if err := h.windowed.cur.Write(cur); err != nil {
 		panic(err)
 	}
-	if prev != nil {
-		prevMetric := &prometheusgo.Metric{}
-		if err := prev.(prometheus.Histogram).Write(prevMetric); err != nil {
+	if h.windowed.prev != nil {
+		if err := h.windowed.prev.Write(prev); err != nil {
 			panic(err)
 		}
-		MergeWindowedHistogram(curMetric.Histogram, prevMetric.Histogram)
+		MergeWindowedHistogram(cur.Histogram, prev.Histogram)
 	}
-	return MakeHistogramSnapshot(curMetric.Histogram)
+	return MakeHistogramSnapshot(cur.Histogram)
 }
 
 // GetMetadata returns the metric's metadata including the Prometheus
@@ -508,6 +492,8 @@ func (h *Histogram) GetMetadata() Metadata {
 // Inspect calls the closure.
 func (h *Histogram) Inspect(f func(interface{})) {
 	func() {
+		h.windowed.Lock()
+		defer h.windowed.Unlock()
 		tick.MaybeTick(&h.windowed)
 	}()
 	f(h)
@@ -1568,18 +1554,4 @@ func (hv *HistogramVec) ToPrometheusMetrics() []*prometheusgo.Metric {
 	}
 
 	return metrics
-}
-
-func MakeLabelPairs(labelNamesAndValues ...string) []*LabelPair {
-	if len(labelNamesAndValues)%2 != 0 {
-		panic("labelNamesAndValues must be a list with even length of label names and values")
-	}
-	labelPairs := make([]*LabelPair, 0, len(labelNamesAndValues)/2)
-	for i := 0; i < len(labelNamesAndValues); i += 2 {
-		labelPairs = append(labelPairs, &LabelPair{
-			Name:  &labelNamesAndValues[i],
-			Value: &labelNamesAndValues[i+1],
-		})
-	}
-	return labelPairs
 }

@@ -16,11 +16,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -40,11 +38,6 @@ var (
 
 	outFile = flag.String("out", "", "where to store the result pprof profile")
 )
-
-type profileWithName struct {
-	filename        string
-	profileContents []byte
-}
 
 type Build struct {
 	ID         int64
@@ -151,10 +144,9 @@ func downloadArtifacts(buildID int64, tmpDir string) (ReadAtCloser, int64, error
 // function processes that sub-zip archive and extracts all the CPU (.pprof)
 // files.
 //
-// The .pprof files will be parsed and put into the profilesChan.
+// The .pprof files will be parsed and put into the pprofFilesChan.
 // wg.Done() will be called when this function completes.
 func processArtifactsZip(f *zip.File, profilesChan chan *profile.Profile, wg *sync.WaitGroup) {
-	fmt.Printf("processing zip file %s\n", f.FileHeader.Name)
 	archive, err := f.Open()
 	if err != nil {
 		panic(err)
@@ -169,7 +161,6 @@ func processArtifactsZip(f *zip.File, profilesChan chan *profile.Profile, wg *sy
 	if err != nil {
 		panic(err)
 	}
-	profilesByDir := make(map[string][]profileWithName)
 	for _, file := range zipReader.File {
 		if strings.HasSuffix(file.FileHeader.Name, ".pprof") &&
 			strings.Contains(file.FileHeader.Name, "/cpuprof.") &&
@@ -178,42 +169,13 @@ func processArtifactsZip(f *zip.File, profilesChan chan *profile.Profile, wg *sy
 			if err != nil {
 				panic(err)
 			}
-			var buf bytes.Buffer
-			if _, err := io.Copy(&buf, pprofFile); err != nil {
+			defer pprofFile.Close()
+			prof, err := profile.Parse(pprofFile)
+			if err != nil {
 				panic(err)
 			}
-			if err := pprofFile.Close(); err != nil {
-				fmt.Printf("Failed to close profile file from zip reader: %+v (this is not a fatal error)\n", err)
-				continue
-			}
-			key := filepath.Base(filepath.Dir(file.FileHeader.Name))
-			profilesByDir[key] = append(profilesByDir[key], profileWithName{
-				filename:        filepath.Base(file.FileHeader.Name),
-				profileContents: buf.Bytes(),
-			})
+			profilesChan <- prof
 		}
-	}
-	for _, val := range profilesByDir {
-		// The profiles contain a timestamp in their filenames, so sorting them
-		// puts them in chronological order.
-		slices.SortFunc(val, func(a, b profileWithName) int {
-			return strings.Compare(a.filename, b.filename)
-		})
-	}
-	for key, profiles := range profilesByDir {
-		// We select one profile from about 75% of the way through the
-		// test. The idea is that at around this time, the node is
-		// likely to be doing interesting work that is related to the
-		// test (as opposed to something less relevant like setup
-		// tasks).
-		selected := int(math.Floor(0.75 * float64(len(profiles))))
-		fmt.Printf("Selected profile %d of %d from dir %s (%s)\n", selected, len(profiles), key, profiles[selected].filename)
-		contents := profiles[selected].profileContents
-		prof, err := profile.Parse(bytes.NewReader(contents))
-		if err != nil {
-			panic(err)
-		}
-		profilesChan <- prof
 	}
 	wg.Done()
 }

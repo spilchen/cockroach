@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/tabledesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -140,8 +139,20 @@ var p99LatencyComputeExprStr = p99LatencyComputeExpr
 
 // These system tables are not part of the system config.
 const (
-	// LeaseTableSchema is the new session based leasing table format.
+	// Note: the column "nodeID" refers to the SQL instance ID. It is named
+	// "nodeID" for historical reasons.
 	LeaseTableSchema = `CREATE TABLE system.lease (
+  "descID"     INT8,
+  version      INT8,
+  "nodeID"     INT8,
+  expiration   TIMESTAMP,
+  crdb_region  BYTES NOT NULL,
+  CONSTRAINT   "primary" PRIMARY KEY (crdb_region, "descID", version, expiration, "nodeID"),
+  FAMILY       "primary" ("descID", version, "nodeID", expiration, crdb_region)
+);`
+
+	// LeaseTableSchema_V24_1 is the new session based leasing table format.
+	LeaseTableSchema_V24_1 = `CREATE TABLE system.lease (
   desc_id          INT8,
   version          INT8,
   sql_instance_id  INT8 NOT NULL,
@@ -530,11 +541,10 @@ CREATE TABLE system.statement_diagnostics_requests(
 	plan_gist STRING NULL,
 	anti_plan_gist BOOL NULL,
 	redacted BOOL NOT NULL DEFAULT FALSE,
-	username STRING NOT NULL DEFAULT '',
 	CONSTRAINT "primary" PRIMARY KEY (id),
 	CONSTRAINT check_sampling_probability CHECK (sampling_probability BETWEEN 0.0 AND 1.0),
-	INDEX completed_idx_v2 (completed, id) STORING (statement_fingerprint, min_execution_latency, expires_at, sampling_probability, plan_gist, anti_plan_gist, redacted, username),
-	FAMILY "primary" (id, completed, statement_fingerprint, statement_diagnostics_id, requested_at, min_execution_latency, expires_at, sampling_probability, plan_gist, anti_plan_gist, redacted, username)
+	INDEX completed_idx (completed, id) STORING (statement_fingerprint, min_execution_latency, expires_at, sampling_probability, plan_gist, anti_plan_gist, redacted),
+	FAMILY "primary" (id, completed, statement_fingerprint, statement_diagnostics_id, requested_at, min_execution_latency, expires_at, sampling_probability, plan_gist, anti_plan_gist, redacted)
 );`
 
 	StatementDiagnosticsTableSchema = `
@@ -1376,7 +1386,7 @@ const SystemDatabaseName = catconstants.SystemDatabaseName
 // release version).
 //
 // NB: Don't set this to clusterversion.Latest; use a specific version instead.
-var SystemDatabaseSchemaBootstrapVersion = clusterversion.V25_2_AddUsernameToStmtDiagRequest.Version()
+var SystemDatabaseSchemaBootstrapVersion = clusterversion.V25_1.Version()
 
 // MakeSystemDatabaseDesc constructs a copy of the system database
 // descriptor.
@@ -1903,7 +1913,7 @@ var (
 	// leasing table format.
 	LeaseTable = func() SystemTable {
 		return makeSystemTable(
-			LeaseTableSchema,
+			LeaseTableSchema_V24_1,
 			systemTable(
 				catconstants.LeaseTableName,
 				keys.LeaseTableID,
@@ -1938,6 +1948,69 @@ var (
 				tbl.ExcludeDataFromBackup = true
 			},
 		)
+	}
+
+	// LeaseTable_V23_2 is the descriptor for the leases table with an expiry based
+	// format
+	LeaseTable_V23_2 = func() SystemTable {
+		return makeSystemTable(
+			LeaseTableSchema,
+			systemTable(
+				catconstants.LeaseTableName,
+				keys.LeaseTableID,
+				[]descpb.ColumnDescriptor{
+					{Name: "descID", ID: 1, Type: types.Int},
+					{Name: "version", ID: 2, Type: types.Int},
+					{Name: "nodeID", ID: 3, Type: types.Int},
+					{Name: "expiration", ID: 4, Type: types.Timestamp},
+					{Name: "crdb_region", ID: 5, Type: types.Bytes},
+				},
+				[]descpb.ColumnFamilyDescriptor{
+					{
+						Name:        "primary",
+						ID:          0,
+						ColumnNames: []string{"descID", "version", "nodeID", "expiration", "crdb_region"},
+						ColumnIDs:   []descpb.ColumnID{1, 2, 3, 4, 5},
+					},
+				},
+				descpb.IndexDescriptor{
+					Name:           "primary",
+					ID:             2,
+					Unique:         true,
+					KeyColumnNames: []string{"crdb_region", "descID", "version", "expiration", "nodeID"},
+					KeyColumnDirections: []catenumpb.IndexColumn_Direction{
+						catenumpb.IndexColumn_ASC, catenumpb.IndexColumn_ASC, catenumpb.IndexColumn_ASC,
+						catenumpb.IndexColumn_ASC, catenumpb.IndexColumn_ASC,
+					},
+					KeyColumnIDs: []descpb.ColumnID{5, 1, 2, 4, 3},
+				},
+			),
+		)
+	}
+	V22_2_LeaseTable = func() SystemTable {
+		return makeSystemTable(
+			LeaseTableSchema,
+			systemTable(
+				catconstants.LeaseTableName,
+				keys.LeaseTableID,
+				[]descpb.ColumnDescriptor{
+					{Name: "descID", ID: 1, Type: types.Int},
+					{Name: "version", ID: 2, Type: types.Int},
+					{Name: "nodeID", ID: 3, Type: types.Int},
+					{Name: "expiration", ID: 4, Type: types.Timestamp},
+				},
+				[]descpb.ColumnFamilyDescriptor{
+					{Name: "primary", ID: 0, ColumnNames: []string{"descID", "version", "nodeID", "expiration"}, ColumnIDs: []descpb.ColumnID{1, 2, 3, 4}},
+				},
+				descpb.IndexDescriptor{
+					Name:                "primary",
+					ID:                  1,
+					Unique:              true,
+					KeyColumnNames:      []string{"descID", "version", "expiration", "nodeID"},
+					KeyColumnDirections: []catenumpb.IndexColumn_Direction{catenumpb.IndexColumn_ASC, catenumpb.IndexColumn_ASC, catenumpb.IndexColumn_ASC, catenumpb.IndexColumn_ASC},
+					KeyColumnIDs:        []descpb.ColumnID{1, 2, 4, 3},
+				},
+			))
 	}
 
 	uuidV4String = "uuid_v4()"
@@ -2742,8 +2815,6 @@ var (
 			pk("id"),
 		))
 
-	emptyString = "'':::STRING"
-
 	// TODO(andrei): Add a foreign key reference to the statement_diagnostics table when
 	// it no longer requires us to create an index on statement_diagnostics_id.
 	StatementDiagnosticsRequestsTable = makeSystemTable(
@@ -2763,26 +2834,25 @@ var (
 				{Name: "plan_gist", ID: 9, Type: types.String, Nullable: true},
 				{Name: "anti_plan_gist", ID: 10, Type: types.Bool, Nullable: true},
 				{Name: "redacted", ID: 11, Type: types.Bool, Nullable: false, DefaultExpr: &falseBoolString},
-				{Name: "username", ID: 12, Type: types.String, Nullable: false, DefaultExpr: &emptyString},
 			},
 			[]descpb.ColumnFamilyDescriptor{
 				{
 					Name:        "primary",
-					ColumnNames: []string{"id", "completed", "statement_fingerprint", "statement_diagnostics_id", "requested_at", "min_execution_latency", "expires_at", "sampling_probability", "plan_gist", "anti_plan_gist", "redacted", "username"},
-					ColumnIDs:   []descpb.ColumnID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+					ColumnNames: []string{"id", "completed", "statement_fingerprint", "statement_diagnostics_id", "requested_at", "min_execution_latency", "expires_at", "sampling_probability", "plan_gist", "anti_plan_gist", "redacted"},
+					ColumnIDs:   []descpb.ColumnID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
 				},
 			},
 			pk("id"),
 			// Index for the polling query.
 			descpb.IndexDescriptor{
-				Name:                "completed_idx_v2",
+				Name:                "completed_idx",
 				ID:                  2,
 				Unique:              false,
 				KeyColumnNames:      []string{"completed", "id"},
-				StoreColumnNames:    []string{"statement_fingerprint", "min_execution_latency", "expires_at", "sampling_probability", "plan_gist", "anti_plan_gist", "redacted", "username"},
+				StoreColumnNames:    []string{"statement_fingerprint", "min_execution_latency", "expires_at", "sampling_probability", "plan_gist", "anti_plan_gist", "redacted"},
 				KeyColumnIDs:        []descpb.ColumnID{2, 1},
 				KeyColumnDirections: []catenumpb.IndexColumn_Direction{catenumpb.IndexColumn_ASC, catenumpb.IndexColumn_ASC},
-				StoreColumnIDs:      []descpb.ColumnID{3, 6, 7, 8, 9, 10, 11, 12},
+				StoreColumnIDs:      []descpb.ColumnID{3, 6, 7, 8, 9, 10, 11},
 				Version:             descpb.StrictIndexColumnIDGuaranteesVersion,
 			},
 		),
@@ -3098,7 +3168,7 @@ var (
 				KeyColumnIDs:        []descpb.ColumnID{13},
 				KeySuffixColumnIDs:  []descpb.ColumnID{11, 1, 2, 3, 4, 5, 6},
 				Version:             descpb.StrictIndexColumnIDGuaranteesVersion,
-				Type:                idxtype.INVERTED,
+				Type:                descpb.IndexDescriptor_INVERTED,
 				InvertedColumnKinds: []catpb.InvertedIndexColumnKind{catpb.InvertedIndexColumnKind_DEFAULT},
 			},
 			descpb.IndexDescriptor{
@@ -5119,7 +5189,7 @@ var (
 			},
 			descpb.IndexDescriptor{
 				Name:                "db_name_gin",
-				Type:                idxtype.INVERTED,
+				Type:                descpb.IndexDescriptor_INVERTED,
 				ID:                  8,
 				Unique:              false,
 				Version:             descpb.StrictIndexColumnIDGuaranteesVersion,
@@ -5131,7 +5201,7 @@ var (
 			},
 			descpb.IndexDescriptor{
 				Name:                "table_name_gin",
-				Type:                idxtype.INVERTED,
+				Type:                descpb.IndexDescriptor_INVERTED,
 				ID:                  9,
 				Unique:              false,
 				Version:             descpb.StrictIndexColumnIDGuaranteesVersion,
@@ -5143,7 +5213,7 @@ var (
 			},
 			descpb.IndexDescriptor{
 				Name:                "schema_name_gin",
-				Type:                idxtype.INVERTED,
+				Type:                descpb.IndexDescriptor_INVERTED,
 				ID:                  10,
 				Unique:              false,
 				Version:             descpb.StrictIndexColumnIDGuaranteesVersion,
@@ -5155,7 +5225,7 @@ var (
 			},
 			descpb.IndexDescriptor{
 				Name:                "store_ids_gin",
-				Type:                idxtype.INVERTED,
+				Type:                descpb.IndexDescriptor_INVERTED,
 				ID:                  11,
 				Unique:              false,
 				Version:             descpb.StrictIndexColumnIDGuaranteesVersion,

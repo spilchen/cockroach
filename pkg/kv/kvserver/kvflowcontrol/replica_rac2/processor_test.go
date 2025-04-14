@@ -87,7 +87,7 @@ func (rn *testRaftNode) SendPingRaftMuLocked(to roachpb.ReplicaID) bool {
 }
 
 func (rn *testRaftNode) SendMsgAppRaftMuLocked(
-	_ roachpb.ReplicaID, _ raft.LeadSlice,
+	_ roachpb.ReplicaID, _ raft.LogSlice,
 ) (raftpb.Message, bool) {
 	panic("unimplemented")
 }

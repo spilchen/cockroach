@@ -8,7 +8,6 @@ package backup
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,26 +26,10 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
-	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/cockroach/pkg/util/stop"
 	"github.com/kr/pretty"
 	"github.com/stretchr/testify/require"
 )
-
-var orParams = base.TestClusterArgs{
-	// Online restore is not supported in a secondary tenant yet.
-	ServerArgs: base.TestServerArgs{
-		DefaultTestTenant: base.TestIsSpecificToStorageLayerAndNeedsASystemTenant,
-	},
-}
-
-func onlineImpl(rng *rand.Rand) string {
-	opt := "EXPERIMENTAL DEFERRED COPY"
-	if rng.Intn(2) == 0 {
-		opt = "EXPERIMENTAL COPY"
-	}
-	return opt
-}
 
 func TestOnlineRestoreBasic(t *testing.T) {
 	defer leaktest.AfterTest(t)()
@@ -57,11 +40,16 @@ func TestOnlineRestoreBasic(t *testing.T) {
 	ctx := context.Background()
 
 	const numAccounts = 1000
-
-	tc, sqlDB, dir, cleanupFn := backupRestoreTestSetupWithParams(t, singleNode, numAccounts, InitManualReplication, orParams)
+	params := base.TestClusterArgs{
+		// Online restore is not supported in a secondary tenant yet.
+		ServerArgs: base.TestServerArgs{
+			DefaultTestTenant: base.TestIsSpecificToStorageLayerAndNeedsASystemTenant,
+		},
+	}
+	tc, sqlDB, dir, cleanupFn := backupRestoreTestSetupWithParams(t, singleNode, numAccounts, InitManualReplication, params)
 	defer cleanupFn()
 
-	rtc, rSQLDB, cleanupFnRestored := backupRestoreTestSetupEmpty(t, 1, dir, InitManualReplication, orParams)
+	rtc, rSQLDB, cleanupFnRestored := backupRestoreTestSetupEmpty(t, 1, dir, InitManualReplication, params)
 	defer cleanupFnRestored()
 
 	externalStorage := "nodelocal://1/backup"
@@ -70,37 +58,33 @@ func TestOnlineRestoreBasic(t *testing.T) {
 	createStmtRes := sqlDB.QueryStr(t, createStmt)
 
 	testutils.RunTrueAndFalse(t, "incremental", func(t *testing.T, incremental bool) {
-		testutils.RunTrueAndFalse(t, "blocking download", func(t *testing.T, blockingDownload bool) {
-			sqlDB.Exec(t, fmt.Sprintf("BACKUP DATABASE data INTO '%s'", externalStorage))
+		sqlDB.Exec(t, fmt.Sprintf("BACKUP DATABASE data INTO '%s'", externalStorage))
 
-			if incremental {
-				sqlDB.Exec(t, "UPDATE data.bank SET balance = balance+123 where true;")
-				sqlDB.Exec(t, fmt.Sprintf("BACKUP DATABASE data INTO LATEST IN '%s'", externalStorage))
-			}
+		if incremental {
+			sqlDB.Exec(t, "UPDATE data.bank SET balance = balance+123 where true;")
+			sqlDB.Exec(t, fmt.Sprintf("BACKUP DATABASE data INTO LATEST IN '%s'", externalStorage))
+		}
 
-			var preRestoreTs float64
-			sqlDB.QueryRow(t, `SELECT cluster_logical_timestamp()`).Scan(&preRestoreTs)
+		var preRestoreTs float64
+		sqlDB.QueryRow(t, `SELECT cluster_logical_timestamp()`).Scan(&preRestoreTs)
 
-			bankOnlineRestore(t, rSQLDB, numAccounts, externalStorage, blockingDownload)
+		bankOnlineRestore(t, rSQLDB, numAccounts, externalStorage)
 
-			fpSrc, err := fingerprintutils.FingerprintDatabase(ctx, tc.Conns[0], "data", fingerprintutils.Stripped())
-			require.NoError(t, err)
-			fpDst, err := fingerprintutils.FingerprintDatabase(ctx, rtc.Conns[0], "data", fingerprintutils.Stripped())
-			require.NoError(t, err)
-			require.NoError(t, fingerprintutils.CompareDatabaseFingerprints(fpSrc, fpDst))
+		fpSrc, err := fingerprintutils.FingerprintDatabase(ctx, tc.Conns[0], "data", fingerprintutils.Stripped())
+		require.NoError(t, err)
+		fpDst, err := fingerprintutils.FingerprintDatabase(ctx, rtc.Conns[0], "data", fingerprintutils.Stripped())
+		require.NoError(t, err)
+		require.NoError(t, fingerprintutils.CompareDatabaseFingerprints(fpSrc, fpDst))
 
-			assertMVCCOnlineRestore(t, rSQLDB, preRestoreTs)
-			assertOnlineRestoreWithRekeying(t, sqlDB, rSQLDB)
+		assertMVCCOnlineRestore(t, rSQLDB, preRestoreTs)
+		assertOnlineRestoreWithRekeying(t, sqlDB, rSQLDB)
 
-			if !blockingDownload {
-				waitForLatestDownloadJobToSucceed(t, rSQLDB)
-			}
+		waitForLatestDownloadJobToSucceed(t, rSQLDB)
 
-			rSQLDB.CheckQueryResults(t, createStmt, createStmtRes)
-			sqlDB.CheckQueryResults(t, jobutils.GetExternalBytesForConnectedTenant, [][]string{{"0"}})
+		rSQLDB.CheckQueryResults(t, createStmt, createStmtRes)
+		sqlDB.CheckQueryResults(t, jobutils.GetExternalBytesForConnectedTenant, [][]string{{"0"}})
 
-			rSQLDB.Exec(t, "DROP DATABASE data CASCADE")
-		})
+		rSQLDB.Exec(t, "DROP DATABASE data CASCADE")
 	})
 
 }
@@ -128,36 +112,6 @@ func TestOnlineRestorePartitioned(t *testing.T) {
 	srv.Servers[0].JobRegistry().(*jobs.Registry).TestingNudgeAdoptionQueue()
 
 	sqlDB.Exec(t, fmt.Sprintf(`SHOW JOB WHEN COMPLETE %s`, j[0][4]))
-}
-
-func TestOnlineRestoreLinkCheckpoint(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-	defer nodelocal.ReplaceNodeLocalForTesting(t.TempDir())()
-
-	rng, _ := randutil.NewTestRand()
-
-	const numAccounts = 10
-	_, sqlDB, _, cleanupFn := backupRestoreTestSetupWithParams(
-		t,
-		singleNode,
-		numAccounts,
-		InitManualReplication,
-		orParams,
-	)
-	defer cleanupFn()
-	sqlDB.Exec(t, "BACKUP DATABASE data INTO $1", localFoo)
-	sqlDB.Exec(t, "SET CLUSTER SETTING jobs.debug.pausepoints  = 'restore.before_publishing_descriptors'")
-	var jobID jobspb.JobID
-	stmt := fmt.Sprintf("RESTORE DATABASE data FROM LATEST IN $1 WITH OPTIONS (new_db_name='data2', %s, detached)", onlineImpl(rng))
-	sqlDB.QueryRow(t, stmt, localFoo).Scan(&jobID)
-	jobutils.WaitForJobToPause(t, sqlDB, jobID)
-
-	// Set a pauspoint during the link phase which should not get hit because of
-	// checkpointing.
-	sqlDB.Exec(t, "SET CLUSTER SETTING jobs.debug.pausepoints  = 'restore.before_link'")
-	sqlDB.Exec(t, "RESUME JOB $1", jobID)
-	jobutils.WaitForJobToSucceed(t, sqlDB, jobID)
 }
 
 func TestOnlineRestoreStatementResult(t *testing.T) {
@@ -411,21 +365,13 @@ func TestOnlineRestoreErrors(t *testing.T) {
 }
 
 func bankOnlineRestore(
-	t *testing.T,
-	sqlDB *sqlutils.SQLRunner,
-	numAccounts int,
-	externalStorage string,
-	blockingDownload bool,
+	t *testing.T, sqlDB *sqlutils.SQLRunner, numAccounts int, externalStorage string,
 ) {
 	// Create a table in the default database to force table id rewriting.
 	sqlDB.Exec(t, "CREATE TABLE IF NOT EXISTS foo (i INT PRIMARY KEY, s STRING);")
 
 	sqlDB.Exec(t, "CREATE DATABASE data")
-	stmt := fmt.Sprintf("RESTORE TABLE data.bank FROM LATEST IN '%s' WITH EXPERIMENTAL DEFERRED COPY", externalStorage)
-	if blockingDownload {
-		stmt = fmt.Sprintf("RESTORE TABLE data.bank FROM LATEST IN '%s' WITH EXPERIMENTAL COPY", externalStorage)
-	}
-	sqlDB.Exec(t, stmt)
+	sqlDB.Exec(t, fmt.Sprintf("RESTORE TABLE data.bank FROM LATEST IN '%s' WITH EXPERIMENTAL DEFERRED COPY", externalStorage))
 
 	var restoreRowCount int
 	sqlDB.QueryRow(t, "SELECT count(*) FROM data.bank").Scan(&restoreRowCount)

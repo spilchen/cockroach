@@ -712,6 +712,7 @@ func (s *SQLServerWrapper) PreStart(ctx context.Context) error {
 	// to add this information. See below.
 	sentry.ConfigureScope(func(scope *sentry.Scope) {
 		scope.SetTags(map[string]string{
+			"engine_type":     s.sqlServer.cfg.StorageEngine.String(),
 			"encrypted_store": strconv.FormatBool(encryptedStore),
 		})
 	})
@@ -758,12 +759,15 @@ func (s *SQLServerWrapper) PreStart(ctx context.Context) error {
 	if !s.sqlServer.cfg.DisableRuntimeStatsMonitor {
 		// Begin recording runtime statistics.
 		if err := startSampleEnvironment(workersCtx,
-			s.sqlServer.cfg,
-			0, /* pebbleCacheSize */
+			s.ClusterSettings(),
 			s.stopper,
+			s.sqlServer.cfg.GoroutineDumpDirName,
+			s.sqlServer.cfg.HeapProfileDirName,
+			s.sqlServer.cfg.CPUProfileDirName,
 			s.runtime,
 			s.tenantStatus.sessionRegistry,
 			s.sqlServer.execCfg.RootMemoryMonitor,
+			s.cfg.TestingKnobs,
 		); err != nil {
 			return err
 		}
@@ -789,6 +793,11 @@ func (s *SQLServerWrapper) PreStart(ctx context.Context) error {
 	log.Ops.Infof(ctx, "advertising SQL server node at %s", log.SafeManaged(s.sqlServer.cfg.AdvertiseAddr))
 
 	log.Event(ctx, "accepting connections")
+
+	// Start garbage collecting system events.
+	if err := startSystemLogsGC(workersCtx, s.sqlServer); err != nil {
+		return err
+	}
 
 	// Start the SQL subsystem.
 	if err := s.sqlServer.preStart(
@@ -832,11 +841,6 @@ func (s *SQLServerWrapper) PreStart(ctx context.Context) error {
 		return err
 	}
 
-	// Start garbage collecting system events.
-	if err := startSystemLogsGC(workersCtx, s.sqlServer); err != nil {
-		return err
-	}
-
 	// Initialize the external storage builders configuration params now that the
 	// engines have been created. The object can be used to create ExternalStorage
 	// objects hereafter.
@@ -855,7 +859,6 @@ func (s *SQLServerWrapper) PreStart(ctx context.Context) error {
 			CloneWithMemoryMonitor(sql.MemoryMetrics{}, ieMon),
 		s.costController,
 		s.registry,
-		s.cfg.ExternalIODir,
 	)
 
 	// Start the job scheduler now that the SQL Server and
@@ -980,14 +983,12 @@ func (s *SQLServerWrapper) AcceptClients(ctx context.Context) error {
 		}
 	}
 
-	ti, _ := s.sqlServer.tenantConnect.TenantInfo()
 	if err := structlogging.StartHotRangesLoggingScheduler(
 		ctx,
 		s.stopper,
 		s.sqlServer.tenantConnect,
 		*s.sqlServer.internalExecutor,
 		s.ClusterSettings(),
-		&ti,
 	); err != nil {
 		return err
 	}
@@ -1116,7 +1117,6 @@ func makeTenantSQLServerArgs(
 
 	rpcCtxOpts := rpc.ServerContextOptionsFromBaseConfig(baseCfg.Config)
 	rpcCtxOpts.TenantID = sqlCfg.TenantID
-	rpcCtxOpts.TenantName = sqlCfg.TenantName
 	rpcCtxOpts.UseNodeAuth = sqlCfg.LocalKVServerInfo != nil
 	rpcCtxOpts.NodeID = baseCfg.IDContainer
 	rpcCtxOpts.StorageClusterID = baseCfg.ClusterIDContainer
@@ -1251,8 +1251,9 @@ func makeTenantSQLServerArgs(
 
 	sTS := ts.MakeTenantServer(baseCfg.AmbientCtx, tenantConnect, rpcContext.TenantID, registry)
 
-	systemConfigWatcher := systemconfigwatcher.New(
+	systemConfigWatcher := systemconfigwatcher.NewWithAdditionalProvider(
 		keys.MakeSQLCodec(sqlCfg.TenantID), clock, rangeFeedFactory, &baseCfg.DefaultZoneConfig,
+		tenantConnect,
 	)
 
 	// Define structures which have circular dependencies. The underlying structures
@@ -1268,10 +1269,10 @@ func makeTenantSQLServerArgs(
 		Settings: st,
 		Knobs:    protectedtsKnobs,
 		ReconcileStatusFuncs: ptreconcile.StatusFuncs{
-			jobsprotectedts.GetMetaType(jobsprotectedts.Jobs): jobsprotectedts.MakeStateFunc(
+			jobsprotectedts.GetMetaType(jobsprotectedts.Jobs): jobsprotectedts.MakeStatusFunc(
 				circularJobRegistry, jobsprotectedts.Jobs,
 			),
-			jobsprotectedts.GetMetaType(jobsprotectedts.Schedules): jobsprotectedts.MakeStateFunc(
+			jobsprotectedts.GetMetaType(jobsprotectedts.Schedules): jobsprotectedts.MakeStatusFunc(
 				circularJobRegistry, jobsprotectedts.Schedules,
 			),
 			sessionprotectedts.SessionMetaType: sessionprotectedts.MakeStatusFunc(),
@@ -1300,7 +1301,7 @@ func makeTenantSQLServerArgs(
 	externalStorage := esb.makeExternalStorage
 	externalStorageFromURI := esb.makeExternalStorageFromURI
 
-	grpcServer, err := newGRPCServer(startupCtx, rpcContext, registry)
+	grpcServer, err := newGRPCServer(startupCtx, rpcContext)
 	if err != nil {
 		return sqlServerArgs{}, err
 	}

@@ -7,7 +7,6 @@ package resolvedspan_test
 
 import (
 	"context"
-	"iter"
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/resolvedspan"
@@ -16,6 +15,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/span"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -158,7 +158,6 @@ type frontier interface {
 	ForwardResolvedSpan(context.Context, jobspb.ResolvedSpan) (bool, error)
 	InBackfill(jobspb.ResolvedSpan) bool
 	AtBoundary() (bool, jobspb.ResolvedSpan_BoundaryType, hlc.Timestamp)
-	All() iter.Seq[jobspb.ResolvedSpan]
 }
 
 func testBackfillSpan(
@@ -194,19 +193,29 @@ func testBoundarySpan(
 		require.True(t, atBoundary)
 		require.Equal(t, boundaryType, bType)
 		require.Equal(t, boundaryTS, bTS)
-		for resolvedSpan := range f.All() {
-			require.Equal(t, boundaryTS, resolvedSpan.Timestamp)
-			require.Equal(t, boundaryType, resolvedSpan.BoundaryType)
+		if f, ok := f.(*resolvedspan.AggregatorFrontier); ok {
+			f.EntriesWithBoundaryType(func(
+				_ roachpb.Span, entryTS hlc.Timestamp, entryBoundaryType jobspb.ResolvedSpan_BoundaryType,
+			) (done span.OpResult) {
+				require.Equal(t, boundaryTS, entryTS)
+				require.Equal(t, boundaryType, entryBoundaryType)
+				return span.ContinueMatch
+			})
 		}
 	} else {
 		atBoundary, _, _ := f.AtBoundary()
 		require.False(t, atBoundary)
-		for resolvedSpan := range f.All() {
-			if resolvedSpan.Span.Contains(makeSpan(start, end)) {
-				require.Equal(t, boundaryTS, resolvedSpan.Timestamp)
-				require.Equal(t, boundaryType, resolvedSpan.BoundaryType)
-				break
-			}
+		if f, ok := f.(*resolvedspan.AggregatorFrontier); ok {
+			f.EntriesWithBoundaryType(func(
+				s roachpb.Span, entryTS hlc.Timestamp, entryBoundaryType jobspb.ResolvedSpan_BoundaryType,
+			) (done span.OpResult) {
+				if s.Contains(makeSpan(start, end)) {
+					require.Equal(t, boundaryTS, entryTS)
+					require.Equal(t, boundaryType, entryBoundaryType)
+					return span.StopMatch
+				}
+				return span.ContinueMatch
+			})
 		}
 	}
 }

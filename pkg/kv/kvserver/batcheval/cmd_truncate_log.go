@@ -65,9 +65,7 @@ func TruncateLog(
 	//
 	// TODO(tbg): think about synthesizing a valid term. Can we use the next
 	// existing entry's term?
-	// TODO(pav-kv): some day, make args.Index an inclusive compaction index, and
-	// eliminate the remaining +-1 arithmetics.
-	firstIndex := cArgs.EvalCtx.GetCompactedIndex() + 1
+	firstIndex := cArgs.EvalCtx.GetFirstIndex()
 	if firstIndex >= args.Index {
 		if log.V(3) {
 			log.Infof(ctx, "attempting to truncate previously truncated raft log. FirstIndex:%d, TruncateFrom:%d",

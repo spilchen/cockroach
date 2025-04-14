@@ -939,6 +939,9 @@ var zipInternalTablesPerNode = DebugZipTableRegistry{
 			"index_recommendations",
 			"latency_seconds_min",
 			"latency_seconds_max",
+			"latency_seconds_p50",
+			"latency_seconds_p90",
+			"latency_seconds_p99",
 		},
 	},
 	"crdb_internal.node_transaction_statistics": {
@@ -1456,7 +1459,6 @@ var zipSystemTables = DebugZipTableRegistry{
 			"plan_gist",
 			"anti_plan_gist",
 			"redacted",
-			"username",
 		},
 	},
 	// statement_statistics can have over 100k rows in just the last hour.

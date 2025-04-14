@@ -9,7 +9,6 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -666,14 +665,14 @@ func TestClusterRestoreFailCleanup(t *testing.T) {
 
 	// Bugger the backup by removing the SST files. (Note this messes up all of
 	// the backups, but there is only one at this point.)
-	if err := filepath.WalkDir(tempDir, func(path string, d fs.DirEntry, err error) error {
+	if err := filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if d.Name() == backupbase.BackupManifestName ||
+		if info.Name() == backupbase.BackupManifestName ||
 			!strings.HasSuffix(path, ".sst") ||
-			d.Name() == backupinfo.BackupMetadataDescriptorsListPath ||
-			d.Name() == backupinfo.BackupMetadataFilesListPath {
+			info.Name() == backupinfo.BackupMetadataDescriptorsListPath ||
+			info.Name() == backupinfo.BackupMetadataFilesListPath {
 			return nil
 		}
 		return os.Remove(path)
@@ -1029,6 +1028,10 @@ func TestReintroduceOfflineSpans(t *testing.T) {
 	// the small test-case will get entirely buffered/merged by small-file merging
 	// and not report any progress in the meantime unless it is disabled.
 	srcDB.Exec(t, `SET CLUSTER SETTING bulkio.backup.file_size = '1'`)
+
+	// Test servers only have 128MB root memory monitors, reduce the buffer size
+	// so we don't see memory errors.
+	srcDB.Exec(t, `SET CLUSTER SETTING bulkio.backup.merge_file_buffer_size = '1MiB'`)
 
 	// Take a backup that we'll use to create an OFFLINE descriptor.
 	srcDB.Exec(t, `CREATE INDEX new_idx ON data.bank (balance)`)

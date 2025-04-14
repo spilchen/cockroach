@@ -324,7 +324,7 @@ func (p *planner) dropTableImpl(
 			droppedViews = append(droppedViews, cascadedViews...)
 			droppedViews = append(droppedViews, qualifiedView.FQString())
 		case *funcdesc.Mutable:
-			if err := p.dropFunctionImpl(ctx, t, behavior); err != nil {
+			if err := p.dropFunctionImpl(ctx, t); err != nil {
 				return droppedViews, err
 			}
 		}
@@ -452,20 +452,20 @@ func (p *planner) markTableMutationJobsSuccessful(
 		if err := mutationJob.WithTxn(p.InternalSQLTxn()).Update(ctx, func(
 			txn isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater,
 		) error {
-			status := md.State
+			status := md.Status
 			switch status {
-			case jobs.StateSucceeded, jobs.StateCanceled, jobs.StateFailed, jobs.StateRevertFailed:
+			case jobs.StatusSucceeded, jobs.StatusCanceled, jobs.StatusFailed, jobs.StatusRevertFailed:
 				log.Warningf(ctx, "mutation job %d in unexpected state %s", jobID, status)
 				return nil
-			case jobs.StateRunning, jobs.StatePending:
-				status = jobs.StateSucceeded
+			case jobs.StatusRunning, jobs.StatusPending:
+				status = jobs.StatusSucceeded
 			default:
 				// We shouldn't mark jobs as succeeded if they're not in a state where
 				// they're eligible to ever succeed, so mark them as failed.
-				status = jobs.StateFailed
+				status = jobs.StatusFailed
 			}
 			log.Infof(ctx, "marking mutation job %d for dropped table as %s", jobID, status)
-			ju.UpdateState(status)
+			ju.UpdateStatus(status)
 			return nil
 		}); err != nil {
 			return errors.Wrap(err, "updating mutation job for dropped table")

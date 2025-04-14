@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"math/rand/v2"
 	"sort"
 	"strings"
 	"testing"
@@ -26,6 +25,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/workload/ycsb"
 	"github.com/cockroachdb/datadriven"
+	"golang.org/x/exp/rand"
 )
 
 // This is a testing framework to benchmark load-based splitters, enabling
@@ -219,7 +219,7 @@ type requestGenerator struct {
 	numRequests         int
 }
 
-func (rg requestGenerator) generate(rng *rand.Rand) ([]request, []weightedKey, float64) {
+func (rg requestGenerator) generate() ([]request, []weightedKey, float64) {
 	var totalWeight float64
 	requests := make([]request, 0, rg.numRequests)
 	weightedKeys := make([]weightedKey, 0, 2*rg.numRequests)
@@ -231,7 +231,7 @@ func (rg requestGenerator) generate(rng *rand.Rand) ([]request, []weightedKey, f
 
 		var span roachpb.Span
 		span.Key = uint32ToKey(startKey)
-		if rng.Float64() < rg.rangeRequestPercent {
+		if rand.Float64() < rg.rangeRequestPercent {
 			endKey := startKey + spanLength
 			span.EndKey = uint32ToKey(endKey)
 
@@ -265,7 +265,7 @@ type multiRequestGenerator struct {
 	numRequests       int
 }
 
-func (mrg multiRequestGenerator) generate(rng *rand.Rand) ([]request, []weightedKey, float64) {
+func (mrg multiRequestGenerator) generate() ([]request, []weightedKey, float64) {
 	numRequests := 0
 	for _, gen := range mrg.requestGenerators {
 		numRequests += gen.numRequests
@@ -275,7 +275,7 @@ func (mrg multiRequestGenerator) generate(rng *rand.Rand) ([]request, []weighted
 	requests := make([]request, 0, numRequests)
 	weightedKeys := make([]weightedKey, 0, numRequests*2)
 	for _, gen := range mrg.requestGenerators {
-		reqs, keys, weight := gen.generate(rng)
+		reqs, keys, weight := gen.generate()
 		requests = append(requests, reqs...)
 		weightedKeys = append(weightedKeys, keys...)
 		totalWeight += weight
@@ -402,10 +402,10 @@ type result struct {
 func runTest(
 	recordFn func(span roachpb.Span, weight int),
 	keyFn func() roachpb.Key,
-	rng *rand.Rand,
+	randSource rand.Source,
 	mrg multiRequestGenerator,
 ) result {
-	requests, weightedKeys, totalWeight := mrg.generate(rng)
+	requests, weightedKeys, totalWeight := mrg.generate()
 	optimalKey, optimalLeftWeight, optimalRightWeight := getOptimalKey(
 		weightedKeys,
 		totalWeight,
@@ -514,7 +514,7 @@ func runTestRepeated(settings *lbsTestSettings) repeatedResult {
 		noKeyFoundPercent                           float64
 		lastStateString                             string
 	)
-	randSource := rand.New(rand.NewPCG(settings.seed, 0))
+	randSource := rand.New(rand.NewSource(settings.seed))
 	requestGen := settings.requestConfig.makeGenerator(randSource)
 
 	for i := 0; i < settings.iterations; i++ {
@@ -697,8 +697,8 @@ func makeMultiRequestConfigs(
 	} else {
 		// This is expensive, we could instead pass in the source.
 		n := len(requestConfigs)
-		rng := rand.New(rand.NewPCG(seed, 0))
-		perms := rng.Perm(n)
+		rand := rand.New(rand.NewSource(seed))
+		perms := rand.Perm(n)
 		for i := 0; i < n; i += mixCount {
 			mrc := multiReqConfig{
 				mix:        mix,

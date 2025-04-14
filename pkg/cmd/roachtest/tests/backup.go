@@ -301,27 +301,6 @@ func registerBackup(r registry.Registry) {
 		Suites:                    registry.Suites(registry.Nightly),
 		TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
 		EncryptionSupport:         registry.EncryptionAlwaysDisabled,
-		PostProcessPerfMetrics: func(test string, histogram *roachtestutil.HistogramMetric) (roachtestutil.AggregatedPerfMetrics, error) {
-
-			metricName := fmt.Sprintf("%s_elapsed", test)
-			totalElapsed := histogram.Elapsed
-
-			numNodes := int64(10)
-			tb := int64(1 << 40)
-			mb := int64(1 << 20)
-			dataSizeInMB := (2 * tb) / mb
-			backupDuration := int64(totalElapsed / 1000)
-			avgRatePerNode := roachtestutil.MetricPoint(float64(dataSizeInMB) / float64(numNodes*backupDuration))
-
-			return roachtestutil.AggregatedPerfMetrics{
-				{
-					Name:           metricName,
-					Value:          avgRatePerNode,
-					Unit:           "MB/s/node",
-					IsHigherBetter: false,
-				},
-			}, nil
-		},
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			rows := rows2TiB
 			if c.IsLocal() {
@@ -633,34 +612,34 @@ func runBackupMVCCRangeTombstones(
 	require.NoError(t, err)
 
 	// Set up some helpers.
-	waitForState := func(
+	waitForStatus := func(
 		jobID string,
-		exxpectedState jobs.State,
-		expectStatus jobs.StatusMessage,
+		expectStatus jobs.Status,
+		expectRunningStatus jobs.RunningStatus,
 		duration time.Duration,
 	) {
 		ctx, cancel := context.WithTimeout(ctx, duration)
 		defer cancel()
 		require.NoError(t, retry.Options{}.Do(ctx, func(ctx context.Context) error {
-			var statusMessage string
+			var status string
 			var payloadBytes, progressBytes []byte
 			require.NoError(t, conn.QueryRowContext(
 				ctx, jobutils.InternalSystemJobsBaseQuery, jobID).
-				Scan(&statusMessage, &payloadBytes, &progressBytes))
-			if jobs.State(statusMessage) == jobs.StateFailed {
+				Scan(&status, &payloadBytes, &progressBytes))
+			if jobs.Status(status) == jobs.StatusFailed {
 				var payload jobspb.Payload
 				require.NoError(t, protoutil.Unmarshal(payloadBytes, &payload))
 				t.Fatalf("job failed: %s", payload.Error)
 			}
-			if jobs.State(statusMessage) != exxpectedState {
-				return errors.Errorf("expected job state %s, but got %s", exxpectedState, statusMessage)
+			if jobs.Status(status) != expectStatus {
+				return errors.Errorf("expected job status %s, but got %s", expectStatus, status)
 			}
-			if expectStatus != "" {
+			if expectRunningStatus != "" {
 				var progress jobspb.Progress
 				require.NoError(t, protoutil.Unmarshal(progressBytes, &progress))
-				if jobs.StatusMessage(progress.StatusMessage) != expectStatus {
+				if jobs.RunningStatus(progress.RunningStatus) != expectRunningStatus {
 					return errors.Errorf("expected running status %s, but got %s",
-						expectStatus, progress.StatusMessage)
+						expectRunningStatus, progress.RunningStatus)
 				}
 			}
 			return nil
@@ -752,12 +731,12 @@ func runBackupMVCCRangeTombstones(
 			`IMPORT INTO orders CSV DATA ('%s') WITH delimiter='|', detached`,
 			strings.Join(files, "', '")),
 		).Scan(&jobID))
-		waitForState(jobID, jobs.StatePaused, "", 30*time.Minute)
+		waitForStatus(jobID, jobs.StatusPaused, "", 30*time.Minute)
 
 		t.Status("canceling import")
 		_, err = conn.ExecContext(ctx, fmt.Sprintf(`CANCEL JOB %s`, jobID))
 		require.NoError(t, err)
-		waitForState(jobID, jobs.StateCanceled, "", 30*time.Minute)
+		waitForStatus(jobID, jobs.StatusCanceled, "", 30*time.Minute)
 	}
 
 	_, err = conn.ExecContext(ctx, `SET CLUSTER SETTING jobs.debug.pausepoints = ''`)
@@ -801,7 +780,7 @@ func runBackupMVCCRangeTombstones(
 	require.NoError(t, err)
 	require.NoError(t, conn.QueryRowContext(ctx,
 		`SELECT job_id FROM [SHOW JOBS] WHERE job_type = 'SCHEMA CHANGE GC'`).Scan(&jobID))
-	waitForState(jobID, jobs.StateRunning, sql.StatusWaitingForMVCCGC, 2*time.Minute)
+	waitForStatus(jobID, jobs.StatusRunning, sql.RunningStatusWaitingForMVCCGC, 2*time.Minute)
 
 	// Check that the data has been deleted. We don't write MVCC range tombstones
 	// unless the range contains live data, so only assert their existence if the

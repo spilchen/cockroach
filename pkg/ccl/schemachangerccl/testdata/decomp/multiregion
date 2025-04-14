@@ -457,8 +457,6 @@ ElementState:
     sourceIndexId: 0
     tableId: 110
     temporaryIndexId: 0
-    type: FORWARD
-    vecConfig: null
   Status: PUBLIC
 - SchemaChild:
     childObjectId: 110
@@ -854,8 +852,6 @@ ElementState:
     sourceIndexId: 0
     tableId: 109
     temporaryIndexId: 0
-    type: FORWARD
-    vecConfig: null
   Status: PUBLIC
 - SchemaChild:
     childObjectId: 109
@@ -1545,8 +1541,6 @@ ElementState:
     sourceIndexId: 0
     tableId: 108
     temporaryIndexId: 0
-    type: FORWARD
-    vecConfig: null
   Status: PUBLIC
 - SchemaChild:
     childObjectId: 108

@@ -657,7 +657,7 @@ type ChangefeedState interface {
 	SetHighwater(frontier hlc.Timestamp)
 
 	// SetCheckpoint sets the checkpoint for the changefeed.
-	SetCheckpoint(checkpoint *jobspb.TimestampSpansMap)
+	SetCheckpoint(checkpoint jobspb.ChangefeedProgress_Checkpoint)
 }
 
 // TenantOperator is capable of interacting with tenant state, allowing SQL
@@ -741,7 +741,6 @@ type StmtDiagnosticsRequestInsertFunc func(
 	minExecutionLatency time.Duration,
 	expiresAfter time.Duration,
 	redacted bool,
-	username string,
 ) error
 
 // AsOfSystemTime represents the result from the evaluation of AS OF SYSTEM TIME
@@ -763,8 +762,4 @@ type AsOfSystemTime struct {
 	// This is be zero if there is no maximum bound.
 	// In non-zero, we want a read t where Timestamp <= t < MaxTimestampBound.
 	MaxTimestampBound hlc.Timestamp
-
-	// ForBackfill indicates if this AOST expression was added to an operation
-	// that requires a backfill, like CREATE TABLE AS.
-	ForBackfill bool
 }

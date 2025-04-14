@@ -16,7 +16,6 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/util/debugutil"
-	"github.com/cockroachdb/cockroach/pkg/util/growstack"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/log/logcrash"
@@ -487,7 +486,6 @@ func (s *Stopper) RunAsyncTaskEx(ctx context.Context, opt TaskOpts, f func(conte
 	// Call f on another goroutine.
 	taskStarted = true // Another goroutine now takes ownership of the alloc, if any.
 	go func(taskName string) {
-		growstack.Grow()
 		defer s.runPostlude()
 		defer s.startRegion(ctx, taskName).End()
 		defer sp.Finish()
@@ -561,12 +559,8 @@ func (s *Stopper) Stop(ctx context.Context) {
 	// Run the closers without holding s.mu. There's no concern around new
 	// closers being added; we've marked this stopper as `stopping` above, so
 	// any attempts to do so will be refused.
-	//
-	// We want to run the closers in the reverse order they were added. This is
-	// similar to using `defer` and makes sense since we have to initialize lower
-	// levels first.
-	for i := len(s.mu.closers) - 1; i >= 0; i-- {
-		s.mu.closers[i].Close()
+	for _, c := range s.mu.closers {
+		c.Close()
 	}
 }
 

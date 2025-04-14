@@ -16,7 +16,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/clusterstats"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
@@ -396,46 +395,28 @@ func runAllocationBenchSample(
 		true, /* dryRun */
 		startTime, endTime,
 		joinSummaryQueries(resourceMinMaxSummary, overloadMaxSummary, rebalanceCostSummary),
-		func(stats map[string]clusterstats.StatSummary) *roachtestutil.AggregatedMetric {
+		func(stats map[string]clusterstats.StatSummary) (string, float64) {
 			ret, name := 0.0, "cpu(%)"
 			if stat, ok := stats[cpuStat.Query]; ok {
 				ret = roundFraction(arithmeticMean(stat.Value), 1, 2)
 			}
-			return &roachtestutil.AggregatedMetric{
-				Name:             name,
-				Value:            roachtestutil.MetricPoint(ret),
-				Unit:             "percent",
-				IsHigherBetter:   false,
-				AdditionalLabels: nil,
-			}
+			return name, ret
 		},
-		func(stats map[string]clusterstats.StatSummary) *roachtestutil.AggregatedMetric {
+		func(stats map[string]clusterstats.StatSummary) (string, float64) {
 			ret, name := 0.0, "write(%)"
 			if stat, ok := stats[ioWriteStat.Query]; ok {
 				ret = roundFraction(arithmeticMean(stat.Value), 1, 2)
 			}
-			return &roachtestutil.AggregatedMetric{
-				Name:             name,
-				Value:            roachtestutil.MetricPoint(ret),
-				Unit:             "percent",
-				IsHigherBetter:   false,
-				AdditionalLabels: nil,
-			}
+			return name, ret
 		},
-		func(stats map[string]clusterstats.StatSummary) *roachtestutil.AggregatedMetric {
+		func(stats map[string]clusterstats.StatSummary) (string, float64) {
 			rebalanceMb := 0.0
 			values := stats[rebalanceSnapshotSentStat.Query].Value
 			if len(values) > 0 {
 				startMB, endMB := values[0], values[len(values)-1]
 				rebalanceMb = roundFraction(endMB-startMB, 1024, 2)
 			}
-			return &roachtestutil.AggregatedMetric{
-				Name:             "cost(gb)",
-				Value:            roachtestutil.MetricPoint(rebalanceMb),
-				Unit:             "GB",
-				IsHigherBetter:   false,
-				AdditionalLabels: nil,
-			}
+			return "cost(gb)", rebalanceMb
 		},
 	)
 }

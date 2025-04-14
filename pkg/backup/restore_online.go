@@ -17,13 +17,11 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
-	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
-	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
@@ -51,17 +49,6 @@ var onlineRestoreLinkWorkers = settings.RegisterByteSizeSetting(
 	32,
 	settings.PositiveInt,
 )
-
-var onlineRestoreLayerLimit = settings.RegisterIntSetting(
-	settings.ApplicationLevel,
-	"backup.restore.online_layer_limit",
-	"maximum number of layers to restore in an online restore operation",
-	10,
-	settings.PositiveInt,
-	settings.WithVisibility(settings.Reserved),
-)
-
-const linkCompleteKey = "link_complete"
 
 // splitAndScatter runs through all entries produced by genSpans splitting and
 // scattering the key-space designated by the passed rewriter such that if all
@@ -193,7 +180,7 @@ func sendAddRemoteSSTs(
 		return 0, 0, err
 	}
 
-	if err := job.NoTxn().UpdateStatusMessage(ctx, "Splitting and distributing spans"); err != nil {
+	if err := job.NoTxn().RunningStatus(ctx, "Splitting and distributing spans"); err != nil {
 		return 0, 0, err
 	}
 
@@ -205,7 +192,7 @@ func sendAddRemoteSSTs(
 		return 0, 0, err
 	}
 
-	if err := job.NoTxn().UpdateStatusMessage(ctx, ""); err != nil {
+	if err := job.NoTxn().RunningStatus(ctx, ""); err != nil {
 		return 0, 0, err
 	}
 
@@ -423,9 +410,7 @@ func sendRemoteAddSSTable(
 // checkManifestsForOnlineCompat returns an error if the set of
 // manifests appear to be from a backup that we cannot currently
 // support for online restore.
-func checkManifestsForOnlineCompat(
-	ctx context.Context, settings *cluster.Settings, manifests []backuppb.BackupManifest,
-) error {
+func checkManifestsForOnlineCompat(ctx context.Context, manifests []backuppb.BackupManifest) error {
 	if len(manifests) < 1 {
 		return errors.AssertionFailedf("expected at least 1 backup manifest")
 	}
@@ -435,7 +420,7 @@ func checkManifestsForOnlineCompat(
 	}
 
 	// TODO(online-restore): Remove once we support layer ordering and have tested some reasonable number of layers.
-	layerLimit := int(onlineRestoreLayerLimit.Get(&settings.SV))
+	const layerLimit = 3
 	if len(manifests) > layerLimit {
 		return pgerror.Newf(pgcode.FeatureNotSupported, "experimental online restore: too many incremental layers %d (from backup) > %d (limit)", len(manifests), layerLimit)
 	}
@@ -497,7 +482,7 @@ func (r *restoreResumer) maybeCalculateTotalDownloadSpans(
 	// amount we expect to download and persist it so that we can indicate our
 	// progress as that number goes down later.
 	log.Infof(ctx, "calculating total download size (across all stores) to complete restore")
-	if err := r.job.NoTxn().UpdateStatusMessage(ctx, "Calculating total download size..."); err != nil {
+	if err := r.job.NoTxn().RunningStatus(ctx, "Calculating total download size..."); err != nil {
 		return 0, errors.Wrapf(err, "failed to update running status of job %d", r.job.ID())
 	}
 
@@ -517,7 +502,7 @@ func (r *restoreResumer) maybeCalculateTotalDownloadSpans(
 
 	if err := r.job.NoTxn().Update(ctx, func(txn isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
 		md.Progress.GetRestore().TotalDownloadRequired = total
-		md.Progress.StatusMessage = fmt.Sprintf("Downloading %s of restored data...", sz(total))
+		md.Progress.RunningStatus = fmt.Sprintf("Downloading %s of restored data...", sz(total))
 		ju.UpdateProgress(md.Progress)
 		return nil
 	}); err != nil {
@@ -581,23 +566,27 @@ func sendDownloadSpan(ctx context.Context, execCtx sql.JobExecContext, spans roa
 	return nil
 }
 
-func getDownloadSpans(
-	codec keys.SQLCodec, preRestoreData restorationData, mainRestoreData restorationData,
-) (roachpb.Spans, error) {
+func (r *restoreResumer) maybeWriteDownloadJob(
+	ctx context.Context,
+	execConfig *sql.ExecutorConfig,
+	preRestoreData *restorationDataBase,
+	mainRestoreData *mainRestorationData,
+) error {
+	details := r.job.Details().(jobspb.RestoreDetails)
+	if !details.ExperimentalOnline {
+		return nil
+	}
 	rekey := mainRestoreData.getRekeys()
 	rekey = append(rekey, preRestoreData.getRekeys()...)
 
 	tenantRekey := mainRestoreData.getTenantRekeys()
 	tenantRekey = append(tenantRekey, preRestoreData.getTenantRekeys()...)
-	kr, err := MakeKeyRewriterFromRekeys(codec, rekey, tenantRekey,
+	kr, err := MakeKeyRewriterFromRekeys(execConfig.Codec, rekey, tenantRekey,
 		false /* restoreTenantFromStream */)
 	if err != nil {
-		return nil, errors.Wrap(err, "creating key rewriter from rekeys")
+		return errors.Wrap(err, "creating key rewriter from rekeys")
 	}
-	downloadSpans := make([]roachpb.Span, 0, len(mainRestoreData.getSpans())+len(preRestoreData.getSpans()))
-	for _, span := range mainRestoreData.getSpans() {
-		downloadSpans = append(downloadSpans, span.Clone())
-	}
+	downloadSpans := mainRestoreData.getSpans()
 
 	// Intentionally download preRestoreData after the main data. During a cluster
 	// restore, preRestore data are linked to a temp system db that are then
@@ -605,39 +594,22 @@ func getDownloadSpans(
 	// should never be queried. We still want to download this data, however, to
 	// protect against external storage deletions of these linked in ssts, but at
 	// lower priority to the main data.
-	for _, span := range preRestoreData.getSpans() {
-		downloadSpans = append(downloadSpans, span.Clone())
-	}
-
+	downloadSpans = append(downloadSpans, preRestoreData.getSpans()...)
 	for i := range downloadSpans {
 		var err error
-		downloadSpans[i], err = rewriteSpan(kr, downloadSpans[i], execinfrapb.ElidePrefix_None)
+		downloadSpans[i], err = rewriteSpan(kr, downloadSpans[i].Clone(), execinfrapb.ElidePrefix_None)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return downloadSpans, nil
-}
 
-func (r *restoreResumer) maybeWriteDownloadJob(
-	ctx context.Context, execConfig *sql.ExecutorConfig,
-) error {
-	details := r.job.Details().(jobspb.RestoreDetails)
-	if !details.ExperimentalOnline {
-		return nil
-	}
-
-	if len(details.DownloadSpans) == 0 && !details.SchemaOnly {
-		return errors.AssertionFailedf("download spans should have been persisted to job details")
-	}
-
-	log.Infof(ctx, "creating job to track downloads in %d spans", len(details.DownloadSpans))
+	log.Infof(ctx, "creating job to track downloads in %d spans", len(downloadSpans))
 	downloadJobRecord := jobs.Record{
 		Description: fmt.Sprintf("Background Data Download for %s", r.job.Payload().Description),
 		Username:    r.job.Payload().UsernameProto.Decode(),
 		Details: jobspb.RestoreDetails{
 			DownloadJob:                        true,
-			DownloadSpans:                      details.DownloadSpans,
+			DownloadSpans:                      downloadSpans,
 			PostDownloadTableAutoStatsSettings: details.PostDownloadTableAutoStatsSettings},
 		Progress: jobspb.RestoreProgress{},
 	}

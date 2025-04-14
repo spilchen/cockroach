@@ -786,7 +786,7 @@ func (b *Builder) buildTriggerFunction(
 	triggerFuncScope := b.allocScope()
 	funcRef := &tree.FunctionOID{OID: catid.FuncIDToOID(catid.DescID(trigger.FuncID()))}
 	funcExpr := tree.FuncExpr{Func: tree.ResolvableFunctionReference{FunctionReference: funcRef}}
-	triggerFuncScope.resolveType(&funcExpr, types.AnyElement)
+	triggerFuncScope.resolveType(&funcExpr, types.Any)
 	resolvedDef := funcExpr.Func.FunctionReference.(*tree.ResolvedFunctionDefinition)
 	o := funcExpr.ResolvedOverload()
 
@@ -838,8 +838,8 @@ func (b *Builder) buildTriggerFunction(
 		panic(err)
 	}
 	plBuilder := newPLpgSQLBuilder(
-		b, basePLOptions().WithIsTriggerFn(), resolvedDef.Name, stmt.AST.Label, nil, /* colRefs */
-		params, tableTyp, nil /* outScope */, 0, /* resultBufferID */
+		b, resolvedDef.Name, stmt.AST.Label, nil /* colRefs */, params, tableTyp,
+		false /* isProc */, false /* isDoBlock */, true /* buildSQL */, nil, /* outScope */
 	)
 	stmtScope := plBuilder.buildRootBlock(stmt.AST, triggerFuncScope, params)
 	udfDef.Body = []memo.RelExpr{stmtScope.expr}

@@ -63,7 +63,7 @@ upsert descriptor #106
   +    storeColumnNames:
   +    - j
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 105
@@ -143,7 +143,7 @@ upsert descriptor #106
   +    storeColumnNames:
   +    - j
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 105

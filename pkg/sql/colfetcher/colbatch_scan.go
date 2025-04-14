@@ -339,23 +339,17 @@ func NewColBatchScan(
 		spec.FetchSpec.External,
 	)
 	fetcher := cFetcherPool.Get().(*cFetcher)
-	shouldCollectStats := execstats.ShouldCollectStats(ctx, flowCtx.CollectStats)
 	fetcher.cFetcherArgs = cFetcherArgs{
 		execinfra.GetWorkMemLimit(flowCtx),
 		estimatedRowCount,
 		flowCtx.TraceKV,
 		true, /* singleUse */
-		shouldCollectStats,
+		execstats.ShouldCollectStats(ctx, flowCtx.CollectStats),
 		false, /* alwaysReallocate */
 	}
 	if err = fetcher.Init(fetcherAllocator, kvFetcher, tableArgs); err != nil {
 		fetcher.Release()
 		return nil, nil, err
-	}
-	if shouldCollectStats {
-		if flowTxn := flowCtx.EvalCtx.Txn; flowTxn != nil {
-			base.ContentionEventsListener.Init(flowTxn.ID())
-		}
 	}
 	return &ColBatchScan{
 		colBatchScanBase: base,

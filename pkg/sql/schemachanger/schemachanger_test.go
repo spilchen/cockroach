@@ -67,9 +67,9 @@ func TestSchemaChangerJobRunningStatus(t *testing.T) {
 				require.NoError(t, err)
 				switch stageIdx {
 				case 0:
-					runningStatus0.Store(job.Progress().StatusMessage)
+					runningStatus0.Store(job.Progress().RunningStatus)
 				case 1:
-					runningStatus1.Store(job.Progress().StatusMessage)
+					runningStatus1.Store(job.Progress().RunningStatus)
 				}
 				return nil
 			},
@@ -376,7 +376,7 @@ CREATE SEQUENCE db.sq1;
 SELECT job_id FROM [SHOW JOBS]
 WHERE 
 	job_type = 'SCHEMA CHANGE' AND 
-	status = $1`, jobs.StateRunning)
+	status = $1`, jobs.StatusRunning)
 			if err != nil {
 				t.Fatalf("unexpected error querying rows %s", err)
 			}

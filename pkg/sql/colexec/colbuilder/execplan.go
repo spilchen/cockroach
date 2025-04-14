@@ -344,7 +344,7 @@ func createDiskBackedSort(
 	diskBackedReuseMode colexecop.BufferingOpReuseMode,
 ) colexecop.Operator {
 	var (
-		sorterMemMonitorName mon.Name
+		sorterMemMonitorName redact.SafeString
 		inMemorySorter       colexecop.Operator
 	)
 	if len(ordering.Columns) == int(matchLen) {
@@ -645,7 +645,7 @@ func makeNewHashJoinerArgs(
 	opName redact.SafeString,
 	core *execinfrapb.HashJoinerSpec,
 	factory coldata.ColumnFactory,
-) (colexecjoin.NewHashJoinerArgs, mon.Name) {
+) (colexecjoin.NewHashJoinerArgs, redact.SafeString) {
 	hashJoinerMemAccount, hashJoinerMemMonitorName := args.MonitorRegistry.CreateMemAccountForSpillStrategy(
 		ctx, flowCtx, opName, args.Spec.ProcessorID,
 	)
@@ -679,7 +679,7 @@ func makeNewHashAggregatorArgs(
 	opName redact.SafeString,
 	newAggArgs *colexecagg.NewAggregatorArgs,
 	factory coldata.ColumnFactory,
-) (*colexecagg.NewHashAggregatorArgs, *colexecutils.NewSpillingQueueArgs, mon.Name) {
+) (*colexecagg.NewHashAggregatorArgs, *colexecutils.NewSpillingQueueArgs, redact.SafeString) {
 	// We will divide the available memory equally between the two usages - the
 	// hash aggregation itself and the input tuples tracking.
 	totalMemLimit := execinfra.GetWorkMemLimit(flowCtx)
@@ -724,8 +724,7 @@ func makeNewHashAggregatorArgs(
 			DiskQueueCfg:       args.DiskQueueCfg,
 			FDSemaphore:        args.FDSemaphore,
 			DiskAcc: args.MonitorRegistry.CreateDiskAccount(
-				// TODO(mgartner): Do not convert the name to a string.
-				ctx, flowCtx, redact.SafeString(hashAggregatorMemMonitorName.String())+"-spilling-queue", args.Spec.ProcessorID,
+				ctx, flowCtx, hashAggregatorMemMonitorName+"-spilling-queue", args.Spec.ProcessorID,
 			),
 			DiskQueueMemAcc: accounts[4],
 		},
@@ -842,17 +841,6 @@ func NewColOperator(
 			var resultTypes []*types.T
 			if flowCtx.EvalCtx.SessionData().DirectColumnarScansEnabled {
 				canUseDirectScan := func() bool {
-					// txnWriteBuffer currently doesn't support
-					// COL_BATCH_RESPONSE scan format, so if buffered writes are
-					// enabled, we won't use the direct scans.
-					//
-					// We could've relaxed this condition further to not use
-					// direct scans if at least some writes are actually
-					// buffered, but given this feature is in experimental
-					// state, we don't bother doing so for now.
-					if flowCtx.Txn.BufferedWritesEnabled() {
-						return false
-					}
 					// We currently don't use the direct scans if TraceKV is
 					// enabled (due to not being able to tell the KV server
 					// about it). One idea would be to include this boolean into
@@ -1219,7 +1207,7 @@ func NewColOperator(
 				} else {
 					diskSpiller := colexecdisk.NewTwoInputDiskSpiller(
 						inputs[0].Root, inputs[1].Root, inMemoryHashJoiner.(colexecop.BufferingInMemoryOperator),
-						[]mon.Name{hashJoinerMemMonitorName},
+						[]redact.SafeString{hashJoinerMemMonitorName},
 						func(inputOne, inputTwo colexecop.Operator) colexecop.Operator {
 							opName := redact.SafeString("external-hash-joiner")
 							accounts := args.MonitorRegistry.CreateUnlimitedMemAccounts(
@@ -1386,7 +1374,7 @@ func NewColOperator(
 			evalCtx.SingleDatumAggMemAccount = ehaMemAccount
 			diskSpiller := colexecdisk.NewTwoInputDiskSpiller(
 				inputs[0].Root, inputs[1].Root, hgj,
-				[]mon.Name{hashJoinerMemMonitorName, hashAggregatorMemMonitorName},
+				[]redact.SafeString{hashJoinerMemMonitorName, hashAggregatorMemMonitorName},
 				func(inputOne, inputTwo colexecop.Operator) colexecop.Operator {
 					// When we spill to disk, we just use a combo of an external
 					// hash join followed by an external hash aggregation.

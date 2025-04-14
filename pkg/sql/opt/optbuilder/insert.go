@@ -291,18 +291,6 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 		returning = ins.Returning.(*tree.ReturningExprs)
 	}
 
-	if ins.VectorInsert() {
-		if ins.With != nil {
-			panic(errors.AssertionFailedf("vectorized insert with CTE is not supported"))
-		}
-		if ins.OnConflict != nil {
-			panic(errors.AssertionFailedf("vectorized insert with on conflict is not supported"))
-		}
-		if ins.Returning != nil {
-			panic(errors.AssertionFailedf("vectorized insert with returning is not supported"))
-		}
-	}
-
 	switch {
 	// Case 1: Simple INSERT statement.
 	case ins.OnConflict == nil:
@@ -310,7 +298,7 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 		mb.buildRowLevelBeforeTriggers(tree.TriggerEventInsert, false /* cascade */)
 
 		// Build the final insert statement, including any returned expressions.
-		mb.buildInsert(returning, ins.VectorInsert())
+		mb.buildInsert(returning)
 
 	// Case 2: INSERT..ON CONFLICT DO NOTHING.
 	case ins.OnConflict.DoNothing:
@@ -325,7 +313,7 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 
 		// Since buildInputForDoNothing filters out rows with conflicts, always
 		// insert rows that are not filtered.
-		mb.buildInsert(returning, false /* vectorInsert */)
+		mb.buildInsert(returning)
 
 	// Case 3: UPSERT statement.
 	case ins.OnConflict.IsUpsertAlias():
@@ -749,7 +737,7 @@ func (mb *mutationBuilder) addSynthesizedColsForInsert() {
 
 // buildInsert constructs an Insert operator, possibly wrapped by a Project
 // operator that corresponds to the given RETURNING clause.
-func (mb *mutationBuilder) buildInsert(returning *tree.ReturningExprs, vectorInsert bool) {
+func (mb *mutationBuilder) buildInsert(returning *tree.ReturningExprs) {
 	// Disambiguate names so that references in any expressions, such as a
 	// check constraint, refer to the correct columns.
 	mb.disambiguateColumns()
@@ -761,7 +749,7 @@ func (mb *mutationBuilder) buildInsert(returning *tree.ReturningExprs, vectorIns
 	mb.projectPartialIndexPutCols()
 
 	// Project vector index PUT columns.
-	mb.projectVectorIndexColsForInsert()
+	mb.projectVectorIndexCols()
 
 	mb.buildUniqueChecksForInsert()
 
@@ -769,7 +757,7 @@ func (mb *mutationBuilder) buildInsert(returning *tree.ReturningExprs, vectorIns
 
 	mb.buildRowLevelAfterTriggers(opt.InsertOp)
 
-	private := mb.makeMutationPrivate(returning != nil, vectorInsert)
+	private := mb.makeMutationPrivate(returning != nil)
 	mb.outScope.expr = mb.b.factory.ConstructInsert(
 		mb.outScope.expr, mb.uniqueChecks, mb.fastPathUniqueChecks, mb.fkChecks, private,
 	)
@@ -981,7 +969,7 @@ func (mb *mutationBuilder) buildUpsert(returning *tree.ReturningExprs) {
 	}
 
 	// Project vector index PUT and DEL columns.
-	mb.projectVectorIndexColsForUpsert()
+	mb.projectVectorIndexCols()
 
 	mb.buildUniqueChecksForUpsert()
 
@@ -989,7 +977,7 @@ func (mb *mutationBuilder) buildUpsert(returning *tree.ReturningExprs) {
 
 	mb.buildRowLevelAfterTriggers(opt.InsertOp)
 
-	private := mb.makeMutationPrivate(returning != nil, false /* vectorInsert */)
+	private := mb.makeMutationPrivate(returning != nil)
 	mb.outScope.expr = mb.b.factory.ConstructUpsert(
 		mb.outScope.expr, mb.uniqueChecks, mb.fkChecks, private,
 	)

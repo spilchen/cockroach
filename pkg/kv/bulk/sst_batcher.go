@@ -866,6 +866,7 @@ func (b *SSTBatcher) addSSTable(
 				req := &kvpb.AddSSTableRequest{
 					RequestHeader:                          kvpb.RequestHeader{Key: item.start, EndKey: item.end},
 					Data:                                   item.sstBytes,
+					DisallowShadowing:                      !b.disallowShadowingBelow.IsEmpty(),
 					DisallowShadowingBelow:                 b.disallowShadowingBelow,
 					MVCCStats:                              &item.stats,
 					IngestAsWrites:                         ingestAsWriteBatch,

@@ -21,7 +21,6 @@ import (
 	"time"
 
 	apd "github.com/cockroachdb/apd/v3"
-	"github.com/cockroachdb/cockroach/pkg/backup/backuppb"
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/cloud/externalconn"
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
@@ -99,12 +98,13 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sessionphase"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlliveness"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/insights"
 	"github.com/cockroachdb/cockroach/pkg/sql/stats"
 	"github.com/cockroachdb/cockroach/pkg/sql/stmtdiagnostics"
 	"github.com/cockroachdb/cockroach/pkg/sql/syntheticprivilegecache"
 	tablemetadatacache_util "github.com/cockroachdb/cockroach/pkg/sql/tablemetadatacache/util"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
-	"github.com/cockroachdb/cockroach/pkg/sql/vecindex"
+	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
 	"github.com/cockroachdb/cockroach/pkg/upgrade"
 	"github.com/cockroachdb/cockroach/pkg/upgrade/upgradebase"
 	"github.com/cockroachdb/cockroach/pkg/util/bitarray"
@@ -746,7 +746,7 @@ var planCacheClusterMode = settings.RegisterEnumSetting(
 	settings.ApplicationLevel,
 	"sql.defaults.plan_cache_mode",
 	"default value for plan_cache_mode session setting",
-	"auto",
+	"force_custom_plan",
 	map[sessiondatapb.PlanCacheMode]string{
 		sessiondatapb.PlanCacheModeForceCustom:  "force_custom_plan",
 		sessiondatapb.PlanCacheModeForceGeneric: "force_generic_plan",
@@ -767,18 +767,6 @@ var (
 		Measurement: "Latency",
 		Unit:        metric.Unit_NANOSECONDS,
 	}
-	MetaSQLExecLatencyConsistent = metric.Metadata{
-		Name:        "sql.exec.latency.consistent",
-		Help:        "Latency of SQL statement execution of non-historical queries",
-		Measurement: "Latency",
-		Unit:        metric.Unit_NANOSECONDS,
-	}
-	MetaSQLExecLatencyHistorical = metric.Metadata{
-		Name:        "sql.exec.latency.historical",
-		Help:        "Latency of SQL statement execution of historical queries",
-		Measurement: "Latency",
-		Unit:        metric.Unit_NANOSECONDS,
-	}
 	MetaSQLExecLatencyDetail = metric.Metadata{
 		Name:        "sql.exec.latency.detail",
 		Help:        "Latency of SQL statement execution, by statement fingerprint",
@@ -792,17 +780,11 @@ var (
 		Measurement: "Latency",
 		Unit:        metric.Unit_NANOSECONDS,
 	}
-	MetaSQLServiceLatencyConsistent = metric.Metadata{
-		Name:        "sql.service.latency.consistent",
-		Help:        "Latency of SQL request execution of non-historical queries",
-		Measurement: "Latency",
-		Unit:        metric.Unit_NANOSECONDS,
-	}
-	MetaSQLServiceLatencyHistorical = metric.Metadata{
-		Name:        "sql.service.latency.historical",
-		Help:        "Latency of SQL request execution of historical queries",
-		Measurement: "Latency",
-		Unit:        metric.Unit_NANOSECONDS,
+	MetaSQLOptFallback = metric.Metadata{
+		Name:        "sql.optimizer.fallback.count",
+		Help:        "Number of statements which the cost-based optimizer was unable to plan",
+		Measurement: "SQL Statements",
+		Unit:        metric.Unit_COUNT,
 	}
 	MetaSQLOptPlanCacheHits = metric.Metadata{
 		Name:        "sql.optimizer.plan_cache.hits",
@@ -1030,12 +1012,6 @@ var (
 		Measurement: "SQL Statements",
 		Unit:        metric.Unit_COUNT,
 	}
-	MetaCallStoredProcStarted = metric.Metadata{
-		Name:        "sql.call_stored_proc.started.count",
-		Help:        "Number of invocation of stored procedures via CALL statements",
-		Measurement: "SQL Statements",
-		Unit:        metric.Unit_COUNT,
-	}
 	MetaMiscStarted = metric.Metadata{
 		Name:        "sql.misc.started.count",
 		Help:        "Number of other SQL statements started",
@@ -1093,36 +1069,28 @@ var (
 		Unit:        metric.Unit_COUNT,
 	}
 	MetaSelectExecuted = metric.Metadata{
-		Name:         "sql.select.count",
-		Help:         "Number of SQL SELECT statements successfully executed",
-		Measurement:  "SQL Statements",
-		Unit:         metric.Unit_COUNT,
-		LabeledName:  "sql.count",
-		StaticLabels: metric.MakeLabelPairs(metric.LabelQueryType, "select"),
+		Name:        "sql.select.count",
+		Help:        "Number of SQL SELECT statements successfully executed",
+		Measurement: "SQL Statements",
+		Unit:        metric.Unit_COUNT,
 	}
 	MetaUpdateExecuted = metric.Metadata{
-		Name:         "sql.update.count",
-		Help:         "Number of SQL UPDATE statements successfully executed",
-		Measurement:  "SQL Statements",
-		Unit:         metric.Unit_COUNT,
-		LabeledName:  "sql.count",
-		StaticLabels: metric.MakeLabelPairs(metric.LabelQueryType, "update"),
+		Name:        "sql.update.count",
+		Help:        "Number of SQL UPDATE statements successfully executed",
+		Measurement: "SQL Statements",
+		Unit:        metric.Unit_COUNT,
 	}
 	MetaInsertExecuted = metric.Metadata{
-		Name:         "sql.insert.count",
-		Help:         "Number of SQL INSERT statements successfully executed",
-		Measurement:  "SQL Statements",
-		Unit:         metric.Unit_COUNT,
-		LabeledName:  "sql.count",
-		StaticLabels: metric.MakeLabelPairs(metric.LabelQueryType, "insert"),
+		Name:        "sql.insert.count",
+		Help:        "Number of SQL INSERT statements successfully executed",
+		Measurement: "SQL Statements",
+		Unit:        metric.Unit_COUNT,
 	}
 	MetaDeleteExecuted = metric.Metadata{
-		Name:         "sql.delete.count",
-		Help:         "Number of SQL DELETE statements successfully executed",
-		Measurement:  "SQL Statements",
-		Unit:         metric.Unit_COUNT,
-		LabeledName:  "sql.count",
-		StaticLabels: metric.MakeLabelPairs(metric.LabelQueryType, "delete"),
+		Name:        "sql.delete.count",
+		Help:        "Number of SQL DELETE statements successfully executed",
+		Measurement: "SQL Statements",
+		Unit:        metric.Unit_COUNT,
 	}
 	MetaCRUDExecuted = metric.Metadata{
 		Name:        "sql.crud_query.count",
@@ -1181,12 +1149,6 @@ var (
 	MetaCopyNonAtomicExecuted = metric.Metadata{
 		Name:        "sql.copy.nonatomic.count",
 		Help:        "Number of non-atomic COPY SQL statements successfully executed",
-		Measurement: "SQL Statements",
-		Unit:        metric.Unit_COUNT,
-	}
-	MetaCallStoredProcExecuted = metric.Metadata{
-		Name:        "sql.call_stored_proc.count",
-		Help:        "Number of successfully executed stored procedure calls",
 		Measurement: "SQL Statements",
 		Unit:        metric.Unit_COUNT,
 	}
@@ -1307,9 +1269,6 @@ func getMetricMeta(meta metric.Metadata, internal bool) metric.Metadata {
 		meta.Name += ".internal"
 		meta.Help += " (internal queries)"
 		meta.Measurement = "SQL Internal Statements"
-		if meta.LabeledName != "" {
-			meta.StaticLabels = append(meta.StaticLabels, metric.MakeLabelPairs(metric.LabelQueryInternal, "true")...)
-		}
 	}
 	return meta
 }
@@ -1414,7 +1373,6 @@ type ExecutorConfig struct {
 	TableStatsCache    *stats.TableStatisticsCache
 	StatsRefresher     *stats.Refresher
 	QueryCache         *querycache.C
-	VecIndexManager    *vecindex.Manager
 
 	SchemaChangerMetrics *SchemaChangerMetrics
 	FeatureFlagMetrics   *featureflag.DenialMetrics
@@ -1442,6 +1400,7 @@ type ExecutorConfig struct {
 	UnusedIndexRecommendationsKnobs      *idxusage.UnusedIndexRecommendationTestingKnobs
 	ExternalConnectionTestingKnobs       *externalconn.TestingKnobs
 	EventLogTestingKnobs                 *EventLogTestingKnobs
+	InsightsTestingKnobs                 *insights.TestingKnobs
 	TableMetadataKnobs                   *tablemetadatacache_util.TestingKnobs
 
 	// HistogramWindowInterval is (server.Config).HistogramWindowInterval.
@@ -1779,7 +1738,7 @@ type ExecutorTestingKnobs struct {
 
 	// OnRecordTxnFinish, if set, will be called as we record a transaction
 	// finishing.
-	OnRecordTxnFinish func(isInternal bool, phaseTimes *sessionphase.Times, stmt string, txnStats *sqlstats.RecordedTxnStats)
+	OnRecordTxnFinish func(isInternal bool, phaseTimes *sessionphase.Times, stmt string, txnStats sqlstats.RecordedTxnStats)
 
 	// UseTransactionDescIDGenerator is used to force descriptor ID generation
 	// to use a transaction, and, in doing so, more deterministically allocate
@@ -1907,10 +1866,6 @@ type BackupRestoreTestingKnobs struct {
 	// is written.
 	AfterBackupCheckpoint func()
 
-	// AfterLoadingCompactionManifestOnResume is run once the backup manifest has been
-	// loaded/created on the resumption of a compaction job.
-	AfterLoadingCompactionManifestOnResume func(manifest *backuppb.BackupManifest)
-
 	// CaptureResolvedTableDescSpans allows for intercepting the spans which are
 	// resolved during backup planning, and will eventually be backed up during
 	// execution.
@@ -1948,8 +1903,6 @@ type BackupRestoreTestingKnobs struct {
 	RunAfterRetryIteration func(err error) error
 
 	RunAfterRestoreProcDrains func()
-
-	RunBeforeResolvingCompactionDest func() error
 }
 
 var _ base.ModuleTestingKnobs = &BackupRestoreTestingKnobs{}
@@ -2212,7 +2165,6 @@ func checkResultType(typ *types.T, fmtCode pgwirebase.FormatCode) error {
 	case types.TSVectorFamily:
 	case types.IntervalFamily:
 	case types.JsonFamily:
-	case types.JsonpathFamily:
 	case types.UuidFamily:
 	case types.INetFamily:
 	case types.OidFamily:
@@ -2264,7 +2216,6 @@ func (p *planner) EvalAsOfTimestamp(
 // ShowTrace (of a Select statement), Scrub, Export, and CreateStats.
 func (p *planner) isAsOf(ctx context.Context, stmt tree.Statement) (*eval.AsOfSystemTime, error) {
 	var asOf tree.AsOfClause
-	var forBackfill bool
 	switch s := stmt.(type) {
 	case *tree.Select:
 		selStmt := s.Select
@@ -2297,39 +2248,6 @@ func (p *planner) isAsOf(ctx context.Context, stmt tree.Statement) (*eval.AsOfSy
 		asOf = s.Options.AsOf
 	case *tree.Explain:
 		return p.isAsOf(ctx, s.Statement)
-	case *tree.CreateTable:
-		if !s.As() {
-			return nil, nil
-		}
-		ts, err := p.isAsOf(ctx, s.AsSource)
-		if err != nil {
-			return nil, err
-		}
-		if ts != nil {
-			ts.ForBackfill = true
-		}
-		return ts, nil
-	case *tree.CreateView:
-		if !s.Materialized {
-			return nil, nil
-		}
-		// N.B.: If the AS OF SYSTEM TIME value here is older than the most recent
-		// schema change to any of the tables that the view depends on, we should
-		// reject this update.
-		ts, err := p.isAsOf(ctx, s.AsSource)
-		if err != nil {
-			return nil, err
-		}
-		if ts != nil {
-			ts.ForBackfill = true
-		}
-		return ts, nil
-	case *tree.RefreshMaterializedView:
-		if s.AsOf.Expr == nil {
-			return nil, nil
-		}
-		asOf = s.AsOf
-		forBackfill = true
 	default:
 		return nil, nil
 	}
@@ -2337,7 +2255,6 @@ func (p *planner) isAsOf(ctx context.Context, stmt tree.Statement) (*eval.AsOfSy
 	if err != nil {
 		return nil, err
 	}
-	asOfRet.ForBackfill = forBackfill
 	return &asOfRet, err
 }
 
@@ -2785,6 +2702,9 @@ func (st *SessionTracing) StartTracing(
 	if _, ok := st.ex.machine.CurState().(stateNoTxn); !ok {
 		txnCtx := st.ex.state.Ctx
 		sp := tracing.SpanFromContext(txnCtx)
+		if sp == nil {
+			return errors.Errorf("no txn span for SessionTracing")
+		}
 		// We're hijacking this span and we're never going to un-hijack it, so it's
 		// up to us to finish it.
 		sp.Finish()
@@ -3249,10 +3169,6 @@ type sessionDataMutatorCallbacks struct {
 	// setCurTxnReadOnly is called when we execute SET transaction_read_only = ...
 	// It can be nil, in which case nothing triggers on execution.
 	setCurTxnReadOnly func(readOnly bool) error
-	// setBufferedWritesEnabled is called when we execute SET kv_transaction_buffered_writes_enabled = ...
-	// It can be nil, in which case nothing triggers on execution (apart from
-	// modification of the session data).
-	setBufferedWritesEnabled func(enabled bool)
 	// upgradedIsolationLevel is called whenever the transaction isolation
 	// session variable is configured and the isolation level is automatically
 	// upgraded to a stronger one. It's also used when the isolation level is
@@ -3683,6 +3599,10 @@ func (m *sessionDataMutator) SetAvoidFullTableScansInMutations(val bool) {
 
 func (m *sessionDataMutator) SetAlterColumnTypeGeneral(val bool) {
 	m.data.AlterColumnTypeGeneralEnabled = val
+}
+
+func (m *sessionDataMutator) SetRowLevelSecurity(val bool) {
+	m.data.RowLevelSecurityEnabled = val
 }
 
 func (m *sessionDataMutator) SetEnableSuperRegions(val bool) {
@@ -4118,47 +4038,8 @@ func (m *sessionDataMutator) SetOptimizerMinRowCount(val float64) {
 	m.data.OptimizerMinRowCount = val
 }
 
-func (m *sessionDataMutator) SetBufferedWritesEnabled(b bool) {
-	m.data.BufferedWritesEnabled = b
-	if m.setBufferedWritesEnabled != nil {
-		m.setBufferedWritesEnabled(b)
-	}
-}
-
 func (m *sessionDataMutator) SetOptimizerCheckInputMinRowCount(val float64) {
 	m.data.OptimizerCheckInputMinRowCount = val
-}
-
-func (m *sessionDataMutator) SetOptimizerPlanLookupJoinsWithReverseScans(val bool) {
-	m.data.OptimizerPlanLookupJoinsWithReverseScans = val
-}
-
-func (m *sessionDataMutator) SetRegisterLatchWaitContentionEvents(val bool) {
-	m.data.RegisterLatchWaitContentionEvents = val
-}
-
-func (m *sessionDataMutator) SetUseCPutsOnNonUniqueIndexes(val bool) {
-	m.data.UseCPutsOnNonUniqueIndexes = val
-}
-
-func (m *sessionDataMutator) SetBufferedWritesUseLockingOnNonUniqueIndexes(val bool) {
-	m.data.BufferedWritesUseLockingOnNonUniqueIndexes = val
-}
-
-func (m *sessionDataMutator) SetOptimizerUseLockElisionMultipleFamilies(val bool) {
-	m.data.OptimizerUseLockElisionMultipleFamilies = val
-}
-
-func (m *sessionDataMutator) SetOptimizerEnableLockElision(val bool) {
-	m.data.OptimizerEnableLockElision = val
-}
-
-func (m *sessionDataMutator) SetOptimizerUseDeleteRangeFastPath(val bool) {
-	m.data.OptimizerUseDeleteRangeFastPath = val
-}
-
-func (m *sessionDataMutator) SetAllowCreateTriggerFunctionWithArgvReferences(val bool) {
-	m.data.AllowCreateTriggerFunctionWithArgvReferences = val
 }
 
 // Utility functions related to scrubbing sensitive information on SQL Stats.
@@ -4299,6 +4180,17 @@ func DescsTxn(
 	return execCfg.InternalDB.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
 		return f(ctx, txn, txn.Descriptors())
 	})
+}
+
+// TestingDescsTxn is a convenience function for running a transaction on
+// descriptors when you have a serverutils.ApplicationLayerInterface.
+func TestingDescsTxn(
+	ctx context.Context,
+	s serverutils.ApplicationLayerInterface,
+	f func(ctx context.Context, txn isql.Txn, col *descs.Collection) error,
+) error {
+	execCfg := s.ExecutorConfig().(ExecutorConfig)
+	return DescsTxn(ctx, &execCfg, f)
 }
 
 // NewRowMetrics creates a rowinfra.Metrics struct for either internal or user
