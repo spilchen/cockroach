@@ -96,14 +96,15 @@ func TestSQLStatsJsonEncoding(t *testing.T) {
            "sqDiff": {{.Float}}
          },
          "nodes": [{{joinInts .IntArray}}],
-         "kvNodeIds": [{{joinInt32s .Int32Array}}],
          "regions": [{{joinStrings .StringArray}}],
-         "usedFollowerRead": {{.Bool}},
          "planGists": [{{joinStrings .StringArray}}],
          "indexes": [{{joinStrings .StringArray}}],
          "latencyInfo": {
            "min": {{.Float}},
-           "max": {{.Float}}
+           "max": {{.Float}},
+           "p50": {{.Float}},
+           "p90": {{.Float}},
+           "p99": {{.Float}}
          },
          "lastErrorCode": "{{.String}}"
        },
@@ -212,10 +213,6 @@ func TestSQLStatsJsonEncoding(t *testing.T) {
 		// Strip the monononic part of timestamps, as it doesn't roundtrip. UTC()
 		// has that stripping side-effect.
 		input.Stats.LastExecTimestamp = input.Stats.LastExecTimestamp.UTC()
-		// We are no longer setting the latency percentiles.
-		input.Stats.LatencyInfo.P50 = 0
-		input.Stats.LatencyInfo.P90 = 0
-		input.Stats.LatencyInfo.P99 = 0
 
 		err = DecodeStmtStatsStatisticsJSON(actualStatisticsJSON, &actualJSONUnmarshalled.Stats)
 		require.NoError(t, err)
@@ -286,12 +283,13 @@ func TestSQLStatsJsonEncoding(t *testing.T) {
            "sqDiff": {{.Float}}
          },
          "nodes": [{{joinInts .IntArray}}],
-         "kvNodeIds": [{{joinInt32s .Int32Array}}],
-         "usedFollowerRead": {{.Bool}},
          "planGists": [{{joinStrings .StringArray}}],
          "latencyInfo": {
            "min": {{.Float}},
-           "max": {{.Float}}
+           "max": {{.Float}},
+           "p50": {{.Float}},
+           "p90": {{.Float}},
+           "p99": {{.Float}},
          },
          "errorCode": "{{.String}}"
        },
@@ -402,10 +400,6 @@ func TestSQLStatsJsonEncoding(t *testing.T) {
 		// Strip the monononic part of timestamps, as it doesn't roundtrip. UTC()
 		// has that stripping side-effect.
 		expectedStatistics.Stats.LastExecTimestamp = expectedStatistics.Stats.LastExecTimestamp.UTC()
-		// We no longer set the percentile latencies.
-		expectedStatistics.Stats.LatencyInfo.P50 = 0
-		expectedStatistics.Stats.LatencyInfo.P90 = 0
-		expectedStatistics.Stats.LatencyInfo.P99 = 0
 
 		err = DecodeStmtStatsStatisticsJSON(actualStatisticsJSON, &actualJSONUnmarshalled.Stats)
 		require.NoError(t, err)

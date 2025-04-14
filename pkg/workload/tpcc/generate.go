@@ -6,7 +6,6 @@
 package tpcc
 
 import (
-	"math/rand/v2"
 	"strconv"
 
 	"github.com/cockroachdb/cockroach/pkg/col/coldata"
@@ -14,7 +13,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/bufalloc"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/cockroach/pkg/workload"
-	randold "golang.org/x/exp/rand"
+	"golang.org/x/exp/rand"
 )
 
 // These constants are all set by the spec - they're not knobs. Don't change
@@ -58,7 +57,6 @@ const (
 
 type generateLocals struct {
 	rng       tpccRand
-	rngOld    tpccRandOld
 	uuidAlloc uuid.UUID
 }
 
@@ -73,8 +71,8 @@ var itemTypes = []*types.T{
 func (w *tpcc) tpccItemInitialRowBatch(rowIdx int, cb coldata.Batch, a *bufalloc.ByteAllocator) {
 	l := w.localsPool.Get().(*generateLocals)
 	defer w.localsPool.Put(l)
-	l.rng.Rand = rand.New(rand.NewPCG(RandomSeed.Seed(), uint64(rowIdx)))
-	ao := aCharsOffset(l.rng.IntN(len(aCharsAlphabet)))
+	l.rng.Seed(RandomSeed.Seed() + uint64(rowIdx))
+	ao := aCharsOffset(l.rng.Intn(len(aCharsAlphabet)))
 
 	iID := rowIdx + 1
 
@@ -116,9 +114,9 @@ func (w *tpcc) tpccWarehouseInitialRowBatch(
 ) {
 	l := w.localsPool.Get().(*generateLocals)
 	defer w.localsPool.Put(l)
-	l.rng.Rand = rand.New(rand.NewPCG(RandomSeed.Seed(), uint64(rowIdx)))
-	no := numbersOffset(l.rng.IntN(len(numbersAlphabet)))
-	lo := lettersOffset(l.rng.IntN(len(lettersAlphabet)))
+	l.rng.Seed(RandomSeed.Seed() + uint64(rowIdx))
+	no := numbersOffset(l.rng.Intn(len(numbersAlphabet)))
+	lo := lettersOffset(l.rng.Intn(len(lettersAlphabet)))
 
 	wID := rowIdx // warehouse ids are 0-indexed. every other table is 1-indexed
 
@@ -174,8 +172,8 @@ var stockTypes = []*types.T{
 func (w *tpcc) tpccStockInitialRowBatch(rowIdx int, cb coldata.Batch, a *bufalloc.ByteAllocator) {
 	l := w.localsPool.Get().(*generateLocals)
 	defer w.localsPool.Put(l)
-	l.rng.Rand = rand.New(rand.NewPCG(RandomSeed.Seed(), uint64(rowIdx)))
-	ao := aCharsOffset(l.rng.IntN(len(aCharsAlphabet)))
+	l.rng.Seed(RandomSeed.Seed() + uint64(rowIdx))
+	ao := aCharsOffset(l.rng.Intn(len(aCharsAlphabet)))
 
 	sID := (rowIdx % numStockPerWarehouse) + 1
 	wID := (rowIdx / numStockPerWarehouse)
@@ -246,10 +244,10 @@ func (w *tpcc) tpccDistrictInitialRowBatch(
 ) {
 	l := w.localsPool.Get().(*generateLocals)
 	defer w.localsPool.Put(l)
-	l.rng.Rand = rand.New(rand.NewPCG(RandomSeed.Seed(), uint64(rowIdx)))
-	ao := aCharsOffset(l.rng.IntN(len(aCharsAlphabet)))
-	no := numbersOffset(l.rng.IntN(len(numbersAlphabet)))
-	lo := lettersOffset(l.rng.IntN(len(lettersAlphabet)))
+	l.rng.Seed(RandomSeed.Seed() + uint64(rowIdx))
+	ao := aCharsOffset(l.rng.Intn(len(aCharsAlphabet)))
+	no := numbersOffset(l.rng.Intn(len(numbersAlphabet)))
+	lo := lettersOffset(l.rng.Intn(len(lettersAlphabet)))
 
 	dID := (rowIdx % numDistrictsPerWarehouse) + 1
 	wID := (rowIdx / numDistrictsPerWarehouse)
@@ -303,7 +301,7 @@ var customerTypes = []*types.T{
 	types.Bytes,
 	types.Bytes,
 	types.Bytes,
-	types.Timestamp,
+	types.Bytes,
 	types.Bytes,
 	types.Float,
 	types.Float,
@@ -319,10 +317,10 @@ func (w *tpcc) tpccCustomerInitialRowBatch(
 ) {
 	l := w.localsPool.Get().(*generateLocals)
 	defer w.localsPool.Put(l)
-	l.rng.Rand = rand.New(rand.NewPCG(RandomSeed.Seed(), uint64(rowIdx)))
-	ao := aCharsOffset(l.rng.IntN(len(aCharsAlphabet)))
-	no := numbersOffset(l.rng.IntN(len(numbersAlphabet)))
-	lo := lettersOffset(l.rng.IntN(len(lettersAlphabet)))
+	l.rng.Seed(RandomSeed.Seed() + uint64(rowIdx))
+	ao := aCharsOffset(l.rng.Intn(len(aCharsAlphabet)))
+	no := numbersOffset(l.rng.Intn(len(numbersAlphabet)))
+	lo := lettersOffset(l.rng.Intn(len(lettersAlphabet)))
 
 	cID := (rowIdx % numCustomersPerDistrict) + 1
 	dID := ((rowIdx / numCustomersPerDistrict) % numDistrictsPerWarehouse) + 1
@@ -331,7 +329,7 @@ func (w *tpcc) tpccCustomerInitialRowBatch(
 	// 10% of the customer rows have bad credit.
 	// See section 4.3, under the CUSTOMER table population section.
 	credit := goodCredit
-	if l.rng.IntN(9) == 0 {
+	if l.rng.Intn(9) == 0 {
 		// Poor 10% :(
 		credit = badCredit
 	}
@@ -357,7 +355,7 @@ func (w *tpcc) tpccCustomerInitialRowBatch(
 	cb.ColVec(9).Bytes().Set(0, randStateInitialDataOnly(&l.rng, &lo, a))
 	cb.ColVec(10).Bytes().Set(0, randZipInitialDataOnly(&l.rng, &no, a))
 	cb.ColVec(11).Bytes().Set(0, randNStringInitialDataOnly(&l.rng, &no, a, 16, 16)) // phone number
-	cb.ColVec(12).Timestamp()[0] = w.nowTime
+	cb.ColVec(12).Bytes().Set(0, w.nowString)
 	cb.ColVec(13).Bytes().Set(0, credit)
 	cb.ColVec(14).Float64()[0] = creditLimit
 	cb.ColVec(15).Float64()[0] = float64(randInt(l.rng.Rand, 0, 5000)) / float64(10000.0) // discount
@@ -409,7 +407,7 @@ var historyTypes = []*types.T{
 	types.Int,
 	types.Int,
 	types.Int,
-	types.Timestamp,
+	types.Bytes,
 	types.Float,
 	types.Bytes,
 }
@@ -417,8 +415,8 @@ var historyTypes = []*types.T{
 func (w *tpcc) tpccHistoryInitialRowBatch(rowIdx int, cb coldata.Batch, a *bufalloc.ByteAllocator) {
 	l := w.localsPool.Get().(*generateLocals)
 	defer w.localsPool.Put(l)
-	l.rng.Rand = rand.New(rand.NewPCG(RandomSeed.Seed(), uint64(rowIdx)))
-	ao := aCharsOffset(l.rng.IntN(len(aCharsAlphabet)))
+	l.rng.Seed(RandomSeed.Seed() + uint64(rowIdx))
+	ao := aCharsOffset(l.rng.Intn(len(aCharsAlphabet)))
 
 	// This used to be a V4 uuid made through the normal `uuid.MakeV4`
 	// constructor, but we 1) want them to be deterministic and 2) want these rows
@@ -443,7 +441,7 @@ func (w *tpcc) tpccHistoryInitialRowBatch(rowIdx int, cb coldata.Batch, a *bufal
 	cb.ColVec(3).Int64()[0] = int64(wID)
 	cb.ColVec(4).Int64()[0] = int64(dID)
 	cb.ColVec(5).Int64()[0] = int64(wID)
-	cb.ColVec(6).Timestamp()[0] = w.nowTime
+	cb.ColVec(6).Bytes().Set(0, w.nowString)
 	cb.ColVec(7).Float64()[0] = 10.00
 	cb.ColVec(8).Bytes().Set(0, randAStringInitialDataOnly(&l.rng, &ao, a, 12, 24))
 }
@@ -470,7 +468,7 @@ var orderTypes = []*types.T{
 	types.Int,
 	types.Int,
 	types.Int,
-	types.Timestamp,
+	types.Bytes,
 	types.Int,
 	types.Int,
 	types.Int,
@@ -482,8 +480,8 @@ func (w *tpcc) tpccOrderInitialRowBatch(rowIdx int, cb coldata.Batch, a *bufallo
 
 	// NB: numOrderLines is not allowed to use precomputed random data, make sure
 	// it stays that way. See 4.3.2.1.
-	l.rngOld.Seed(RandomSeed.Seed() + uint64(rowIdx))
-	numOrderLines := randIntOld(l.rngOld.Rand, minOrderLinesPerOrder, maxOrderLinesPerOrder)
+	l.rng.Seed(RandomSeed.Seed() + uint64(rowIdx))
+	numOrderLines := randInt(l.rng.Rand, minOrderLinesPerOrder, maxOrderLinesPerOrder)
 
 	oID := (rowIdx % numOrdersPerDistrict) + 1
 	dID := ((rowIdx / numOrdersPerDistrict) % numDistrictsPerWarehouse) + 1
@@ -502,7 +500,7 @@ func (w *tpcc) tpccOrderInitialRowBatch(rowIdx int, cb coldata.Batch, a *bufallo
 			// We need a random permutation of customers that stable for all orders in a
 			// district, so use the district ID to seed the random permutation.
 			w.randomCIDsCache.values[dID] = make([]int, numCustomersPerDistrict)
-			for i, cID := range randold.New(randold.NewSource(uint64(dID))).Perm(numCustomersPerDistrict) {
+			for i, cID := range rand.New(rand.NewSource(uint64(dID))).Perm(numCustomersPerDistrict) {
 				w.randomCIDsCache.values[dID][i] = cID + 1
 			}
 		}
@@ -514,7 +512,7 @@ func (w *tpcc) tpccOrderInitialRowBatch(rowIdx int, cb coldata.Batch, a *bufallo
 	var carrierID int64
 	if oID < 2101 {
 		carrierSet = true
-		carrierID = randIntOld(l.rngOld.Rand, 1, 10)
+		carrierID = randInt(l.rng.Rand, 1, 10)
 	}
 
 	cb.Reset(orderTypes, 1, coldata.StandardColumnFactory)
@@ -522,7 +520,7 @@ func (w *tpcc) tpccOrderInitialRowBatch(rowIdx int, cb coldata.Batch, a *bufallo
 	cb.ColVec(1).Int64()[0] = int64(dID)
 	cb.ColVec(2).Int64()[0] = int64(wID)
 	cb.ColVec(3).Int64()[0] = int64(cID)
-	cb.ColVec(4).Timestamp()[0] = w.nowTime
+	cb.ColVec(4).Bytes().Set(0, w.nowString)
 	cb.ColVec(5).Nulls().UnsetNulls()
 	if carrierSet {
 		cb.ColVec(5).Int64()[0] = carrierID
@@ -589,7 +587,7 @@ var orderLineTypes = []*types.T{
 	types.Int,
 	types.Int,
 	types.Int,
-	types.Timestamp,
+	types.Bytes,
 	types.Int,
 	types.Float,
 	types.Bytes,
@@ -603,15 +601,15 @@ func (w *tpcc) tpccOrderLineInitialRowBatch(
 
 	// NB: numOrderLines is not allowed to use precomputed random data, make sure
 	// it stays that way. See 4.3.2.1.
-	l.rngOld.Seed(RandomSeed.Seed() + uint64(orderRowIdx))
-	numOrderLines := int(randIntOld(l.rngOld.Rand, minOrderLinesPerOrder, maxOrderLinesPerOrder))
+	l.rng.Seed(RandomSeed.Seed() + uint64(orderRowIdx))
+	numOrderLines := int(randInt(l.rng.Rand, minOrderLinesPerOrder, maxOrderLinesPerOrder))
 
 	// NB: There is one batch of order_line rows per order
 	oID := (orderRowIdx % numOrdersPerDistrict) + 1
 	dID := ((orderRowIdx / numOrdersPerDistrict) % numDistrictsPerWarehouse) + 1
 	wID := (orderRowIdx / numOrdersPerWarehouse)
 
-	ao := aCharsOffset(l.rngOld.Intn(len(aCharsAlphabet)))
+	ao := aCharsOffset(l.rng.Intn(len(aCharsAlphabet)))
 	cb.Reset(orderLineTypes, numOrderLines, coldata.StandardColumnFactory)
 	olOIDCol := cb.ColVec(0).Int64()
 	olDIDCol := cb.ColVec(1).Int64()
@@ -621,38 +619,42 @@ func (w *tpcc) tpccOrderLineInitialRowBatch(
 	olSupplyWIDCol := cb.ColVec(5).Int64()
 	olDeliveryD := cb.ColVec(6)
 	olDeliveryD.Nulls().UnsetNulls()
-	olDeliveryDCol := olDeliveryD.Timestamp()
+	olDeliveryDCol := olDeliveryD.Bytes()
 	olQuantityCol := cb.ColVec(7).Int64()
 	olAmountCol := cb.ColVec(8).Float64()
 	olDistInfoCol := cb.ColVec(9).Bytes()
 
+	olDeliveryDCol.Reset()
 	olDistInfoCol.Reset()
 	for rowIdx := 0; rowIdx < numOrderLines; rowIdx++ {
 		olNumber := rowIdx + 1
 
 		var amount float64
 		var deliveryDSet bool
+		var deliveryD []byte
 		if oID < 2101 {
 			amount = 0
 			deliveryDSet = true
+			deliveryD = w.nowString
 		} else {
-			amount = float64(randIntOld(l.rngOld.Rand, 1, 999999)) / 100.0
+			amount = float64(randInt(l.rng.Rand, 1, 999999)) / 100.0
 		}
 
 		olOIDCol[rowIdx] = int64(oID)
 		olDIDCol[rowIdx] = int64(dID)
 		olWIDCol[rowIdx] = int64(wID)
 		olNumberCol[rowIdx] = int64(olNumber)
-		olIIDCol[rowIdx] = randIntOld(l.rngOld.Rand, 1, 100000)
+		olIIDCol[rowIdx] = randInt(l.rng.Rand, 1, 100000)
 		olSupplyWIDCol[rowIdx] = int64(wID)
 		if deliveryDSet {
-			olDeliveryDCol.Set(rowIdx, w.nowTime)
+			olDeliveryDCol.Set(rowIdx, deliveryD)
 		} else {
 			olDeliveryD.Nulls().SetNull(rowIdx)
+			olDeliveryDCol.Set(rowIdx, nil)
 		}
 		olQuantityCol[rowIdx] = 5
 		olAmountCol[rowIdx] = amount
-		olDistInfoCol.Set(rowIdx, randAStringInitialDataOnlyOld(&l.rngOld, &ao, a, 24, 24))
+		olDistInfoCol.Set(rowIdx, randAStringInitialDataOnly(&l.rng, &ao, a, 24, 24))
 	}
 }
 

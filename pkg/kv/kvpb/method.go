@@ -171,9 +171,6 @@ const (
 	// IsSpanEmpty is a non-transaction read request used to determine whether
 	// a span contains any keys whatsoever (garbage or otherwise).
 	IsSpanEmpty
-	// Excise is a non-MVCC command that destroys all data in a user MVCC key
-	// span. See ExciseRequest for details.
-	Excise
 	// MaxMethod is the maximum method.
 	MaxMethod Method = iota - 1
 	// NumMethods represents the total number of API methods.

@@ -56,7 +56,7 @@ func (ex *connExecutor) execPrepare(
 		return ev, payload
 	}
 
-	ctx, sp := tracing.ChildSpan(ctx, "prepare stmt")
+	ctx, sp := tracing.EnsureChildSpan(ctx, ex.server.cfg.AmbientCtx.Tracer, "prepare stmt")
 	defer sp.Finish()
 
 	// The anonymous statement can be overwritten.
@@ -225,7 +225,7 @@ func (ex *connExecutor) prepare(
 			ex.resetPlanner(ctx, p, txn, ex.server.cfg.Clock.PhysicalTime())
 		}
 
-		if err := ex.maybeAdjustTxnForDDL(ctx, stmt); err != nil {
+		if err := ex.maybeUpgradeToSerializable(ctx, stmt); err != nil {
 			return err
 		}
 
@@ -285,9 +285,9 @@ func (ex *connExecutor) prepare(
 		if origin != PreparedStatementOriginSessionMigration {
 			return nil, err
 		} else {
-			f := tree.NewFmtCtx(tree.FmtMarkRedactionNode | tree.FmtOmitNameRedaction | tree.FmtSimple)
+			f := tree.NewFmtCtx(tree.FmtMarkRedactionNode | tree.FmtSimple)
 			f.FormatNode(stmt.AST)
-			redactableStmt := redact.RedactableString(f.CloseAndGetString())
+			redactableStmt := redact.SafeString(f.CloseAndGetString())
 			log.Warningf(ctx, "could not prepare statement during session migration (%s): %v", redactableStmt, err)
 		}
 	}
@@ -388,11 +388,6 @@ func (ex *connExecutor) execBind(
 		if !ex.isAllowedInAbortedTxn(ps.AST) {
 			return retErr(sqlerrors.NewTransactionAbortedError("" /* customMsg */))
 		}
-	}
-
-	// Check if we need to auto-commit the transaction due to DDL.
-	if ev, payload := ex.maybeAutoCommitBeforeDDL(ctx, ps.AST); ev != nil {
-		return ev, payload
 	}
 
 	portalName := bindCmd.PortalName
@@ -501,7 +496,6 @@ func (ex *connExecutor) execBind(
 						typ,
 						qArgFormatCodes[i],
 						arg,
-						p.datumAlloc,
 					)
 					if err != nil {
 						return pgerror.Wrapf(err, pgcode.ProtocolViolation, "error in argument for %s", k)
@@ -716,8 +710,7 @@ func (ex *connExecutor) execDescribe(
 // prepared and executed inside of an aborted transaction.
 func (ex *connExecutor) isAllowedInAbortedTxn(ast tree.Statement) bool {
 	switch s := ast.(type) {
-	case *tree.CommitTransaction, *tree.PrepareTransaction,
-		*tree.RollbackTransaction, *tree.RollbackToSavepoint:
+	case *tree.CommitTransaction, *tree.RollbackTransaction, *tree.RollbackToSavepoint:
 		return true
 	case *tree.Savepoint:
 		if ex.isCommitOnReleaseSavepoint(s.Name) {

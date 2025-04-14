@@ -681,11 +681,19 @@ func (r *Replica) computeChecksumPostApply(
 
 	// Caller is holding raftMu, so an engine snapshot is automatically
 	// Raft-consistent (i.e. not in the middle of an AddSSTable).
-	snap := r.store.TODOEngine().NewSnapshot(rditer.MakeReplicatedKeySpans(&desc)...)
-	if util.RaceEnabled {
-		ss := rditer.MakeReplicatedKeySpanSet(&desc)
-		defer ss.Release()
-		snap = spanset.NewReader(snap, ss, hlc.Timestamp{})
+	spans := rditer.MakeReplicatedKeySpans(&desc)
+	var snap storage.Reader
+	if r.store.cfg.SharedStorageEnabled || storage.ShouldUseEFOS(&r.ClusterSettings().SV) {
+		efos := r.store.TODOEngine().NewEventuallyFileOnlySnapshot(spans)
+		if util.RaceEnabled {
+			ss := rditer.MakeReplicatedKeySpanSet(&desc)
+			defer ss.Release()
+			snap = spanset.NewEventuallyFileOnlySnapshot(efos, ss)
+		} else {
+			snap = efos
+		}
+	} else {
+		snap = r.store.TODOEngine().NewSnapshot()
 	}
 	if cc.Checkpoint {
 		sl := stateloader.Make(r.RangeID)
@@ -813,7 +821,7 @@ creation. These directories should be deleted, or inspected with caution.
 `
 		attentionArgs := []any{r, desc.Replicas(), redact.Safe(auxDir), redact.Safe(path)}
 		preventStartupMsg := fmt.Sprintf(attentionFmt, attentionArgs...)
-		if err := fs.WriteFile(r.store.TODOEngine().Env(), path, []byte(preventStartupMsg), fs.UnspecifiedWriteCategory); err != nil {
+		if err := fs.WriteFile(r.store.TODOEngine().Env(), path, []byte(preventStartupMsg)); err != nil {
 			log.Warningf(ctx, "%v", err)
 		}
 

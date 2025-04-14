@@ -117,12 +117,9 @@ LIMIT
 	require.NoError(t, err)
 	defer it.Close()
 	rsl := logstore.NewStateLoader(rangeID)
-	ts, err := rsl.LoadRaftTruncatedState(ctx, eng)
+	lastIndex, err := rsl.LoadLastIndex(ctx, eng)
 	require.NoError(t, err)
-	lastEntryID, err := rsl.LoadLastEntryID(ctx, eng, ts)
-	require.NoError(t, err)
-	t.Logf("loaded LastEntryID: %+v", lastEntryID)
-	lastIndex := lastEntryID.Index
+	t.Logf("loaded LastIndex: %d", lastIndex)
 	ok, err := it.SeekGE(lastIndex)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -193,7 +190,7 @@ LIMIT
 			}
 
 			idKey := raftlog.MakeCmdIDKey()
-			payload, err := raftlog.EncodeCommand(ctx, &raftCmd, idKey, raftlog.EncodeOptions{})
+			payload, err := raftlog.EncodeCommand(ctx, &raftCmd, idKey, nil)
 			require.NoError(t, err)
 			ents = append(ents, raftpb.Entry{
 				Term:  lastTerm,
@@ -205,13 +202,14 @@ LIMIT
 
 		stats := &logstore.AppendStats{}
 
-		app := raft.StorageAppend{
-			HardState: raftpb.HardState{
-				Term:   lastTerm,
-				Commit: uint64(lastIndex) + uint64(len(ents)),
-			},
+		msgApp := raftpb.Message{
+			Type:      raftpb.MsgStorageAppend,
+			To:        raft.LocalAppendThread,
+			Term:      lastTerm,
+			LogTerm:   lastTerm,
+			Index:     uint64(lastIndex),
 			Entries:   ents,
-			LeadTerm:  lastTerm,
+			Commit:    uint64(lastIndex) + uint64(len(ents)),
 			Responses: []raftpb.Message{{}}, // need >0 responses so StoreEntries will sync
 		}
 
@@ -245,7 +243,7 @@ LIMIT
 		_, err = ls.StoreEntries(ctx, logstore.RaftState{
 			LastIndex: lastIndex,
 			LastTerm:  kvpb.RaftTerm(lastTerm),
-		}, app, (*wgSyncCallback)(wg), stats)
+		}, logstore.MakeMsgStorageAppend(msgApp), (*wgSyncCallback)(wg), stats)
 		require.NoError(t, err)
 		wg.Wait()
 
@@ -258,7 +256,7 @@ LIMIT
 type wgSyncCallback sync.WaitGroup
 
 func (w *wgSyncCallback) OnLogSync(
-	context.Context, raft.StorageAppendAck, storage.BatchCommitStats,
+	ctx context.Context, messages []raftpb.Message, stats storage.BatchCommitStats,
 ) {
 	(*sync.WaitGroup)(w).Done()
 }

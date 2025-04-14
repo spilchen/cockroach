@@ -129,8 +129,9 @@ func (sm *replicaStateMachine) NewEphemeralBatch() apply.EphemeralBatch {
 	r := sm.r
 	mb := &sm.ephemeralBatch
 	mb.r = r
-	r.raftMu.AssertHeld()
-	mb.state = r.shMu.state
+	r.mu.RLock()
+	mb.state = r.mu.state
+	r.mu.RUnlock()
 	return mb
 }
 
@@ -145,10 +146,9 @@ func (sm *replicaStateMachine) NewBatch() apply.Batch {
 	b.applyStats = &sm.applyStats
 	b.batch = r.store.TODOEngine().NewBatch()
 	r.mu.RLock()
-	b.state = r.shMu.state
-	b.truncState = r.shMu.raftTruncState
+	b.state = r.mu.state
 	b.state.Stats = &sm.stats
-	*b.state.Stats = *r.shMu.state.Stats
+	*b.state.Stats = *r.mu.state.Stats
 	b.closedTimestampSetter = r.mu.closedTimestampSetter
 	r.mu.RUnlock()
 	b.changeRemovesReplica = false
@@ -288,11 +288,25 @@ func (sm *replicaStateMachine) handleNonTrivialReplicatedEvalResult(
 		log.Fatalf(ctx, "zero-value ReplicatedEvalResult passed to handleNonTrivialReplicatedEvalResult")
 	}
 
+	isRaftLogTruncationDeltaTrusted := true
 	if rResult.State != nil {
 		if newLease := rResult.State.Lease; newLease != nil {
 			sm.r.handleLeaseResult(ctx, newLease, rResult.PriorReadSummary)
 			rResult.State.Lease = nil
 			rResult.PriorReadSummary = nil
+		}
+
+		// This strongly coupled truncation code will be removed in the release
+		// following LooselyCoupledRaftLogTruncation.
+		if newTruncState := rResult.State.TruncatedState; newTruncState != nil {
+			raftLogDelta, expectedFirstIndexWasAccurate := sm.r.handleTruncatedStateResult(
+				ctx, newTruncState, rResult.RaftExpectedFirstIndex)
+			if !expectedFirstIndexWasAccurate && rResult.RaftExpectedFirstIndex != 0 {
+				isRaftLogTruncationDeltaTrusted = false
+			}
+			rResult.RaftLogDelta += raftLogDelta
+			rResult.State.TruncatedState = nil
+			rResult.RaftExpectedFirstIndex = 0
 		}
 
 		if newVersion := rResult.State.Version; newVersion != nil {
@@ -310,11 +324,12 @@ func (sm *replicaStateMachine) handleNonTrivialReplicatedEvalResult(
 		}
 	}
 
-	// TODO(#93248): the strongly coupled truncation code will be removed once the
-	// loosely coupled truncations are the default.
-	if rResult.GetRaftTruncatedState() != nil {
-		sm.r.finalizeTruncationRaftMuLocked(ctx)
-		rResult.DiscardRaftTruncation()
+	if rResult.RaftLogDelta != 0 {
+		// This code path will be taken exactly when the preceding block has
+		// newTruncState != nil. It is needlessly confusing that these two are not
+		// in the same place.
+		sm.r.handleRaftLogDeltaResult(ctx, rResult.RaftLogDelta, isRaftLogTruncationDeltaTrusted)
+		rResult.RaftLogDelta = 0
 	}
 
 	// The rest of the actions are "nontrivial" and may have large effects on the

@@ -9,14 +9,10 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catenumpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/tabledesc"
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/typedesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
@@ -27,7 +23,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlclustersettings"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
-	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
@@ -106,7 +101,7 @@ func undroppedElements(b BuildCtx, id catid.DescID) ElementResultSet {
 			}
 			// Ignore any other elements with undefined targets.
 			return false
-		case scpb.ToAbsent, scpb.TransientAbsent:
+		case scpb.ToAbsent, scpb.Transient:
 			// If the target is already ABSENT or TRANSIENT then the element is going
 			// away anyway and so it doesn't need to have a target set for this DROP.
 			return false
@@ -230,25 +225,16 @@ func dropCascadeDescriptor(b BuildCtx, id catid.DescID) {
 			dropCascadeDescriptor(next, t.TypeID)
 		case *scpb.FunctionBody:
 			dropCascadeDescriptor(next, t.FunctionID)
-		case *scpb.TriggerFunctionCall:
-			dropCascadeDescriptor(next, t.FuncID)
-		case *scpb.TriggerDeps:
-			dropCascadeDescriptor(next, t.TableID)
-		case *scpb.PolicyDeps:
-			dropCascadeDescriptor(next, t.TableID)
 		case *scpb.Column, *scpb.ColumnType, *scpb.SecondaryIndexPartial:
 			// These only have type references.
 			break
 		case *scpb.Namespace, *scpb.Function, *scpb.SecondaryIndex, *scpb.PrimaryIndex,
-			*scpb.TableLocalitySecondaryRegion, *scpb.Trigger:
+			*scpb.TableLocalitySecondaryRegion:
 			// These can be safely skipped and will be cleaned up on their own because
 			// of dependents cleaned up above.
 		case
 			*scpb.ColumnDefaultExpression,
 			*scpb.ColumnOnUpdateExpression,
-			*scpb.ColumnComputeExpression,
-			*scpb.PolicyUsingExpr,
-			*scpb.PolicyWithCheckExpr,
 			*scpb.CheckConstraint,
 			*scpb.CheckConstraintUnvalidated,
 			*scpb.ForeignKeyConstraint,
@@ -257,7 +243,7 @@ func dropCascadeDescriptor(b BuildCtx, id catid.DescID) {
 			*scpb.DatabaseRegionConfig:
 			b.Drop(e)
 		default:
-			panic(errors.AssertionFailedf("un-dropped backref %T (%v) should either be "+
+			panic(errors.AssertionFailedf("un-dropped backref %T (%v) should be either be"+
 				"dropped or skipped", e, target))
 		}
 	})
@@ -306,8 +292,8 @@ func getSortedColumnIDsInIndex(
 	return ret
 }
 
-// getSortedColumnIDsInIndexByKind return an index's key column IDs, key suffix
-// column IDs, and storing column IDs, in sorted order.
+// indexColumnIDs return an index's key column IDs, key suffix column IDs,
+// and storing column IDs, in sorted order.
 func getSortedColumnIDsInIndexByKind(
 	b BuildCtx, tableID catid.DescID, indexID catid.IndexID,
 ) (
@@ -317,13 +303,14 @@ func getSortedColumnIDsInIndexByKind(
 ) {
 	// Retrieve all columns of this index.
 	allColumns := make([]*scpb.IndexColumn, 0)
-	b.QueryByID(tableID).Filter(notFilter(ghostElementFilter)).FilterIndexColumn().
-		ForEach(func(current scpb.Status, target scpb.TargetStatus, e *scpb.IndexColumn) {
-			if e.IndexID != indexID {
-				return
-			}
-			allColumns = append(allColumns, e)
-		})
+	scpb.ForEachIndexColumn(b.QueryByID(tableID).Filter(notFilter(ghostElementFilter)), func(
+		current scpb.Status, target scpb.TargetStatus, ice *scpb.IndexColumn,
+	) {
+		if ice.TableID != tableID || ice.IndexID != indexID {
+			return
+		}
+		allColumns = append(allColumns, ice)
+	})
 
 	// Sort all columns by their (Kind, OrdinalInKind).
 	sort.Slice(allColumns, func(i, j int) bool {
@@ -375,12 +362,9 @@ func getColumnIDFromColumnName(
 		return 0
 	}
 
-	_, targetStatus, colElem := scpb.FindColumn(colElems)
+	_, _, colElem := scpb.FindColumn(colElems)
 	if colElem == nil {
 		panic(errors.AssertionFailedf("programming error: cannot find a Column element for column %v", columnName))
-	}
-	if targetStatus == scpb.ToAbsent && required {
-		panic(colinfo.NewUndefinedColumnError(string(columnName)))
 	}
 	return colElem.ColumnID
 }
@@ -432,6 +416,11 @@ func notFilter(
 	}
 }
 
+func isColumnFilter(_ scpb.Status, _ scpb.TargetStatus, e scpb.Element) bool {
+	_, isColumn := e.(*scpb.Column)
+	return isColumn
+}
+
 func publicTargetFilter(_ scpb.Status, target scpb.TargetStatus, _ scpb.Element) bool {
 	return target == scpb.ToPublic
 }
@@ -441,7 +430,7 @@ func absentTargetFilter(_ scpb.Status, target scpb.TargetStatus, _ scpb.Element)
 }
 
 func transientTargetFilter(_ scpb.Status, target scpb.TargetStatus, _ scpb.Element) bool {
-	return target == scpb.TransientAbsent
+	return target == scpb.Transient
 }
 
 func validTargetFilter(_ scpb.Status, target scpb.TargetStatus, _ scpb.Element) bool {
@@ -868,6 +857,20 @@ func makeSwapIndexSpec(
 	return in, temp
 }
 
+// fallBackIfSubZoneConfigExists determines if the table has a subzone
+// config. Normally this logic is used to limit index related operations,
+// since dropping indexes will need to remove entries of sub zones from
+// the zone config.
+func fallBackIfSubZoneConfigExists(b BuildCtx, n tree.NodeFormatter, id catid.DescID) {
+	{
+		tableElts := b.QueryByID(id)
+		if _, _, elem := scpb.FindIndexZoneConfig(tableElts); elem != nil {
+			panic(scerrors.NotImplementedErrorf(n,
+				"sub zone configs are not supported"))
+		}
+	}
+}
+
 // ExtractColumnIDsInExpr extracts column IDs used in expr. It's similar to
 // schemaexpr.ExtractColumnIDs but this function can also extract columns
 // added in the same transaction (e.g. for `ADD COLUMN j INT CHECK (j > 0);`,
@@ -970,49 +973,16 @@ func shouldSkipValidatingConstraint(
 	return skip, err
 }
 
-// checkTableSchemaChangePrerequisites checks any pre-requisites before a table
-// schema change is allowed. This function panics if a schema change is not
-// allowed on this table. A schema change is disallowed if one of the following
-// is true:
-//   - The table is referenced by logical data replication jobs, and the statement
-//     is not in the allow list of LDR schema changes.
-//   - schema_locked if the current version does not support transient drops
-//     of the lock.
-//
-// If the table in question is schema_locked, this logic removes the schema_locked
-// in a transient manner, allowing it to restore after the schema change.
-func checkTableSchemaChangePrerequisites(
-	b BuildCtx, tableElements ElementResultSet, n tree.Statement,
-) {
-	schemaLocked := tableElements.FilterTableSchemaLocked().MustGetZeroOrOneElement()
-	if schemaLocked != nil && !tree.IsSetOrResetSchemaLocked(n) {
-		// Before 25.2 we don't support auto-unsetting schema locked.
-		if !b.ClusterSettings().Version.IsActive(b, clusterversion.V25_2) {
-			ns := tableElements.FilterNamespace().MustGetOneElement()
-			panic(sqlerrors.NewSchemaChangeOnLockedTableErr(ns.Name))
+// panicIfSchemaIsLocked panics if table's schema is locked.
+// It is used to prevent schema change stmts.
+func panicIfSchemaIsLocked(tableElements ElementResultSet) {
+	_, _, schemaLocked := scpb.FindTableSchemaLocked(tableElements)
+	if schemaLocked != nil {
+		_, _, ns := scpb.FindNamespace(tableElements)
+		if ns == nil {
+			panic(errors.AssertionFailedf("programming error: Namespace element not found"))
 		}
-		// Unset schema_locked for the user.
-		b.DropTransient(schemaLocked)
-	}
-	_, _, ldrJobIDs := scpb.FindLDRJobIDs(tableElements)
-	if ldrJobIDs != nil && len(ldrJobIDs.JobIDs) > 0 {
-		var virtualColNames []string
-		scpb.ForEachColumnType(tableElements, func(current scpb.Status, target scpb.TargetStatus, colTypeElem *scpb.ColumnType) {
-			if !colTypeElem.IsVirtual {
-				return
-			}
-			col := tableElements.FilterColumnName().Filter(func(current scpb.Status, target scpb.TargetStatus, colNameElem *scpb.ColumnName) bool {
-				return colNameElem.ColumnID == colTypeElem.ColumnID && target == scpb.ToPublic
-			}).MustGetOneElement()
-			virtualColNames = append(virtualColNames, col.Name)
-		})
-		if !tree.IsAllowedLDRSchemaChange(n, virtualColNames) {
-			_, _, ns := scpb.FindNamespace(tableElements)
-			if ns == nil {
-				panic(errors.AssertionFailedf("programming error: Namespace element not found"))
-			}
-			panic(sqlerrors.NewDisallowedSchemaChangeOnLDRTableErr(ns.Name, ldrJobIDs.JobIDs))
-		}
+		panic(sqlerrors.NewSchemaChangeOnLockedTableErr(ns.Name))
 	}
 }
 
@@ -1023,40 +993,6 @@ func panicIfSystemColumn(column *scpb.Column, columnName string) {
 		panic(pgerror.Newf(
 			pgcode.FeatureNotSupported,
 			"cannot alter system column %q", columnName))
-	}
-}
-
-// panicIfRegionChangeUnderwayOnRBRTable panics if the given table is regional
-// by row and any of the regions on the database of the table are currently
-// being modified by another schema change job.
-func panicIfRegionChangeUnderwayOnRBRTable(b BuildCtx, op redact.SafeString, tableID catid.DescID) {
-	tableElems := b.QueryByID(tableID)
-	_, _, rbrElem := scpb.FindTableLocalityRegionalByRow(tableElems)
-	if rbrElem == nil {
-		return
-	}
-	_, _, ns := scpb.FindNamespace(tableElems)
-	dbElems := b.QueryByID(ns.DatabaseID)
-	if _, _, rc := scpb.FindDatabaseRegionConfig(dbElems); rc == nil {
-		return
-	}
-	r, err := b.SynthesizeRegionConfig(b, ns.DatabaseID)
-	if err != nil {
-		panic(err)
-	}
-	if len(r.TransitioningRegions()) > 0 {
-		panic(errors.WithDetailf(
-			errors.WithHintf(
-				pgerror.Newf(
-					pgcode.ObjectNotInPrerequisiteState,
-					"cannot %s on a REGIONAL BY ROW table while a region is being added or dropped on the database",
-					op,
-				),
-				"cancel the job which is adding or dropping the region or try again later",
-			),
-			"region %s is currently being added or dropped",
-			r.TransitioningRegions()[0],
-		))
 	}
 }
 
@@ -1202,18 +1138,6 @@ func getPrimaryIndexChain(b BuildCtx, tableID catid.DescID) *primaryIndexChain {
 	}
 
 	return NewPrimaryIndexChain(b, old, inter1, inter2, final)
-}
-
-// getPrimaryIndexID finds and returns the PrimaryIndex. If there were changes
-// to the primary index in this transaction, it returns pointer to the modified
-// index.
-func getLatestPrimaryIndex(b BuildCtx, tableID catid.DescID) *scpb.PrimaryIndex {
-	chain := getPrimaryIndexChain(b, tableID)
-	if chain.finalSpec.primary != nil {
-		return chain.finalSpec.primary
-	} else {
-		return chain.oldSpec.primary
-	}
 }
 
 // addASwapInIndexByCloningFromSource adds a primary index `in` that is going
@@ -1663,211 +1587,4 @@ func shouldRestrictAccessToSystemInterface(
 			alternateAction)
 	}
 	return nil
-}
-
-func MaybeCreateOrResolveTemporarySchema(b BuildCtx) ElementResultSet {
-	// Attempt to resolve the existing temporary schema first.
-	schemaName := b.TemporarySchemaName()
-	prefix := tree.ObjectNamePrefix{
-		SchemaName:     tree.Name(schemaName),
-		ExplicitSchema: true,
-	}
-	schemaElts := b.ResolveSchema(prefix, ResolveParams{IsExistenceOptional: true,
-		RequireOwnership:  false,
-		RequiredPrivilege: 0})
-	if schemaElts != nil {
-		return schemaElts
-	}
-	// Temporary schema didn't resolve, so lets create a new one.
-	descID := b.GenerateUniqueDescID()
-	tempSchemaName := &tree.ObjectNamePrefix{
-		SchemaName:     tree.Name(schemaName),
-		ExplicitSchema: true,
-	}
-	// Resolve the current database, which will contain this new temporary schema
-	// in the namespace table.
-	b.ResolveDatabasePrefix(tempSchemaName)
-	dbElts := b.ResolveDatabase(tree.Name(tempSchemaName.Catalog()), ResolveParams{RequiredPrivilege: privilege.CREATE})
-	dbElem := dbElts.FilterDatabase().MustGetOneElement()
-	b.Add(&scpb.Schema{
-		SchemaID:    descID,
-		IsTemporary: true,
-	})
-	b.Add(&scpb.SchemaParent{
-		SchemaID:         descID,
-		ParentDatabaseID: dbElem.DatabaseID,
-	})
-	b.Add(&scpb.Namespace{
-		DatabaseID:   dbElem.DatabaseID,
-		SchemaID:     0,
-		DescriptorID: descID,
-		Name:         schemaName,
-	})
-	return b.QueryByID(descID)
-}
-
-func newTypeT(t *types.T) scpb.TypeT {
-	return scpb.TypeT{
-		Type:          t,
-		ClosedTypeIDs: typedesc.GetTypeDescriptorClosure(t).Ordered(),
-		TypeName:      t.SQLString(),
-	}
-}
-
-func retrieveColumnTypeElem(
-	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
-) *scpb.ColumnType {
-	_, _, ret := scpb.FindColumnType(b.QueryByID(tableID).Filter(hasColumnIDAttrFilter(columnID)))
-	return ret
-}
-
-// retrieveColumnComputeExpression returns the compute expression of the column.
-// If no expression exists, then nil is returned. This will handle older
-// versions that may store the expression as part of the ColumnType.
-func retrieveColumnComputeExpression(
-	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
-) (expr *scpb.Expression) {
-	// First try to retrieve the expression from the ColumnComputeExpression. This
-	// may be unavailable because the column doesn't have a compute expression, or
-	// it's an older version that stores the expression as part of the ColumnType.
-	colComputeExpression := b.QueryByID(tableID).FilterColumnComputeExpression().Filter(func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.ColumnComputeExpression) bool {
-		return e.ColumnID == columnID
-	}).MustGetZeroOrOneElement()
-	if colComputeExpression != nil {
-		return &colComputeExpression.Expression
-	}
-	// Check the ColumnType in case this is an older version.
-	columnType := mustRetrieveColumnTypeElem(b, tableID, columnID)
-	return columnType.ComputeExpr
-}
-
-// mustRetrieveColumnTypeElem retrieves the index column elements associated
-// with the given indexID.
-func mustRetrieveIndexColumnElements(
-	b BuildCtx, tableID catid.DescID, indexID catid.IndexID,
-) []*scpb.IndexColumn {
-	// Get the index columns for indexID.
-	var idxCols []*scpb.IndexColumn
-	b.QueryByID(tableID).FilterIndexColumn().
-		Filter(func(current scpb.Status, target scpb.TargetStatus, e *scpb.IndexColumn) bool {
-			return e.IndexID == indexID
-		}).ForEach(func(current scpb.Status, target scpb.TargetStatus, e *scpb.IndexColumn) {
-		idxCols = append(idxCols, e)
-	})
-	if len(idxCols) == 0 {
-		panic(errors.AssertionFailedf("programming error: cannot find a IndexColumn "+
-			"element for index ID %v", indexID))
-	}
-	return idxCols
-}
-
-// mustRetrievePhysicalTableElem will resolve a tableID to a physical table
-// element. A "physical" table element includes tables, views, and sequences.
-func mustRetrievePhysicalTableElem(b BuildCtx, descID catid.DescID) scpb.Element {
-	return b.QueryByID(descID).Filter(func(
-		_ scpb.Status, _ scpb.TargetStatus, e scpb.Element,
-	) bool {
-		switch e := e.(type) {
-		case *scpb.Table:
-			return e.TableID == descID
-		case *scpb.View:
-			if e.IsMaterialized {
-				return e.ViewID == descID
-			}
-		case *scpb.Sequence:
-			return e.SequenceID == descID
-		}
-		return false
-	}).MustGetOneElement()
-}
-
-// mustRetrieveIndexNameElem will resolve a tableID and indexID to an index name
-// element.
-func mustRetrieveIndexNameElem(
-	b BuildCtx, tableID catid.DescID, indexID catid.IndexID,
-) *scpb.IndexName {
-	return b.QueryByID(tableID).FilterIndexName().
-		Filter(func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.IndexName) bool {
-			return e.IndexID == indexID
-		}).MustGetOneElement()
-}
-
-func mustRetrieveColumnName(
-	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
-) *scpb.ColumnName {
-	return b.QueryByID(tableID).FilterColumnName().
-		Filter(func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.ColumnName) bool { return e.ColumnID == columnID }).
-		MustGetOneElement()
-}
-
-func retrieveColumnNotNull(
-	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
-) *scpb.ColumnNotNull {
-	return b.QueryByID(tableID).FilterColumnNotNull().
-		Filter(func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.ColumnNotNull) bool { return e.ColumnID == columnID }).
-		MustGetZeroOrOneElement()
-}
-
-func retrieveColumnComment(
-	b BuildCtx, tableID catid.DescID, columnID catid.ColumnID,
-) *scpb.ColumnComment {
-	return b.QueryByID(tableID).FilterColumnComment().
-		Filter(func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.ColumnComment) bool { return e.ColumnID == columnID }).
-		MustGetZeroOrOneElement()
-}
-
-// mustRetrievePartitioningFromIndexPartitioning retrieves the partitioning
-// from the index partitioning element associated with the given tableID
-// and indexID.
-func mustRetrievePartitioningFromIndexPartitioning(
-	b BuildCtx, tableID catid.DescID, indexID catid.IndexID,
-) catalog.Partitioning {
-	idxPart := b.QueryByID(tableID).FilterIndexPartitioning().
-		Filter(func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.IndexPartitioning) bool {
-			return e.IndexID == indexID
-		}).MustGetZeroOrOneElement()
-	partition := tabledesc.NewPartitioning(nil)
-	if idxPart != nil {
-		partition = tabledesc.NewPartitioning(&idxPart.PartitioningDescriptor)
-	}
-	return partition
-}
-
-// failIfSafeUpdates checks if the sql_safe_updates is present, and if so, it
-// will fail the operation.
-func failIfSafeUpdates(b BuildCtx, n tree.NodeFormatter) {
-	if b.SessionData().SafeUpdates {
-		var errorWithMessage error
-		switch n.(type) {
-		case *tree.AlterTableAlterColumnType:
-			errorWithMessage = errors.New("ALTER COLUMN TYPE requiring data rewrite may result in data loss " +
-				"for certain type conversions or when applying a USING clause")
-		case *tree.DropIndex:
-			errorWithMessage = errors.New("DROP INDEX")
-		default:
-			panic(errors.AssertionFailedf("programming error: unexpected node type %T", n))
-		}
-
-		panic(
-			pgerror.WithCandidateCode(
-				errors.WithMessage(
-					errorWithMessage,
-					"rejected (sql_safe_updates = true)",
-				),
-				pgcode.Warning,
-			),
-		)
-	}
-}
-
-func hasSubzonesForIndex(b BuildCtx, tableID descpb.ID, indexID catid.IndexID) bool {
-	numIdxSubzones := b.QueryByID(tableID).FilterIndexZoneConfig().
-		Filter(func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.IndexZoneConfig) bool {
-			return e.IndexID == indexID
-		}).Size()
-	numPartSubzones := b.QueryByID(tableID).FilterPartitionZoneConfig().
-		Filter(func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.PartitionZoneConfig) bool {
-			return e.IndexID == indexID
-		}).Size()
-	return numIdxSubzones > 0 || numPartSubzones > 0
 }

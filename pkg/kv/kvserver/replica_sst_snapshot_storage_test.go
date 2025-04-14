@@ -9,7 +9,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"io"
+	io "io"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -20,11 +20,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/storage"
 	"github.com/cockroachdb/cockroach/pkg/storage/fs"
-	"github.com/cockroachdb/cockroach/pkg/storage/mvccencoding"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/datapathutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/echotest"
-	"github.com/cockroachdb/cockroach/pkg/testutils/storageutils"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -34,7 +30,6 @@ import (
 	"github.com/cockroachdb/errors/oserror"
 	"github.com/cockroachdb/pebble/sstable"
 	"github.com/cockroachdb/pebble/vfs"
-	"github.com/cockroachdb/redact"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 )
@@ -257,10 +252,9 @@ func TestSSTSnapshotStorageContextCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-// TestMultiSSTWriterInitSST tests the SSTS that multiSSTWriter generates.
-// In particular, certain SST files must contain range key deletes as well
-// as range deletes to make sure that ingesting the SST clears any existing
-// data.
+// TestMultiSSTWriterInitSST tests that multiSSTWriter initializes each of the
+// SST files associated with the replicated key ranges by writing a range
+// deletion tombstone that spans the entire range of each respectively.
 func TestMultiSSTWriterInitSST(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -300,15 +294,26 @@ func TestMultiSSTWriterInitSST(t *testing.T) {
 		actualSSTs = append(actualSSTs, sst)
 	}
 
-	var buf redact.StringBuilder
-
-	_, _ = fmt.Fprintf(&buf, "writeBytes=%d sstSize=%d dataSize=%d\n", msstw.writeBytes, msstw.sstSize, msstw.dataSize)
-
-	for i := range fileNames {
-		name := fmt.Sprintf("sst%d", i)
-		require.NoError(t, storageutils.ReportSSTEntries(&buf, name, actualSSTs[i]))
+	// Construct an SST file for each of the key ranges and write a rangedel
+	// tombstone that spans from Start to End.
+	var expectedSSTs [][]byte
+	for _, s := range keySpans {
+		func() {
+			sstFile := &storage.MemObject{}
+			sst := storage.MakeIngestionSSTWriter(ctx, cluster.MakeTestingClusterSettings(), sstFile)
+			defer sst.Close()
+			err := sst.ClearRawRange(s.Key, s.EndKey, true, true)
+			require.NoError(t, err)
+			err = sst.Finish()
+			require.NoError(t, err)
+			expectedSSTs = append(expectedSSTs, sstFile.Data())
+		}()
 	}
-	echotest.Require(t, buf.String(), filepath.Join(datapathutils.TestDataPath(t, "echotest", t.Name())))
+
+	require.Equal(t, len(actualSSTs), len(expectedSSTs))
+	for i := range fileNames {
+		require.Equal(t, actualSSTs[i], expectedSSTs[i])
+	}
 }
 
 func buildIterForScratch(
@@ -376,7 +381,7 @@ func TestMultiSSTWriterSize(t *testing.T) {
 			// Add a range key.
 			endKey := binary.BigEndian.AppendUint32(desc.StartKey, uint32(i+10))
 			require.NoError(t, referenceMsstw.PutRangeKey(
-				ctx, key, endKey, mvccencoding.EncodeMVCCTimestampSuffix(mvccKey.Timestamp.WallPrev()), []byte("")))
+				ctx, key, endKey, storage.EncodeMVCCTimestampSuffix(mvccKey.Timestamp.WallPrev()), []byte("")))
 		}
 		require.NoError(t, referenceMsstw.Put(ctx, engineKey, []byte("foobarbaz")))
 	}
@@ -406,7 +411,7 @@ func TestMultiSSTWriterSize(t *testing.T) {
 			// Add a range key.
 			endKey := binary.BigEndian.AppendUint32(desc.StartKey, uint32(i+10))
 			require.NoError(t, multiSSTWriter.PutRangeKey(
-				ctx, key, endKey, mvccencoding.EncodeMVCCTimestampSuffix(mvccKey.Timestamp.WallPrev()), []byte("")))
+				ctx, key, endKey, storage.EncodeMVCCTimestampSuffix(mvccKey.Timestamp.WallPrev()), []byte("")))
 		}
 		require.NoError(t, multiSSTWriter.Put(ctx, engineKey, []byte("foobarbaz")))
 	}
@@ -452,68 +457,76 @@ func TestMultiSSTWriterAddLastSpan(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	ctx := context.Background()
-	testRangeID := roachpb.RangeID(1)
-	testSnapUUID := uuid.Must(uuid.FromBytes([]byte("foobar1234567890")))
-	testLimiter := rate.NewLimiter(rate.Inf, 0)
+	addRangeDels := []bool{false, true}
+	for _, addRangeDel := range addRangeDels {
+		t.Run(fmt.Sprintf("addRangeDel=%v", addRangeDel), func(t *testing.T) {
+			ctx := context.Background()
+			testRangeID := roachpb.RangeID(1)
+			testSnapUUID := uuid.Must(uuid.FromBytes([]byte("foobar1234567890")))
+			testLimiter := rate.NewLimiter(rate.Inf, 0)
 
-	cleanup, eng := newOnDiskEngine(ctx, t)
-	defer cleanup()
-	defer eng.Close()
+			cleanup, eng := newOnDiskEngine(ctx, t)
+			defer cleanup()
+			defer eng.Close()
 
-	sstSnapshotStorage := NewSSTSnapshotStorage(eng, testLimiter)
-	scratch := sstSnapshotStorage.NewScratchSpace(testRangeID, testSnapUUID)
-	desc := roachpb.RangeDescriptor{
-		StartKey: roachpb.RKey("d"),
-		EndKey:   roachpb.RKeyMax,
-	}
-	keySpans := rditer.MakeReplicatedKeySpans(&desc)
-	localSpans := keySpans[:len(keySpans)-1]
-	mvccSpan := keySpans[len(keySpans)-1]
-
-	msstw, err := newMultiSSTWriter(
-		ctx, cluster.MakeTestingClusterSettings(), scratch, localSpans, mvccSpan, 0,
-		true /* skipRangeDelForMVCCSpan */, false, /* rangeKeysInOrder */
-	)
-	require.NoError(t, err)
-	testKey := storage.MVCCKey{Key: roachpb.RKey("d1").AsRawKey(), Timestamp: hlc.Timestamp{WallTime: 1}}
-	testEngineKey, _ := storage.DecodeEngineKey(storage.EncodeMVCCKey(testKey))
-	require.NoError(t, msstw.Put(ctx, testEngineKey, []byte("foo")))
-	_, err = msstw.Finish(ctx)
-	require.NoError(t, err)
-
-	var actualSSTs [][]byte
-	fileNames := msstw.scratch.SSTs()
-	for _, file := range fileNames {
-		sst, err := fs.ReadFile(eng.Env(), file)
-		require.NoError(t, err)
-		actualSSTs = append(actualSSTs, sst)
-	}
-
-	// Construct an SST file for each of the key ranges and write a rangedel
-	// tombstone that spans from Start to End.
-	var expectedSSTs [][]byte
-	for i, s := range keySpans {
-		func() {
-			sstFile := &storage.MemObject{}
-			sst := storage.MakeIngestionSSTWriter(ctx, cluster.MakeTestingClusterSettings(), sstFile)
-			defer sst.Close()
-			if i < len(keySpans)-1 {
-				err := sst.ClearRawRange(s.Key, s.EndKey, true, true)
-				require.NoError(t, err)
+			sstSnapshotStorage := NewSSTSnapshotStorage(eng, testLimiter)
+			scratch := sstSnapshotStorage.NewScratchSpace(testRangeID, testSnapUUID)
+			desc := roachpb.RangeDescriptor{
+				StartKey: roachpb.RKey("d"),
+				EndKey:   roachpb.RKeyMax,
 			}
-			if i == len(keySpans)-1 {
-				require.NoError(t, sst.PutEngineKey(testEngineKey, []byte("foo")))
-			}
-			err = sst.Finish()
+			keySpans := rditer.MakeReplicatedKeySpans(&desc)
+			localSpans := keySpans[:len(keySpans)-1]
+			mvccSpan := keySpans[len(keySpans)-1]
+
+			msstw, err := newMultiSSTWriter(
+				ctx, cluster.MakeTestingClusterSettings(), scratch, localSpans, mvccSpan, 0,
+				true /* skipRangeDelForMVCCSpan */, false, /* rangeKeysInOrder */
+			)
 			require.NoError(t, err)
-			expectedSSTs = append(expectedSSTs, sstFile.Data())
-		}()
-	}
+			if addRangeDel {
+				require.NoError(t, msstw.addClearForMVCCSpan())
+			}
+			testKey := storage.MVCCKey{Key: roachpb.RKey("d1").AsRawKey(), Timestamp: hlc.Timestamp{WallTime: 1}}
+			testEngineKey, _ := storage.DecodeEngineKey(storage.EncodeMVCCKey(testKey))
+			require.NoError(t, msstw.Put(ctx, testEngineKey, []byte("foo")))
+			_, err = msstw.Finish(ctx)
+			require.NoError(t, err)
 
-	require.Equal(t, len(actualSSTs), len(expectedSSTs))
-	for i := range fileNames {
-		require.Equal(t, actualSSTs[i], expectedSSTs[i])
+			var actualSSTs [][]byte
+			fileNames := msstw.scratch.SSTs()
+			for _, file := range fileNames {
+				sst, err := fs.ReadFile(eng.Env(), file)
+				require.NoError(t, err)
+				actualSSTs = append(actualSSTs, sst)
+			}
+
+			// Construct an SST file for each of the key ranges and write a rangedel
+			// tombstone that spans from Start to End.
+			var expectedSSTs [][]byte
+			for i, s := range keySpans {
+				func() {
+					sstFile := &storage.MemObject{}
+					sst := storage.MakeIngestionSSTWriter(ctx, cluster.MakeTestingClusterSettings(), sstFile)
+					defer sst.Close()
+					if i < len(keySpans)-1 || addRangeDel {
+						err := sst.ClearRawRange(s.Key, s.EndKey, true, true)
+						require.NoError(t, err)
+					}
+					if i == len(keySpans)-1 {
+						require.NoError(t, sst.PutEngineKey(testEngineKey, []byte("foo")))
+					}
+					err = sst.Finish()
+					require.NoError(t, err)
+					expectedSSTs = append(expectedSSTs, sstFile.Data())
+				}()
+			}
+
+			require.Equal(t, len(actualSSTs), len(expectedSSTs))
+			for i := range fileNames {
+				require.Equal(t, actualSSTs[i], expectedSSTs[i])
+			}
+		})
 	}
 }
 

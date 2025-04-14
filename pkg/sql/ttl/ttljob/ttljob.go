@@ -158,14 +158,15 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 		}
 
 		distSQLPlanner := jobExecCtx.DistSQLPlanner()
+		evalCtx := jobExecCtx.ExtendedEvalContext()
 
 		// We don't return the compatible nodes here since PartitionSpans will
 		// filter out incompatible nodes.
-		planCtx, _, err := distSQLPlanner.SetupAllNodesPlanning(ctx, jobExecCtx.ExtendedEvalContext(), execCfg)
+		planCtx, _, err := distSQLPlanner.SetupAllNodesPlanning(ctx, evalCtx, execCfg)
 		if err != nil {
 			return err
 		}
-		spanPartitions, err := distSQLPlanner.PartitionSpans(ctx, planCtx, []roachpb.Span{entirePKSpan}, sql.PartitionSpansBoundDefault)
+		spanPartitions, err := distSQLPlanner.PartitionSpans(ctx, planCtx, []roachpb.Span{entirePKSpan})
 		if err != nil {
 			return err
 		}
@@ -214,10 +215,6 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 				progress := md.Progress
 				rowLevelTTL := progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
 				rowLevelTTL.JobTotalSpanCount = int64(jobSpanCount)
-				rowLevelTTL.JobProcessedSpanCount = 0
-				progress.Progress = &jobspb.Progress_FractionCompleted{
-					FractionCompleted: 0,
-				}
 				ju.UpdateProgress(progress)
 				return nil
 			},
@@ -247,7 +244,6 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 			execinfrapb.PostProcessSpec{},
 			[]*types.T{},
 			execinfrapb.Ordering{},
-			nil, /* finalizeLastStageCb */
 		)
 		physicalPlan.PlanToStreamColMap = []int{}
 
@@ -262,19 +258,19 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 			execCfg.RangeDescriptorCache,
 			nil, /* txn */
 			nil, /* clockUpdater */
-			jobExecCtx.ExtendedEvalContext().Tracing,
+			evalCtx.Tracing,
 		)
 		defer distSQLReceiver.Release()
 
-		// Copy the eval.Context, as dsp.Run() might change it.
-		evalCtxCopy := jobExecCtx.ExtendedEvalContext().Context.Copy()
+		// Copy the evalCtx, as dsp.Run() might change it.
+		evalCtxCopy := *evalCtx
 		distSQLPlanner.Run(
 			ctx,
 			planCtx,
 			nil, /* txn */
 			physicalPlan,
 			distSQLReceiver,
-			evalCtxCopy,
+			&evalCtxCopy,
 			nil, /* finishedSetupFn */
 		)
 
