@@ -76,6 +76,8 @@ type windowSizeSettings struct {
 		initialWindowSize int32
 		// initialConnWindowSize is the initial window size for a connection.
 		initialConnWindowSize int32
+		// rangefeedInitialWindowSize is the initial window size for a RangeFeed RPC.
+		rangefeedInitialWindowSize int32
 	}
 }
 
@@ -87,6 +89,8 @@ func (s *windowSizeSettings) maybeInit(ctx context.Context) {
 		if s.values.initialConnWindowSize > maximumWindowSize {
 			s.values.initialConnWindowSize = maximumWindowSize
 		}
+		s.values.rangefeedInitialWindowSize = getWindowSize(ctx,
+			"COCKROACH_RANGEFEED_RPC_INITIAL_WINDOW_SIZE", RangefeedClass, 2*defaultWindowSize /* 128KB */)
 	})
 }
 
@@ -100,6 +104,12 @@ func (s *windowSizeSettings) initialWindowSize(ctx context.Context) int32 {
 func (s *windowSizeSettings) initialConnWindowSize(ctx context.Context) int32 {
 	s.maybeInit(ctx)
 	return s.values.initialConnWindowSize
+}
+
+// For a RangeFeed RPC.
+func (s *windowSizeSettings) rangefeedInitialWindowSize(ctx context.Context) int32 {
+	s.maybeInit(ctx)
+	return s.values.rangefeedInitialWindowSize
 }
 
 // sourceAddr is the environment-provided local address for outgoing
@@ -119,8 +129,7 @@ var sourceAddr = func() net.Addr {
 }()
 
 type serverOpts struct {
-	interceptor        func(fullMethod string) error
-	metricsInterceptor RequestMetricsInterceptor
+	interceptor func(fullMethod string) error
 }
 
 // ServerOption is a configuration option passed to NewServer.
@@ -141,12 +150,5 @@ func WithInterceptor(f func(fullMethod string) error) ServerOption {
 				return f(fullMethod)
 			}
 		}
-	}
-}
-
-// WithMetricsServerInterceptor adds a RequestMetricsInterceptor to the grpc server.
-func WithMetricsServerInterceptor(interceptor RequestMetricsInterceptor) ServerOption {
-	return func(opts *serverOpts) {
-		opts.metricsInterceptor = interceptor
 	}
 }

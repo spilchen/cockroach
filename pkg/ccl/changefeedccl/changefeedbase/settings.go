@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/settings"
-	"github.com/cockroachdb/cockroach/pkg/util/metamorphic"
+	"github.com/cockroachdb/cockroach/pkg/util"
 )
 
 // TableDescriptorPollInterval controls how fast table descriptors are polled. A
@@ -67,36 +67,28 @@ var IdleTimeout = settings.RegisterDurationSetting(
 	settings.WithName("changefeed.auto_idle.timeout"),
 )
 
-// SpanCheckpointInterval controls how often span-level checkpoints
-// can be written.
-var SpanCheckpointInterval = settings.RegisterDurationSetting(
+// FrontierCheckpointFrequency controls the frequency of frontier checkpoints.
+var FrontierCheckpointFrequency = settings.RegisterDurationSetting(
 	settings.ApplicationLevel,
 	"changefeed.frontier_checkpoint_frequency",
-	"interval at which span-level checkpoints will be written; "+
-		"if 0, span-level checkpoints are disabled",
+	"controls the frequency with which span level checkpoints will be written; if 0, disabled",
 	10*time.Minute,
 	settings.NonNegativeDuration,
-	settings.WithName("changefeed.span_checkpoint.interval"),
 )
 
-// SpanCheckpointLagThreshold controls the amount of time a changefeed's
-// lagging spans must lag behind its leading spans before a span-level
-// checkpoint is written.
-var SpanCheckpointLagThreshold = settings.RegisterDurationSetting(
+// FrontierHighwaterLagCheckpointThreshold controls the amount the high-water
+// mark is allowed to lag behind the leading edge of the frontier before we
+// begin to attempt checkpointing spans above the high-water mark
+var FrontierHighwaterLagCheckpointThreshold = settings.RegisterDurationSetting(
 	settings.ApplicationLevel,
 	"changefeed.frontier_highwater_lag_checkpoint_threshold",
-	"the amount of time a changefeed's lagging (slowest) spans must lag "+
-		"behind its leading (fastest) spans before a span-level checkpoint "+
-		"to save leading span progress is written; if 0, span-level checkpoints "+
-		"due to lagging spans is disabled",
+	"controls the maximum the high-water mark is allowed to lag behind the leading spans of the frontier before per-span checkpointing is enabled; if 0, checkpointing due to high-water lag is disabled",
 	10*time.Minute,
 	settings.NonNegativeDuration,
-	settings.WithPublic,
-	settings.WithName("changefeed.span_checkpoint.lag_threshold"),
-)
+	settings.WithPublic)
 
-// SpanCheckpointMaxBytes controls the maximum number of key bytes that will be added
-// to a span-level checkpoint record.
+// FrontierCheckpointMaxBytes controls the maximum number of key bytes that will be added
+// to the checkpoint record.
 // Checkpoint record could be fairly large.
 // Assume we have a 10T table, and a 1/2G max range size: 20K spans.
 // Span frontier merges adjacent spans, so worst case we have 10K spans.
@@ -108,13 +100,12 @@ var SpanCheckpointLagThreshold = settings.RegisterDurationSetting(
 //   - Assume we want to have at most 150MB worth of checkpoints in the job record.
 //
 // Therefore, we should write at most 6 MB of checkpoint/hour; OR, based on the default
-// SpanCheckpointInterval setting, 1 MB per checkpoint.
-var SpanCheckpointMaxBytes = settings.RegisterByteSizeSetting(
+// FrontierCheckpointFrequency setting, 1 MB per checkpoint.
+var FrontierCheckpointMaxBytes = settings.RegisterByteSizeSetting(
 	settings.ApplicationLevel,
 	"changefeed.frontier_checkpoint_max_bytes",
-	"the maximum size of a changefeed span-level checkpoint as measured by the total size of key bytes",
+	"controls the maximum size of the checkpoint as a total size of key bytes",
 	1<<20, // 1 MiB
-	settings.WithName("changefeed.span_checkpoint.max_bytes"),
 )
 
 // ScanRequestLimit is the number of Scan requests that can run at once.
@@ -174,21 +165,17 @@ func validateSinkThrottleConfig(values *settings.Values, configStr string) error
 	return json.Unmarshal([]byte(configStr), config)
 }
 
-// ResolvedTimestampMinUpdateInterval specifies the minimum amount of time that
-// must have elapsed since the last time a changefeed's resolved timestamp was
-// updated before it is eligible to updated again.
-var ResolvedTimestampMinUpdateInterval = settings.RegisterDurationSetting(
+// MinHighWaterMarkCheckpointAdvance specifies the minimum amount of time the
+// changefeed high water mark must advance for it to be eligible for checkpointing.
+var MinHighWaterMarkCheckpointAdvance = settings.RegisterDurationSetting(
 	settings.ApplicationLevel,
 	"changefeed.min_highwater_advance",
-	"minimum amount of time that must have elapsed since the last time "+
-		"a changefeed's resolved timestamp was updated before it is eligible to be "+
-		"updated again; default of 0 means no minimum interval is enforced but "+
-		"updating will still be limited by the average time it takes to checkpoint progress",
+	"minimum amount of time the changefeed high water mark must advance "+
+		"for it to be eligible for checkpointing; Default of 0 will checkpoint every time frontier "+
+		"advances, as long as the rate of checkpointing keeps up with the rate of frontier changes",
 	0,
 	settings.NonNegativeDuration,
-	settings.WithPublic,
-	settings.WithName("changefeed.resolved_timestamp.min_update_interval"),
-)
+	settings.WithPublic)
 
 // EventMemoryMultiplier is the multiplier for the amount of memory needed to process an event.
 //
@@ -239,6 +226,14 @@ var BatchReductionRetryEnabled = settings.RegisterBoolSetting(
 	settings.WithName("changefeed.batch_reduction_retry.enabled"),
 	settings.WithPublic)
 
+// UseMuxRangeFeed enables the use of MuxRangeFeed RPC.
+var UseMuxRangeFeed = settings.RegisterBoolSetting(
+	settings.ApplicationLevel,
+	"changefeed.mux_rangefeed.enabled",
+	"if true, changefeed uses multiplexing rangefeed RPC",
+	util.ConstantWithMetamorphicTestBool("changefeed.mux_rangefeed.enabled", false),
+)
+
 // EventConsumerWorkers specifies the maximum number of workers to use when
 // processing  events.
 var EventConsumerWorkers = settings.RegisterIntSetting(
@@ -256,7 +251,7 @@ var EventConsumerWorkerQueueSize = settings.RegisterIntSetting(
 	"changefeed.event_consumer_worker_queue_size",
 	"if changefeed.event_consumer_workers is enabled, this setting sets the maxmimum number of events "+
 		"which a worker can buffer",
-	int64(metamorphic.ConstantWithTestRange("changefeed.event_consumer_worker_queue_size", 16, 0, 16)),
+	int64(util.ConstantWithMetamorphicTestRange("changefeed.event_consumer_worker_queue_size", 16, 0, 16)),
 	settings.NonNegativeInt,
 	settings.WithPublic)
 
@@ -348,11 +343,3 @@ var DefaultLaggingRangesThreshold = 3 * time.Minute
 // DefaultLaggingRangesPollingInterval is the default polling rate at which
 // lagging ranges are checked and metrics are updated.
 var DefaultLaggingRangesPollingInterval = 1 * time.Minute
-
-var Quantize = settings.RegisterDurationSettingWithExplicitUnit(
-	settings.ApplicationLevel,
-	"changefeed.resolved_timestamp.granularity",
-	"the granularity at which changefeed progress are quantized to make tracking more efficient",
-	0,
-	settings.NonNegativeDuration,
-)

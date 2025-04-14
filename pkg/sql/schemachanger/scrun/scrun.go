@@ -26,7 +26,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/screl"
 	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
 	"github.com/cockroachdb/cockroach/pkg/util/log/eventpb"
-	"github.com/cockroachdb/cockroach/pkg/util/mon"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
@@ -80,7 +79,6 @@ func runTransactionPhase(
 		ExecutionPhase:             phase,
 		SchemaChangerJobIDSupplier: deps.TransactionalJobRegistry().SchemaChangerJobID,
 		SkipPlannerSanityChecks:    !enforcePlannerSanityCheck.Get(&deps.ClusterSettings().SV),
-		MemAcc:                     mon.NewStandaloneUnlimitedAccount(),
 	})
 	if err != nil {
 		return scpb.CurrentState{}, jobspb.InvalidJobID, err
@@ -130,7 +128,6 @@ func RunSchemaChangesInJob(
 		}
 		return err
 	}
-	deps.SetExplain(p.ExplainCompact())
 	for i := range p.Stages {
 		// Execute each stage in its own transaction.
 		if err := deps.WithTxnInJob(ctx, func(ctx context.Context, td scexec.Dependencies, el EventLogger) error {
@@ -185,7 +182,6 @@ func executeStage(
 ) (err error) {
 	defer scerrors.StartEventf(
 		ctx,
-		0, /* level */
 		"executing declarative schema change %s (rollback=%v) for %s",
 		redact.Safe(stage),
 		redact.Safe(p.InRollback),
@@ -260,7 +256,7 @@ func makePostCommitPlan(
 			// Revert the schema change and write about it in the event log.
 			state.Rollback()
 			return logSchemaChangeEvents(ctx, eventLogger, state, &eventpb.ReverseSchemaChange{
-				Error:        redact.Sprintf("%+v", rollbackCause),
+				Error:        fmt.Sprintf("%v", rollbackCause),
 				SQLSTATE:     pgerror.GetPGCode(rollbackCause).String(),
 				LatencyNanos: timeutil.Since(jobStartTime).Nanoseconds(),
 			})
@@ -277,7 +273,6 @@ func makePostCommitPlan(
 		SchemaChangerJobIDSupplier: func() jobspb.JobID { return jobID },
 		SkipPlannerSanityChecks:    true,
 		InRollback:                 state.InRollback,
-		MemAcc:                     mon.NewStandaloneUnlimitedAccount(),
 	})
 }
 
@@ -314,7 +309,6 @@ func makeState(
 ) (state scpb.CurrentState, err error) {
 	defer scerrors.StartEventf(
 		ctx,
-		0, /* level */
 		"rebuilding declarative schema change state from descriptors %v",
 		redact.Safe(descriptorIDs),
 	).HandlePanicAndLogError(ctx, &err)

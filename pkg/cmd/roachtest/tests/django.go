@@ -22,8 +22,6 @@ import (
 var djangoReleaseTagRegex = regexp.MustCompile(`^(?P<major>\d+)\.(?P<minor>\d+)(\.(?P<point>\d+))?$`)
 var djangoCockroachDBReleaseTagRegex = regexp.MustCompile(`^(?P<major>\d+)\.(?P<minor>\d+)$`)
 
-// WARNING: DO NOT MODIFY the name of the below constant/variable without approval from the docs team.
-// This is used by docs automation to produce a list of supported versions for ORM's.
 var djangoSupportedTag = "cockroach-4.1.x"
 var djangoCockroachDBSupportedTag = "4.1.*"
 
@@ -177,7 +175,7 @@ func registerDjango(r registry.Registry) {
 		var fullTestResults []byte
 		for _, testName := range enabledDjangoTests {
 			t.Status("Running django test app ", testName)
-			result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(node), fmt.Sprintf(djangoRunTestCmd, testName))
+			result, err := c.RunWithDetailsSingleNode(ctx, t.L(), node, fmt.Sprintf(djangoRunTestCmd, testName))
 
 			// Fatal for a roachprod or transient error. A roachprod error is when result.Err==nil.
 			// Proceed for any other (command) errors
@@ -191,7 +189,7 @@ func registerDjango(r registry.Registry) {
 			t.L().Printf("Test results for app %s: %s", testName, rawResults)
 			t.L().Printf("Test stdout for app %s:", testName)
 			if err := c.RunE(
-				ctx, option.WithNodes(node), fmt.Sprintf("cd /mnt/data1/django/tests && cat %s.stdout", testName),
+				ctx, node, fmt.Sprintf("cd /mnt/data1/django/tests && cat %s.stdout", testName),
 			); err != nil {
 				t.Fatal(err)
 			}

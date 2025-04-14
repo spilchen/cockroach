@@ -59,6 +59,7 @@ go_test(
         "storage_test.go",
         "util_test.go",
     ],
+    args = ["-test.timeout=55s"],
     embed = [":gossip"],
     deps = [
         "//pkg/base",
@@ -86,7 +87,7 @@ go_test(
         "//pkg/util/uuid",
         "@com_github_cockroachdb_errors//:errors",
         "@com_github_stretchr_testify//require",
-        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//:go_default_library",
     ],
 )
 

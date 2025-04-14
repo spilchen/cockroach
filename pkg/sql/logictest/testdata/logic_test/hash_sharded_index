@@ -222,11 +222,7 @@ statement ok
 CREATE INDEX idx on sharded_secondary (a) USING HASH WITH (bucket_count=3)
 
 statement ok
-SET autocommit_before_ddl = false
-
-# Use high priority to decrease the likelihood of the transaction being aborted.
-statement ok
-BEGIN TRANSACTION PRIORITY HIGH ISOLATION LEVEL SERIALIZABLE
+BEGIN
 
 statement ok
 SELECT crdb_internal_a_shard_3 FROM sharded_secondary
@@ -239,9 +235,6 @@ SELECT crdb_internal_a_shard_3 FROM sharded_secondary
 
 statement ok
 ROLLBACK
-
-statement ok
-RESET autocommit_before_ddl
 
 statement ok
 DROP INDEX sharded_secondary@idx
@@ -1055,13 +1048,13 @@ statement ok
 ALTER TABLE products DROP COLUMN description;
 
 statement ok
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+BEGIN;
 SET LOCAL use_declarative_schema_changer = off;
 ALTER TABLE products ADD COLUMN description STRING NOT NULL DEFAULT '';
 COMMIT;
 
 statement ok
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+BEGIN;
 SET LOCAL use_declarative_schema_changer = off;
 ALTER TABLE products DROP COLUMN description;
 COMMIT;

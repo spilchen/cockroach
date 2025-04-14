@@ -117,16 +117,16 @@ geog    GEOGRAPHY(GEOMETRY,4326)  true   NULL  ·  {geo_table_geog_idx,geo_table
 geom    GEOMETRY(POINT)           true   NULL  ·  {geo_table_geom_idx,geo_table_pkey}                     false
 orphan  GEOGRAPHY                 true   NULL  ·  {geo_table_pkey}                                        false
 
-statement error column bad_pk has type geography, which is not indexable in a non-inverted index\nHINT: you may want to create an inverted index instead. See the documentation for inverted indexes: https://www.cockroachlabs.com/docs/v25.2/inverted-indexes.html
+statement error column bad_pk is of type geography and thus is not indexable
 CREATE TABLE bad_geog_table(bad_pk geography primary key)
 
-statement error column bad_pk has type geometry, which is not indexable in a non-inverted index\nHINT: you may want to create an inverted index instead. See the documentation for inverted indexes: https://www.cockroachlabs.com/docs/v25.2/inverted-indexes.html
+statement error column bad_pk is of type geometry and thus is not indexable
 CREATE TABLE bad_geom_table(bad_pk geometry primary key)
 
-statement error column geog has type geography, which is not indexable in a non-inverted index\nHINT: you may want to create an inverted index instead. See the documentation for inverted indexes: https://www.cockroachlabs.com/docs/v25.2/inverted-indexes.html
+statement error column geog is of type geography and thus is not indexable
 CREATE INDEX geog_idx ON geo_table(geog)
 
-statement error column geom has type geometry, which is not indexable in a non-inverted index\nHINT: you may want to create an inverted index instead. See the documentation for inverted indexes: https://www.cockroachlabs.com/docs/v25.2/inverted-indexes.html
+statement error column geom is of type geometry and thus is not indexable
 CREATE INDEX geom_idx ON geo_table(geom)
 
 statement ok
@@ -6248,104 +6248,5 @@ SELECT count(DISTINCT g) FROM t111556_res
 
 statement ok
 SET testing_optimizer_disable_rule_probability = 0
-
-subtest end
-
-
-subtest regressions
-
-# Regression test for #111157
-query T
-SELECT ST_Extent(ST_GeomFromGeoHash('C'::TEXT, NULL::INT4)::GEOMETRY);
-----
-BOX(-135 45,-90 90)
-
-query T
-SELECT ST_Extent(ST_GeomFromGeoHash(NULL::TEXT, 1::INT4)::GEOMETRY);
-----
-NULL
-
-query T
-SELECT ST_Extent(ST_PointFromGeoHash('C'::TEXT, NULL::INT4)::GEOMETRY);
-----
-BOX(-112.5 67.5,-112.5 67.5)
-
-query T
-SELECT ST_Extent(ST_PointFromGeoHash(NULL::TEXT, 1::INT4)::GEOMETRY);
-----
-NULL
-
-# X min > X max
-query T
-SELECT ST_AsEWKT(ST_MakeEnvelope(8.0::FLOAT8, 2.0::FLOAT8, 5.0::FLOAT8, 4.0::FLOAT8)::GEOMETRY);
-----
-POLYGON ((8 2, 8 4, 5 4, 5 2, 8 2))
-
-# Y min > Y max
-query T
-SELECT ST_AsEWKT(ST_MakeEnvelope(5.0::FLOAT8, 4.0::FLOAT8, 8.0::FLOAT8, 2.0::FLOAT8)::GEOMETRY);
-----
-POLYGON ((5 4, 5 2, 8 2, 8 4, 5 4))
-
-subtest end
-
-subtest st_tileenvelope
-
-query T
-SELECT ST_TileEnvelope(NULL, NULL, NULL);
-----
-NULL
-
-query T
-SELECT ST_AsText(ST_TileEnvelope(8, 1, 2));
-----
-POLYGON ((-19880965.308861203491688 19567879.241005122661591, -19880965.308861203491688 19724422.274933163076639, -19724422.274933163076639 19724422.274933163076639, -19724422.274933163076639 19567879.241005122661591, -19880965.308861203491688 19567879.241005122661591))
-
-query T
-SELECT ST_TileEnvelope(8, 1, 2, NULL);
-----
-NULL
-
-query T
-SELECT ST_AsText(ST_TileEnvelope(3, 1, 1, ST_MakeEnvelope(-180, -90, 180, 90, 4326)) );
-----
-POLYGON ((-135 45, -135 67.5, -90 67.5, -90 45, -135 45))
-
-query T
-SELECT ST_TileEnvelope(3, 1, 1, ST_MakeEnvelope(-180, -90, 180, 90, 4326), NULL);
-----
-NULL
-
-query T
-SELECT ST_AsText(ST_TileEnvelope(3, 1, 1, ST_MakeEnvelope(-180, -90, 180, 90, 4326), 0.125));
-----
-POLYGON ((-140.625 42.1875, -140.625 70.3125, -84.375 70.3125, -84.375 42.1875, -140.625 42.1875))
-
-statement error pgcode 22023 pq: st_tileenvelope\(\): Unable to compute bbox
-SELECT st_tileenvelope(0, 0, 0, '010500000000000000');
-
-subtest end
-
-# Regression test for not respecting max_decimal_digits argument of the
-# st_geojson builtin function (#124368).
-query T
-SELECT st_asgeojson(tbl.*, 'g', 4)::JSONB->'geometry'->'coordinates'
-  FROM (VALUES ('SRID=4326;POINT (-123.45678901234 12.3456789012)'::GEOMETRY)) tbl(g);
-----
-[-123.4568, 12.3457]
-
-# Regression test for parsing arrays of spatial types. Arrays for these types
-# are special since they use ':' as a delimiter instead of ','.
-subtest array_delimiter
-
-query T
-SELECT '{0101000020e6100000cdcccccccc4c1b40cdcccccccc8c4740:0101000020e6100000333333333333fd3fcdcccccccc0c4640}'::geometry[];
-----
-{0101000020E6100000CDCCCCCCCC4C1B40CDCCCCCCCC8C4740:0101000020E6100000333333333333FD3FCDCCCCCCCC0C4640}
-
-query T
-SELECT '{0101000020e6100000cdcccccccc4c1b40cdcccccccc8c4740:0101000020e6100000333333333333fd3fcdcccccccc0c4640}'::geography[];
-----
-{0101000020E6100000CDCCCCCCCC4C1B40CDCCCCCCCC8C4740:0101000020E6100000333333333333FD3FCDCCCCCCCC0C4640}
 
 subtest end

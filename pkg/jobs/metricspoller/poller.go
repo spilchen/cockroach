@@ -56,7 +56,7 @@ func (mp *metricsPoller) Resume(ctx context.Context, execCtx interface{}) error 
 	exec := execCtx.(sql.JobExecContext)
 	metrics := exec.ExecCfg().JobRegistry.MetricsStruct().JobSpecificMetrics[jobspb.TypePollJobsStats].(pollerMetrics)
 
-	var t timeutil.Timer
+	t := timeutil.NewTimer()
 	defer t.Stop()
 
 	runTask := func(name string, task func(ctx context.Context, execCtx sql.JobExecContext) error) error {
@@ -89,7 +89,6 @@ type pollerMetrics struct {
 var metricPollerTasks = map[string]func(ctx context.Context, execCtx sql.JobExecContext) error{
 	"paused-jobs": updatePausedMetrics,
 	"manage-pts":  manageProtectedTimestamps,
-	"resolved-ts": updateTSMetrics,
 }
 
 func (m pollerMetrics) MetricStruct() {}

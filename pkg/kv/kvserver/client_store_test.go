@@ -11,19 +11,16 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
-	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/stateloader"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/server"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/spanconfig"
-	"github.com/cockroachdb/cockroach/pkg/storage/fs"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/listenerutil"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/testcluster"
-	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/errors"
@@ -111,22 +108,20 @@ func TestStoreRaftReplicaID(t *testing.T) {
 
 // TestStoreLoadReplicaQuiescent tests whether replicas are initially quiescent
 // when loaded during store start, with eager Raft group initialization. Epoch
-// lease ranges will initially be quiesced (unless acquired by a store replica
-// queue), but expiration leases shouldn't.
+// lease ranges should be quiesced, but expiration leases shouldn't.
 func TestStoreLoadReplicaQuiescent(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	testutils.RunValues(t, "lease-type", roachpb.TestingAllLeaseTypes(), func(t *testing.T, leaseType roachpb.LeaseType) {
-		storeReg := fs.NewStickyRegistry()
+	testutils.RunTrueAndFalse(t, "kv.expiration_leases_only.enabled", func(t *testing.T, expOnly bool) {
+		storeReg := server.NewStickyVFSRegistry()
 		listenerReg := listenerutil.NewListenerRegistry()
 		defer listenerReg.Close()
 
 		ctx := context.Background()
 		st := cluster.MakeTestingClusterSettings()
-		kvserver.OverrideDefaultLeaseType(ctx, &st.SV, leaseType)
+		kvserver.ExpirationLeasesOnly.Override(ctx, &st.SV, expOnly)
 
-		manualClock := hlc.NewHybridManualClock()
 		tc := testcluster.StartTestCluster(t, 1, base.TestClusterArgs{
 			ReplicationMode:     base.ReplicationManual,
 			ReusableListenerReg: listenerReg,
@@ -138,14 +133,9 @@ func TestStoreLoadReplicaQuiescent(t *testing.T) {
 				Knobs: base.TestingKnobs{
 					Server: &server.TestingKnobs{
 						StickyVFSRegistry: storeReg,
-						WallClock:         manualClock,
 					},
 					Store: &kvserver.StoreTestingKnobs{
 						DisableScanner: true,
-						// The lease queue will unquiesce the range and acquire the
-						// proscribed leases upon restart. The range should quiesce again
-						// in the regular duration.
-						DisableLeaseQueue: true,
 					},
 				},
 				StoreSpecs: []base.StoreSpec{
@@ -164,33 +154,10 @@ func TestStoreLoadReplicaQuiescent(t *testing.T) {
 		repl := tc.GetFirstStoreFromServer(t, 0).GetReplicaIfExists(desc.RangeID)
 		require.NotNil(t, repl)
 		lease, _ := repl.GetLease()
-
-		if leaseType == roachpb.LeaseLeader {
-			// The first lease that'll be acquired above is going to be an expiration
-			// based lease. That's because at that point, there won't be a leader,
-			// and the lease acquisition will trigger an election. Expire that lease
-			// and send a request that'll force a re-acquisition. This time, we should
-			// get a leader lease.
-			manualClock.Increment(tc.Server(0).RaftConfig().RangeLeaseDuration.Nanoseconds())
-			incArgs := incrementArgs(key, int64(5))
-
-			testutils.SucceedsSoon(t, func() error {
-				_, err := kv.SendWrapped(ctx, tc.GetFirstStoreFromServer(t, 0).TestSender(), incArgs)
-				return err.GoError()
-			})
-			lease, _ = repl.GetLease()
-			require.Equal(t, roachpb.LeaseLeader, lease.Type())
-		}
-
-		switch leaseType {
-		case roachpb.LeaseExpiration:
+		if expOnly {
 			require.Equal(t, roachpb.LeaseExpiration, lease.Type())
-		case roachpb.LeaseEpoch:
+		} else {
 			require.Equal(t, roachpb.LeaseEpoch, lease.Type())
-		case roachpb.LeaseLeader:
-			require.Equal(t, roachpb.LeaseLeader, lease.Type())
-		default:
-			panic("unknown")
 		}
 
 		// Restart the server and check whether the range starts out quiesced.
@@ -201,13 +168,6 @@ func TestStoreLoadReplicaQuiescent(t *testing.T) {
 		repl, _, err = tc.Server(0).GetStores().(*kvserver.Stores).GetReplicaForRangeID(ctx, desc.RangeID)
 		require.NoError(t, err)
 		require.NotNil(t, repl.RaftStatus())
-		switch leaseType {
-		case roachpb.LeaseExpiration, roachpb.LeaseLeader:
-			require.False(t, repl.IsQuiescent())
-		case roachpb.LeaseEpoch:
-			require.True(t, repl.IsQuiescent())
-		default:
-			panic("unknown")
-		}
+		require.Equal(t, !expOnly, repl.IsQuiescent())
 	})
 }

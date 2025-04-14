@@ -146,7 +146,7 @@ func (p *poller) start() (firstDone <-chan struct{}) {
 	bgCtx := p.AnnotateCtx(context.Background())
 	if p.stopper.RunAsyncTask(bgCtx, "ts-poller", func(ctx context.Context) {
 		ch := ch // goroutine-local copy
-		var ticker timeutil.Timer
+		ticker := timeutil.NewTimer()
 		ticker.Reset(0)
 		defer ticker.Stop()
 		for {

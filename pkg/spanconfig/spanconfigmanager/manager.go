@@ -38,7 +38,7 @@ var checkReconciliationJobInterval = settings.RegisterDurationSetting(
 //
 // TODO(irfansharif): This should be a tenant read-only setting once the work
 // for #73349 is completed.
-var JobEnabledSetting = settings.RegisterBoolSetting(
+var jobEnabledSetting = settings.RegisterBoolSetting(
 	settings.ApplicationLevel,
 	"spanconfig.reconciliation_job.enabled",
 	"enable the use of the kv accessor", true)
@@ -109,7 +109,7 @@ func (m *Manager) run(ctx context.Context) {
 	//   skip starting the reconciliation job, learning about the cluster
 	//   version shortly, and only checking the job after an interval has
 	//   passed.
-	JobEnabledSetting.SetOnChange(&m.settings.SV, func(ctx context.Context) {
+	jobEnabledSetting.SetOnChange(&m.settings.SV, func(ctx context.Context) {
 		triggerJobCheck()
 	})
 	checkReconciliationJobInterval.SetOnChange(&m.settings.SV, func(ctx context.Context) {
@@ -124,7 +124,7 @@ func (m *Manager) run(ctx context.Context) {
 			fn()
 		}
 
-		if !JobEnabledSetting.Get(&m.settings.SV) {
+		if !jobEnabledSetting.Get(&m.settings.SV) {
 			return
 		}
 
@@ -139,7 +139,7 @@ func (m *Manager) run(ctx context.Context) {
 
 	// Periodically check if the span config reconciliation job exists and start
 	// it if it doesn't.
-	var timer timeutil.Timer
+	timer := timeutil.NewTimer()
 	defer timer.Stop()
 
 	triggerJobCheck()
@@ -177,7 +177,7 @@ func (m *Manager) createAndStartJobIfNoneExists(ctx context.Context) (bool, erro
 
 	var job *jobs.Job
 	if err := m.db.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
-		exists, err := jobs.RunningJobExists(ctx, jobspb.InvalidJobID, txn,
+		exists, err := jobs.RunningJobExists(ctx, jobspb.InvalidJobID, txn, m.settings.Version,
 			jobspb.TypeAutoSpanConfigReconciliation)
 		if err != nil {
 			return err

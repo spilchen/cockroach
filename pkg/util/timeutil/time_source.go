@@ -22,7 +22,7 @@ type TimerI interface {
 	// Reset will set the timer to notify on Ch() after duration.
 	Reset(duration time.Duration)
 
-	// Stop prevents the Timer from firing.
+	// Stop must only be called one time per timer.
 	Stop() bool
 
 	// Ch returns the channel which will be notified when the timer reaches its
@@ -66,7 +66,7 @@ func (DefaultTimeSource) Since(t time.Time) time.Duration {
 
 // NewTimer returns a TimerI wrapping *Timer.
 func (DefaultTimeSource) NewTimer() TimerI {
-	return (*timer)(new(Timer))
+	return (*timer)(NewTimer())
 }
 
 // NewTicker creates a new ticker.

@@ -3,25 +3,16 @@
 // Use of this software is governed by the CockroachDB Software License
 // included in the /LICENSE file.
 
-import { InlineAlert } from "@cockroachlabs/ui-components";
-import classNames from "classnames/bind";
-import moment from "moment-timezone";
 import React, { useEffect, useState, useCallback } from "react";
+import classNames from "classnames/bind";
 import { useHistory } from "react-router-dom";
-
-import { Anchor } from "src/anchor";
-import { StmtInsightsReq } from "src/api/stmtInsightsApi";
-import { isSelectedColumn } from "src/columnsSelector/utils";
 import {
-  filterStatementInsights,
-  StmtInsightEvent,
-  getAppsFromStatementInsights,
-  makeStatementInsightsColumns,
-  WorkloadInsightEventFilters,
-} from "src/insights";
+  ISortedTablePagination,
+  SortSetting,
+} from "src/sortedtable/sortedtable";
 import { Loading } from "src/loading/loading";
 import { PageConfig, PageConfigItem } from "src/pageConfig/pageConfig";
-import { Pagination } from "src/pagination";
+import { Search } from "src/search/search";
 import {
   calculateActiveFilters,
   defaultFilters,
@@ -30,21 +21,23 @@ import {
   SelectedFilters,
 } from "src/queryFilter/filter";
 import { getWorkloadInsightEventFiltersFromURL } from "src/queryFilter/utils";
-import { Search } from "src/search/search";
-import { getTableSortFromURL } from "src/sortedtable/getTableSortFromURL";
-import {
-  ISortedTablePagination,
-  SortSetting,
-} from "src/sortedtable/sortedtable";
-import sortableTableStyles from "src/sortedtable/sortedtable.module.scss";
-import styles from "src/statementsPage/statementsPage.module.scss";
-import { TableStatistics } from "src/tableStatistics";
-import { insights } from "src/util";
-import { useScheduleFunction } from "src/util/hooks";
+import { Pagination } from "src/pagination";
 import { queryByName, syncHistory } from "src/util/query";
+import { getTableSortFromURL } from "src/sortedtable/getTableSortFromURL";
+import { TableStatistics } from "src/tableStatistics";
+import { isSelectedColumn } from "src/columnsSelector/utils";
 
+import {
+  filterStatementInsights,
+  StmtInsightEvent,
+  getAppsFromStatementInsights,
+  makeStatementInsightsColumns,
+  WorkloadInsightEventFilters,
+} from "src/insights";
+import { EmptyInsightsTablePlaceholder } from "../util";
+import { StatementInsightsTable } from "./statementInsightsTable";
+import { InsightsError } from "../../insightsErrorComponent";
 import ColumnsSelector from "../../../columnsSelector/columnsSelector";
-import { commonStyles } from "../../../common";
 import { SelectOption } from "../../../multiSelectCheckbox/multiSelectCheckbox";
 import {
   defaultTimeScaleOptions,
@@ -52,27 +45,33 @@ import {
   TimeScaleDropdown,
   timeScaleRangeToObj,
 } from "../../../timeScaleDropdown";
-import { InsightsError } from "../../insightsErrorComponent";
-import { EmptyInsightsTablePlaceholder } from "../util";
+import { StmtInsightsReq } from "src/api/stmtInsightsApi";
+import moment from "moment-timezone";
 
-import { StatementInsightsTable } from "./statementInsightsTable";
+import styles from "src/statementsPage/statementsPage.module.scss";
+import sortableTableStyles from "src/sortedtable/sortedtable.module.scss";
+import { commonStyles } from "../../../common";
+import { useScheduleFunction } from "src/util/hooks";
+import { InlineAlert } from "@cockroachlabs/ui-components";
+import { insights } from "src/util";
+import { Anchor } from "src/anchor";
 
 const cx = classNames.bind(styles);
 const sortableTableCx = classNames.bind(sortableTableStyles);
 
 export type StatementInsightsViewStateProps = {
-  filters: WorkloadInsightEventFilters;
-  insightTypes: string[];
   isDataValid: boolean;
   lastUpdated: moment.Moment;
-  selectedColumnNames: string[];
-  sortSetting: SortSetting;
   statements: StmtInsightEvent[];
   statementsError: Error | null;
-  dropDownSelect?: React.ReactElement;
+  insightTypes: string[];
+  filters: WorkloadInsightEventFilters;
+  sortSetting: SortSetting;
+  selectedColumnNames: string[];
   isLoading?: boolean;
-  maxSizeApiReached?: boolean;
+  dropDownSelect?: React.ReactElement;
   timeScale?: TimeScale;
+  maxSizeApiReached?: boolean;
 };
 
 export type StatementInsightsViewDispatchProps = {
@@ -118,11 +117,7 @@ export const StatementInsightsView: React.FC<StatementInsightsViewProps> = ({
   );
 
   const refresh = useCallback(() => {
-    const ts = timeScaleRangeToObj(timeScale);
-    const req = {
-      start: ts.start,
-      end: ts.end,
-    };
+    const req = timeScaleRangeToObj(timeScale);
     refreshStatementInsights(req);
   }, [refreshStatementInsights, timeScale]);
 

@@ -391,7 +391,7 @@ func registerQuitTransfersLeases(r registry.Registry) {
 	// kill. If the drain is successful, the leases are transferred
 	// successfully even if if the process terminates non-gracefully.
 	registerTest("drain", "v20.1.0", func(ctx context.Context, t test.Test, c cluster.Cluster, nodeID int) {
-		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(c.Node(nodeID)),
+		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), c.Node(nodeID),
 			"./cockroach", "node", "drain", "--logtostderr=INFO",
 			fmt.Sprintf("--port={pgport:%d}", nodeID),
 			fmt.Sprintf("--certs-dir %s", install.CockroachNodeCertsDir),
@@ -435,7 +435,8 @@ func registerQuitTransfersLeases(r registry.Registry) {
 		// - we add one to bring the value back between 1 and NodeCount
 		//   inclusive.
 		otherNodeID := (nodeID % c.Spec().NodeCount) + 1
-		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(c.Node(otherNodeID)),
+
+		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), c.Node(otherNodeID),
 			"./cockroach", "node", "drain", "--logtostderr=INFO",
 			fmt.Sprintf("--port={pgport:%d}", otherNodeID),
 			fmt.Sprintf("--certs-dir %s", install.CockroachNodeCertsDir),

@@ -6,6 +6,7 @@
 package storepool
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -25,7 +26,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/shuffle"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/redact"
 )
 
 // FailedReservationsTimeout specifies a duration during which the local
@@ -105,18 +105,6 @@ const (
 	// candidate for lease transfers or replica rebalancing.
 	storeStatusDraining
 )
-
-func (ss storeStatus) String() string {
-	if ss < storeStatusDead || ss > storeStatusDraining {
-		panic(fmt.Sprintf("unknown store status: %d", ss))
-	}
-	return [...]string{"",
-		"dead", "unknown", "throttled", "available",
-		"decommissioning", "suspect", "draining"}[ss]
-}
-
-// SafeValue implements the redact.SafeValue interface.
-func (ss storeStatus) SafeValue() {}
 
 func (sd *StoreDetail) status(
 	now hlc.Timestamp,
@@ -218,7 +206,6 @@ type CapacityChangeFn func(
 // of all known stores in the cluster and information on their health.
 type AllocatorStorePool interface {
 	fmt.Stringer
-	redact.SafeFormatter
 
 	// ClusterNodeCount returns the number of nodes that are possible allocation
 	// targets.
@@ -394,15 +381,10 @@ func NewStorePool(
 }
 
 func (sp *StorePool) String() string {
-	return redact.StringWithoutMarkers(sp)
+	return sp.statusString(sp.NodeLivenessFn)
 }
 
-// SafeFormat implements the redact.SafeFormatter interface.
-func (sp *StorePool) SafeFormat(w redact.SafePrinter, _ rune) {
-	w.Print(sp.statusString(sp.NodeLivenessFn))
-}
-
-func (sp *StorePool) statusString(nl NodeLivenessFunc) redact.RedactableString {
+func (sp *StorePool) statusString(nl NodeLivenessFunc) string {
 	sp.DetailsMu.RLock()
 	defer sp.DetailsMu.RUnlock()
 
@@ -412,30 +394,28 @@ func (sp *StorePool) statusString(nl NodeLivenessFunc) redact.RedactableString {
 	}
 	sort.Sort(ids)
 
-	var buf redact.StringBuilder
+	var buf bytes.Buffer
 	now := sp.clock.Now()
 	timeUntilNodeDead := liveness.TimeUntilNodeDead.Get(&sp.st.SV)
 	timeAfterNodeSuspect := liveness.TimeAfterNodeSuspect.Get(&sp.st.SV)
 
 	for _, id := range ids {
 		detail := sp.DetailsMu.StoreDetails[id]
-		buf.Print(id)
+		fmt.Fprintf(&buf, "%d", id)
 		status := detail.status(now, timeUntilNodeDead, nl, timeAfterNodeSuspect)
 		if status != storeStatusAvailable {
-			buf.Printf(" (status=%s)", status)
+			fmt.Fprintf(&buf, " (status=%d)", status)
 		}
 		if detail.Desc != nil {
-			buf.Printf(": range-count=%d fraction-used=%.2f",
-				detail.Desc.Capacity.RangeCount,
-				detail.Desc.Capacity.FractionUsed())
+			fmt.Fprintf(&buf, ": range-count=%d fraction-used=%.2f",
+				detail.Desc.Capacity.RangeCount, detail.Desc.Capacity.FractionUsed())
 		}
 		if detail.ThrottledUntil.After(now) {
-			buf.Printf(" [throttled=%v]", humanizeutil.Duration(
-				detail.ThrottledUntil.GoTime().Sub(now.GoTime())))
+			fmt.Fprintf(&buf, " [throttled=%.1fs]", detail.ThrottledUntil.GoTime().Sub(now.GoTime()).Seconds())
 		}
-		buf.SafeRune('\n')
+		_, _ = buf.WriteString("\n")
 	}
-	return buf.RedactableString()
+	return buf.String()
 }
 
 // storeGossipUpdate is the Gossip callback used to keep the StorePool up to date.
@@ -956,10 +936,6 @@ type StoreList struct {
 	// CandidateIOOverloadScores tracks the IO overload stats for Stores that are
 	// eligible to be rebalance candidates.
 	CandidateIOOverloadScores Stat
-
-	// CandidateMaxIOOverloadScores tracks the max IO overload stats for Stores
-	// that are eligible to be rebalance candidates.
-	CandidateMaxIOOverloadScores Stat
 }
 
 // MakeStoreList constructs a new store list based on the passed in descriptors.
@@ -975,51 +951,36 @@ func MakeStoreList(descriptors []roachpb.StoreDescriptor) StoreList {
 		sl.CandidateCPU.update(desc.Capacity.CPUPerSecond)
 		score, _ := desc.Capacity.IOThreshold.Score()
 		sl.CandidateIOOverloadScores.update(score)
-		maxScore, _ := desc.Capacity.IOThresholdMax.Score()
-		sl.CandidateMaxIOOverloadScores.update(maxScore)
 	}
 	return sl
 }
 
 func (sl StoreList) String() string {
-	return redact.StringWithoutMarkers(sl)
-}
-
-// SafeFormat implements the redact.SafeFormatter interface.
-func (sl StoreList) SafeFormat(w redact.SafePrinter, _ rune) {
-	var buf redact.StringBuilder
-	buf.Printf(
-		"  candidate: avg-ranges=%.2f avg-leases=%.2f avg-disk-usage=%s "+
-			"avg-queries-per-second=%.2f avg-store-cpu-per-second=%s "+
-			"avg-io-overload=%.2f(max=%.2f)",
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf,
+		"  candidate: avg-ranges=%.2f avg-leases=%.2f avg-disk-usage=%s avg-queries-per-second=%.2f avg-store-cpu-per-second=%s",
 		sl.CandidateRanges.Mean,
 		sl.CandidateLeases.Mean,
 		humanizeutil.IBytes(int64(sl.candidateLogicalBytes.Mean)),
 		sl.CandidateQueriesPerSecond.Mean,
 		humanizeutil.Duration(time.Duration(int64(sl.CandidateCPU.Mean))),
-		sl.CandidateIOOverloadScores.Mean,
-		sl.CandidateMaxIOOverloadScores.Mean,
 	)
 	if len(sl.Stores) > 0 {
-		buf.Printf("\n")
+		fmt.Fprintf(&buf, "\n")
 	} else {
-		buf.Printf(" <no candidates>")
+		fmt.Fprintf(&buf, " <no candidates>")
 	}
 	for _, desc := range sl.Stores {
 		ioScore, _ := desc.Capacity.IOThreshold.Score()
-		maxIOScore, _ := desc.Capacity.IOThresholdMax.Score()
-		buf.Printf(
-			"  %v: ranges=%d leases=%d disk-usage=%s queries-per-second=%.2f "+
-				"store-cpu-per-second=%s io-overload=%.2f(max=%.2f)\n",
+		fmt.Fprintf(&buf, "  %d: ranges=%d leases=%d disk-usage=%s queries-per-second=%.2f store-cpu-per-second=%s io-overload=%.2f\n",
 			desc.StoreID, desc.Capacity.RangeCount,
 			desc.Capacity.LeaseCount, humanizeutil.IBytes(desc.Capacity.LogicalBytes),
 			desc.Capacity.QueriesPerSecond,
 			humanizeutil.Duration(time.Duration(int64(desc.Capacity.CPUPerSecond))),
 			ioScore,
-			maxIOScore,
 		)
 	}
-	w.Print(buf)
+	return buf.String()
 }
 
 // ExcludeInvalid takes a store list and removes Stores that would be explicitly invalid

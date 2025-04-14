@@ -52,17 +52,22 @@ type PreparedStatement struct {
 
 	// BaseMemo is the memoized data structure constructed by the cost-based
 	// optimizer during prepare of a SQL statement.
+	//
+	// It may be a fully-optimized memo if it contains an "ideal generic plan"
+	// that is guaranteed to be optimal across all executions of the prepared
+	// statement. Ideal generic plans are generated when the statement has no
+	// placeholders nor fold-able stable expressions, or when the placeholder
+	// fast-path is utilized.
+	//
+	// If it is not an ideal generic plan, it is an unoptimized, normalized
+	// memo that is used as a starting point for optimization of custom plans.
 	BaseMemo *memo.Memo
 
 	// GenericMemo, if present, is a fully-optimized memo that can be executed
 	// as-is.
+	// TODO(mgartner): Put all fully-optimized plans in the GenericMemo field to
+	// reduce confusion.
 	GenericMemo *memo.Memo
-
-	// IdealGenericPlan is true if GenericMemo is guaranteed to be optimal
-	// across all executions of the prepared statement. Ideal generic plans are
-	// generated when the statement has no placeholders nor fold-able stable
-	// expressions, or when the placeholder fast-path is utilized.
-	IdealGenericPlan bool
 
 	// Costs tracks the costs of previously optimized custom and generic plans.
 	Costs planCosts
@@ -134,9 +139,9 @@ type planCosts struct {
 	}
 }
 
-// HasGeneric returns true if the planCosts has a generic plan cost.
-func (p *planCosts) HasGeneric() bool {
-	return p.generic.C != 0
+// Generic returns the cost of the generic plan.
+func (p *planCosts) Generic() memo.Cost {
+	return p.generic
 }
 
 // SetGeneric sets the cost of the generic plan.
@@ -162,46 +167,26 @@ func (p *planCosts) NumCustom() int {
 	return p.custom.length
 }
 
-// IsGenericOptimal returns true if the generic plan is optimal w.r.t. the
-// custom plans. The cost flags, auxiliary cost information, and the cost value
-// are all considered. If any of the custom plan cost flags are less than the
-// generic cost flags, then the generic plan is not optimal. If the generic plan
-// has more full scans than any of the custom plans, then it is not optimal.
-// Otherwise, the generic plan is optimal if its cost value is less than the
-// average cost of the custom plans.
-func (p *planCosts) IsGenericOptimal() bool {
-	// Check cost flags and full scan counts.
-	if gc := p.generic.FullScanCount(); gc > 0 || !p.generic.Flags.Empty() {
-		for i := 0; i < p.custom.length; i++ {
-			if p.custom.costs[i].Flags.Less(p.generic.Flags) ||
-				gc > p.custom.costs[i].FullScanCount() {
-				return false
-			}
-		}
-	}
-
-	// Compare the generic cost to the average custom cost. Clear the cost flags
-	// because they have already been handled above.
-	gen := memo.Cost{C: p.generic.C}
-	return gen.Less(p.avgCustom())
-}
-
-// avgCustom returns the average cost of all the custom plan costs in planCosts.
+// AvgCustom returns the average cost of all the custom plan costs in planCosts.
 // If there are no custom plan costs, it returns 0.
-func (p *planCosts) avgCustom() memo.Cost {
+func (p *planCosts) AvgCustom() memo.Cost {
 	if p.custom.length == 0 {
-		return memo.Cost{C: 0}
+		return 0
 	}
-	var sum float64
+	var sum memo.Cost
 	for i := 0; i < p.custom.length; i++ {
-		sum += p.custom.costs[i].C
+		sum += p.custom.costs[i]
 	}
-	return memo.Cost{C: sum / float64(p.custom.length)}
+	return sum / memo.Cost(p.custom.length)
 }
 
-// Reset clears any previously set costs.
-func (p *planCosts) Reset() {
-	p.generic = memo.Cost{C: 0}
+// ClearGeneric clears the generic cost.
+func (p *planCosts) ClearGeneric() {
+	p.generic = 0
+}
+
+// ClearCustom clears any previously added custom costs.
+func (p *planCosts) ClearCustom() {
 	p.custom.nextIdx = 0
 	p.custom.length = 0
 }
@@ -336,7 +321,7 @@ func (p *PreparedPortal) close(
 	prepStmtsNamespaceMemAcc.Shrink(ctx, p.size(portalName))
 	p.Stmt.decRef(ctx)
 	if p.pauseInfo != nil {
-		p.pauseInfo.cleanupAll(ctx)
+		p.pauseInfo.cleanupAll()
 		p.pauseInfo = nil
 	}
 }
@@ -345,28 +330,34 @@ func (p *PreparedPortal) size(portalName string) int64 {
 	return int64(uintptr(len(portalName)) + unsafe.Sizeof(p))
 }
 
-// isPausable checks if a portal is pausable.
 func (p *PreparedPortal) isPausable() bool {
-	return p != nil && p.pauseInfo != nil
+	return p.pauseInfo != nil
 }
 
 // cleanupFuncStack stores cleanup functions for a portal. The clean-up
 // functions are added during the first-time execution of a portal. When the
 // first-time execution is finished, we mark isComplete to true.
 type cleanupFuncStack struct {
-	stack      []func(context.Context)
+	stack      []namedFunc
 	isComplete bool
 }
 
-func (n *cleanupFuncStack) appendFunc(f func(context.Context)) {
+func (n *cleanupFuncStack) appendFunc(f namedFunc) {
 	n.stack = append(n.stack, f)
 }
 
-func (n *cleanupFuncStack) run(ctx context.Context) {
+func (n *cleanupFuncStack) run() {
 	for i := 0; i < len(n.stack); i++ {
-		n.stack[i](ctx)
+		n.stack[i].f()
 	}
 	*n = cleanupFuncStack{}
+}
+
+// namedFunc is function with name, which makes the debugging easier. It is
+// used just for clean up functions of a pausable portal.
+type namedFunc struct {
+	fName string
+	f     func()
 }
 
 // instrumentationHelperWrapper wraps the instrumentation helper.
@@ -478,11 +469,11 @@ type portalPauseInfo struct {
 }
 
 // cleanupAll is to run all the cleanup layers.
-func (pm *portalPauseInfo) cleanupAll(ctx context.Context) {
-	pm.resumableFlow.cleanup.run(ctx)
-	pm.dispatchToExecutionEngine.cleanup.run(ctx)
-	pm.execStmtInOpenState.cleanup.run(ctx)
-	pm.exhaustPortal.cleanup.run(ctx)
+func (pm *portalPauseInfo) cleanupAll() {
+	pm.resumableFlow.cleanup.run()
+	pm.dispatchToExecutionEngine.cleanup.run()
+	pm.execStmtInOpenState.cleanup.run()
+	pm.exhaustPortal.cleanup.run()
 }
 
 // isQueryIDSet returns true if the query id for the portal is set.

@@ -10,7 +10,6 @@ import (
 	gosql "database/sql"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
@@ -19,8 +18,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/appstatspb"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/persistedsqlstats"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/diagutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
@@ -83,7 +82,7 @@ CREATE TABLE t.test (x INT PRIMARY KEY);
 
 	foundStat := false
 	for _, stat := range stats {
-		if stat.Key.Query == "INSERT INTO _ VALUES (_)" {
+		if stat.Key.Query == "INSERT INTO _ VALUES ($1)" {
 			foundStat = true
 			if stat.Stats.Count != 2 {
 				t.Fatal("expected to find 2 invocations, found", stat.Stats.Count)
@@ -131,7 +130,7 @@ func TestEnsureSQLStatsAreFlushedForTelemetry(t *testing.T) {
 
 	statusServer := s.StatusServer().(serverpb.StatusServer)
 	sqlServer := s.SQLServer().(*sql.Server)
-	sqlServer.GetSQLStatsProvider().MaybeFlush(ctx, srv.AppStopper())
+	sqlServer.GetSQLStatsProvider().(*persistedsqlstats.PersistedSQLStats).Flush(ctx)
 	testutils.SucceedsSoon(t, func() error {
 		// Get the diagnostic info.
 		res, err := statusServer.Diagnostics(ctx, &serverpb.DiagnosticsRequest{NodeId: "local"})
@@ -182,10 +181,6 @@ func TestSQLStatCollection(t *testing.T) {
 	sqlServer.GetReportedSQLStatsController().ResetLocalSQLStats(ctx)
 
 	// Execute some queries against the sqlDB to build up some stats.
-	// As we are scrubbing the stats, we want to make sure the app name
-	// is properly hashed.
-	hashedAppName := "hashed app name"
-	sqlRunner.Exec(t, `SET application_name = $1;`, hashedAppName)
 	sqlRunner.Exec(t, `CREATE DATABASE t`)
 	sqlRunner.Exec(t, `CREATE TABLE t.test (x INT PRIMARY KEY);`)
 	sqlRunner.Exec(t, `INSERT INTO t.test VALUES (1);`)
@@ -216,24 +211,16 @@ func TestSQLStatCollection(t *testing.T) {
 	sqlServer.GetSQLStatsController().ResetLocalSQLStats(ctx)
 
 	// Query the reported statistics.
-	stats, err = sqlServer.GetScrubbedReportingStats(ctx, 1000, true)
+	stats, err = sqlServer.GetScrubbedReportingStats(ctx)
 	require.NoError(t, err)
 
 	foundStat = false
 	for _, stat := range stats {
 		if stat.Key.Query == "INSERT INTO _ VALUES (_)" {
-			require.NotEqual(t, hashedAppName, stat.Key.App,
-				"expected app name to be hashed")
-			require.NotEqual(t, sql.FailedHashedValue, stat.Key.App)
 			foundStat = true
 			if !stat.Stats.AlmostEqual(&sqlStatData, epsilon) {
 				t.Fatal("expected stats", sqlStatData.String(), "found", stat.Stats.String())
 			}
-		} else if strings.HasPrefix(stat.Key.App,
-			catconstants.DelegatedAppNamePrefix) {
-			require.NotEqual(t, catconstants.DelegatedAppNamePrefix+hashedAppName,
-				stat.Key.App, "expected app name to be hashed")
-			require.NotEqual(t, sql.FailedHashedValue, stat.Key.App)
 		}
 	}
 	if !foundStat {
@@ -253,17 +240,9 @@ func TestSQLStatCollection(t *testing.T) {
 	foundStat = false
 	for _, stat := range stats {
 		if stat.Key.Query == "INSERT INTO _ VALUES (_)" {
-			require.NotEqual(t, hashedAppName, stat.Key.App,
-				"expected app name to be hashed")
-			require.NotEqual(t, sql.FailedHashedValue, stat.Key.App)
 			foundStat = true
 			// Add into the current stat data the collected data.
 			sqlStatData.Add(&stat.Stats)
-		} else if strings.HasPrefix(stat.Key.App,
-			catconstants.DelegatedAppNamePrefix) {
-			require.NotEqual(t, catconstants.DelegatedAppNamePrefix+hashedAppName,
-				stat.Key.App, "expected app name to be hashed")
-			require.NotEqual(t, sql.FailedHashedValue, stat.Key.App)
 		}
 	}
 	if !foundStat {
@@ -274,15 +253,12 @@ func TestSQLStatCollection(t *testing.T) {
 	sqlServer.GetSQLStatsController().ResetLocalSQLStats(ctx)
 
 	// Find our statement stat from the reported stats pool.
-	stats, err = sqlServer.GetScrubbedReportingStats(ctx, 1000, true)
+	stats, err = sqlServer.GetScrubbedReportingStats(ctx)
 	require.NoError(t, err)
 
 	foundStat = false
 	for _, stat := range stats {
 		if stat.Key.Query == "INSERT INTO _ VALUES (_)" {
-			require.NotEqual(t, hashedAppName, stat.Key.App,
-				"expected app name to be hashed")
-			require.NotEqual(t, sql.FailedHashedValue, stat.Key.App)
 			foundStat = true
 			// The new value for the stat should be the aggregate of the previous stat
 			// value, and the old stat value. Additionally, zero out the timestamps for
@@ -292,11 +268,6 @@ func TestSQLStatCollection(t *testing.T) {
 			if !stat.Stats.AlmostEqual(&sqlStatData, epsilon) {
 				t.Fatal("expected stats", sqlStatData, "found", stat.Stats)
 			}
-		} else if strings.HasPrefix(stat.Key.App,
-			catconstants.DelegatedAppNamePrefix) {
-			require.NotEqual(t, catconstants.DelegatedAppNamePrefix+hashedAppName,
-				stat.Key.App, "expected app name to be hashed")
-			require.NotEqual(t, sql.FailedHashedValue, stat.Key.App)
 		}
 	}
 
@@ -340,7 +311,7 @@ func TestClusterResetSQLStats(t *testing.T) {
 			populateStats(t, sqlDB)
 			if flushed {
 				gateway.SQLServer().(*sql.Server).
-					GetSQLStatsProvider().MaybeFlush(ctx, gateway.AppStopper())
+					GetSQLStatsProvider().(*persistedsqlstats.PersistedSQLStats).Flush(ctx)
 			}
 
 			statsPreReset, err := status.Statements(ctx, &serverpb.StatementsRequest{
@@ -383,40 +354,4 @@ func TestClusterResetSQLStats(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestScrubbedReportingStatsLimit(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
-	ctx := context.Background()
-	srv, sqlDB, _ := serverutils.StartServer(t, base.TestServerArgs{})
-	defer srv.Stopper().Stop(ctx)
-
-	sqlRunner := sqlutils.MakeSQLRunner(sqlDB)
-	sqlServer := srv.ApplicationLayer().SQLServer().(*sql.Server)
-	// Flush stats at the beginning of the test.
-	sqlServer.GetSQLStatsController().ResetLocalSQLStats(ctx)
-	sqlServer.GetReportedSQLStatsController().ResetLocalSQLStats(ctx)
-
-	hashedAppName := "hashed app name"
-	sqlRunner.Exec(t, `SET application_name = $1;`, hashedAppName)
-	sqlRunner.Exec(t, `CREATE DATABASE t`)
-	sqlRunner.Exec(t, `CREATE TABLE t.test (x INT PRIMARY KEY);`)
-	sqlRunner.Exec(t, `INSERT INTO t.test VALUES (1);`)
-	sqlRunner.Exec(t, `UPDATE t.test SET x=5 WHERE x=1`)
-	sqlRunner.Exec(t, `SELECT * FROM t.test`)
-	sqlRunner.Exec(t, `DELETE FROM t.test WHERE x=5`)
-
-	// verify that with low limit, number of stats is within that limit
-	sqlServer.GetSQLStatsController().ResetLocalSQLStats(ctx)
-	stats, err := sqlServer.GetScrubbedReportingStats(ctx, 5, true)
-	require.NoError(t, err)
-	require.LessOrEqual(t, len(stats), 5)
-
-	// verify that with high limit, the number of	queries is as much as the above
-	sqlServer.GetSQLStatsController().ResetLocalSQLStats(ctx)
-	stats, err = sqlServer.GetScrubbedReportingStats(ctx, 1000, true)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(stats), 7)
 }

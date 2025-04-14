@@ -204,7 +204,7 @@ ORDER BY total_reads ASC`
 			"capture-index-usage-stats",
 			nil,
 			sessiondata.InternalExecutorOverride{
-				User:     username.NodeUserName(),
+				User:     username.RootUserName(),
 				Database: string(databaseName),
 			},
 			stmt,

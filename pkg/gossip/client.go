@@ -26,16 +26,12 @@ import (
 type client struct {
 	log.AmbientContext
 
-	createdAt time.Time
-	// peerID is the node ID of the peer we're connected to. This is set when we
-	// receive a response from the peer. The gossip mu should be held when
-	// accessing.
-	peerID                roachpb.NodeID
+	createdAt             time.Time
+	peerID                roachpb.NodeID           // Peer node ID; 0 until first gossip response
 	resolvedPlaceholder   bool                     // Whether we've resolved the nodeSet's placeholder for this client
 	addr                  net.Addr                 // Peer node network address
 	locality              roachpb.Locality         // Peer node locality (if known)
 	forwardAddr           *util.UnresolvedAddr     // Set if disconnected with an alternate addr
-	prevHighWaterStamps   map[roachpb.NodeID]int64 // Last high water timestamps sent to remote server
 	remoteHighWaterStamps map[roachpb.NodeID]int64 // Remote server's high water timestamps
 	closer                chan struct{}            // Client shutdown channel
 	clientMetrics         Metrics
@@ -141,7 +137,7 @@ func (c *client) startLocked(
 					defer g.mu.RUnlock()
 					return c.peerID, c.addr
 				}()
-				if peerID != 0 {
+				if c.peerID != 0 {
 					log.Infof(ctx, "closing client to n%d (%s): %s", peerID, addr, err)
 				} else {
 					log.Infof(ctx, "closing client to %s: %s", addr, err)
@@ -181,7 +177,6 @@ func (c *client) requestGossip(g *Gossip, stream Gossip_GossipClient) error {
 	bytesSent := int64(args.Size())
 	c.clientMetrics.BytesSent.Inc(bytesSent)
 	c.nodeMetrics.BytesSent.Inc(bytesSent)
-	c.prevHighWaterStamps = args.HighWaterStamps
 
 	return stream.Send(args)
 }
@@ -202,16 +197,11 @@ func (c *client) sendGossip(g *Gossip, stream Gossip_GossipClient, firstReq bool
 			ratchetHighWaterStamp(c.remoteHighWaterStamps, i.NodeID, i.OrigStamp)
 		}
 
-		// Only send the high water stamps that are different from the previously
-		// sent high water stamps.
-		var diffStamps map[roachpb.NodeID]int64
-		c.prevHighWaterStamps, diffStamps = g.mu.is.getHighWaterStampsWithDiff(c.prevHighWaterStamps)
-
 		args := Request{
 			NodeID:          g.NodeID.Get(),
 			Addr:            g.mu.is.NodeAddr,
 			Delta:           delta,
-			HighWaterStamps: diffStamps,
+			HighWaterStamps: g.mu.is.getHighWaterStamps(),
 			ClusterID:       g.clusterID.Get(),
 		}
 
@@ -333,6 +323,8 @@ func (c *client) gossip(
 		defer wg.Done()
 
 		errCh <- func() error {
+			var peerID roachpb.NodeID
+
 			initCh := initCh
 			for init := true; ; init = false {
 				reply, err := stream.Recv()
@@ -344,6 +336,9 @@ func (c *client) gossip(
 				}
 				if init {
 					initCh <- struct{}{}
+				}
+				if peerID == 0 && c.peerID != 0 {
+					peerID = c.peerID
 				}
 			}
 		}()

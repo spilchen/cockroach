@@ -8,10 +8,10 @@ package kvserver
 import (
 	"context"
 	"runtime"
+	"runtime/debug"
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/readsummary/rspb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
-	"github.com/cockroachdb/cockroach/pkg/util/debugutil"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/errors"
@@ -38,7 +38,7 @@ func (s *Store) maybeAssertNoHole(ctx context.Context, from, to roachpb.RKey) fu
 	}
 
 	goroutineStopped := make(chan struct{})
-	caller := debugutil.Stack()
+	caller := string(debug.Stack())
 	if from.Equal(roachpb.RKeyMax) {
 		// There will be a hole to the right of RKeyMax but it's just the end of
 		// the addressable keyspace.
@@ -175,7 +175,7 @@ func (s *Store) MergeRange(
 			} else {
 				sum = rspb.FromTimestamp(freezeStart.ToTimestamp())
 			}
-			applyReadSummaryToTimestampCache(ctx, s.tsCache, &rightDesc, sum)
+			applyReadSummaryToTimestampCache(s.tsCache, &rightDesc, sum)
 		}
 		// When merging ranges, the closed timestamp of the RHS can regress. It's
 		// possible that, at subsumption time, the RHS had a high closed timestamp.
@@ -188,7 +188,7 @@ func (s *Store) MergeRange(
 		// is frequently (but not necessarily) redundant with the bumping to the
 		// freeze time done above.
 		sum := rspb.FromTimestamp(rightClosedTS)
-		applyReadSummaryToTimestampCache(ctx, s.tsCache, &rightDesc, sum)
+		applyReadSummaryToTimestampCache(s.tsCache, &rightDesc, sum)
 	}
 
 	// Update the subsuming range's descriptor, atomically widening it while

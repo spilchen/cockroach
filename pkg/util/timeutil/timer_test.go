@@ -62,6 +62,7 @@ func TestTimerStop(t *testing.T) {
 			}
 		})
 	}
+
 }
 
 func TestTimerUninitializedStopNoop(t *testing.T) {
@@ -131,20 +132,5 @@ func TestTimerMakesProgressInLoop(t *testing.T) {
 		timer.Reset(timeStep)
 		<-timer.C
 		timer.Read = true
-	}
-}
-
-func BenchmarkTimer(b *testing.B) {
-	run := func() {
-		var timer Timer
-		defer timer.Stop()
-		for i := 0; i < 10; i++ {
-			timer.Reset(10 * time.Microsecond)
-			<-timer.C
-			timer.Read = true
-		}
-	}
-	for i := 0; i < b.N; i++ {
-		run()
 	}
 }

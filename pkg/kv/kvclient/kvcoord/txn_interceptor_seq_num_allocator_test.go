@@ -201,7 +201,7 @@ func TestSequenceNumberAllocationWithStep(t *testing.T) {
 	currentStepSeqNum := s.writeSeq
 
 	ba := &kvpb.BatchRequest{}
-	ba.Header = kvpb.Header{Txn: &txn}
+	ba.Requests = nil
 	ba.Add(&kvpb.ConditionalPutRequest{RequestHeader: kvpb.RequestHeader{Key: keyA}})
 	ba.Add(&kvpb.GetRequest{RequestHeader: kvpb.RequestHeader{Key: keyA}})
 	ba.Add(&kvpb.InitPutRequest{RequestHeader: kvpb.RequestHeader{Key: keyA}})
@@ -521,5 +521,5 @@ func TestSequenceNumberAllocationSavepoint(t *testing.T) {
 
 	sp := &savepoint{}
 	s.createSavepointLocked(ctx, sp)
-	require.Equal(t, enginepb.TxnSeq(2), s.writeSeq)
+	require.Equal(t, enginepb.TxnSeq(2), sp.seqNum)
 }

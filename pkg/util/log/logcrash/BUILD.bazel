@@ -29,6 +29,7 @@ go_test(
         "crash_reporting_unix_test.go",
         "main_test.go",
     ],
+    args = ["-test.timeout=55s"],
     embed = [":logcrash"],
     deps = [
         "//pkg/base",
@@ -85,13 +86,7 @@ go_test(
         "@io_bazel_rules_go//go/platform:openbsd": [
             "@org_golang_x_sys//unix",
         ],
-        "@io_bazel_rules_go//go/platform:osx": [
-            "@org_golang_x_sys//unix",
-        ],
         "@io_bazel_rules_go//go/platform:plan9": [
-            "@org_golang_x_sys//unix",
-        ],
-        "@io_bazel_rules_go//go/platform:qnx": [
             "@org_golang_x_sys//unix",
         ],
         "@io_bazel_rules_go//go/platform:solaris": [

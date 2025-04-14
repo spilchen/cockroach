@@ -22,8 +22,6 @@ import (
 var typeORMReleaseTagRegex = regexp.MustCompile(`^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<point>\d+)$`)
 
 // Use 0.3.18 from the upstream repo once it is released.
-// WARNING: DO NOT MODIFY the name of the below constant/variable without approval from the docs team.
-// This is used by docs automation to produce a list of supported versions for ORM's.
 const supportedTypeORMRelease = "remove-unsafe-crdb-setting"
 const typeORMRepo = "https://github.com/rafiss/typeorm.git"
 
@@ -87,7 +85,7 @@ func registerTypeORM(r registry.Registry) {
 		// can use npm to reduce the potential of trying to add another nodesource key
 		// (preventing gpg: dearmoring failed: File exists) errors.
 		if err := c.RunE(
-			ctx, option.WithNodes(node), `sudo npm i -g npm`,
+			ctx, node, `sudo npm i -g npm`,
 		); err != nil {
 			if err := repeatRunE(
 				ctx,
@@ -174,7 +172,7 @@ echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.co
 		// We have to pass in the root cert with NODE_EXTRA_CA_CERTS because the JSON
 		// config only accepts the actual certificate contents and not a path.
 		t.Status("running TypeORM test suite - approx 2 mins")
-		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(node),
+		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), node,
 			`cd /mnt/data1/typeorm/ && NODE_EXTRA_CA_CERTS=$HOME/certs/ca.crt npm test`,
 		)
 		rawResults := result.Stdout + result.Stderr

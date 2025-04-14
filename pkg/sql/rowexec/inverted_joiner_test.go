@@ -625,7 +625,7 @@ func TestInvertedJoiner(t *testing.T) {
 	}
 
 	st := cluster.MakeTestingClusterSettings()
-	tempEngine, _, err := storage.NewTempEngine(ctx, base.DefaultTestTempStorageConfig(st), base.DefaultTestStoreSpec, nil /* statsCollector */)
+	tempEngine, _, err := storage.NewTempEngine(ctx, base.DefaultTestTempStorageConfig(st), base.DefaultTestStoreSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -764,7 +764,7 @@ func TestInvertedJoinerDrain(t *testing.T) {
 	ctx, sp := tracer.StartSpanCtx(context.Background(), "test flow ctx", tracing.WithRecording(tracingpb.RecordingVerbose))
 	defer sp.Finish()
 	st := cluster.MakeTestingClusterSettings()
-	tempEngine, _, err := storage.NewTempEngine(ctx, base.DefaultTestTempStorageConfig(st), base.DefaultTestStoreSpec, nil /* statsCollector */)
+	tempEngine, _, err := storage.NewTempEngine(ctx, base.DefaultTestTempStorageConfig(st), base.DefaultTestStoreSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,10 +804,9 @@ func TestInvertedJoinerDrain(t *testing.T) {
 			&flowCtx,
 			0, /* processorID */
 			&execinfrapb.InvertedJoinerSpec{
-				FetchSpec:                  fetchSpec,
-				InvertedExpr:               execinfrapb.Expression{},
-				Type:                       descpb.InnerJoin,
-				InvertedColumnOriginalType: types.Json,
+				FetchSpec:    fetchSpec,
+				InvertedExpr: execinfrapb.Expression{},
+				Type:         descpb.InnerJoin,
 			},
 			arrayIntersectionExpr{t: t},
 			distsqlutils.NewRowBuffer(types.TwoIntCols, nil /* rows */, distsqlutils.RowBufferArgs{}),

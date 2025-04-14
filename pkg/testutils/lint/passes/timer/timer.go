@@ -52,7 +52,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		if !ok {
 			return false
 		}
-		typ := tv.Type
+		typ := tv.Type.Underlying()
 		for {
 			ptr, pok := typ.(*types.Pointer)
 			if !pok {
@@ -64,8 +64,10 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		if !ok {
 			return false
 		}
-		const timerName = "github.com/cockroachdb/cockroach/pkg/util/timeutil.Timer"
-		return named.Obj().Type().String() == timerName
+		if named.Obj().Type().String() != "github.com/cockroachdb/cockroach/pkg/util/timeutil.Timer" {
+			return false
+		}
+		return true
 	}
 
 	inspect := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)

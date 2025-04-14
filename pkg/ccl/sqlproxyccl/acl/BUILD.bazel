@@ -36,7 +36,9 @@ go_test(
         "private_endpoints_test.go",
         "watcher_test.go",
     ],
+    args = ["-test.timeout=295s"],
     embed = [":acl"],
+    tags = ["ccl_test"],
     deps = [
         "//pkg/ccl/sqlproxyccl/tenant",
         "//pkg/ccl/sqlproxyccl/tenantdirsvr",

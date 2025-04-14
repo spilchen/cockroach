@@ -13,7 +13,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/redact"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -53,7 +52,7 @@ func (l Liveness) Compare(o Liveness) int {
 		}
 		return +1
 	}
-	if l.Expiration != o.Expiration {
+	if !l.Expiration.EqOrdering(o.Expiration) {
 		if l.Expiration.Less(o.Expiration) {
 			return -1
 		}
@@ -63,16 +62,11 @@ func (l Liveness) Compare(o Liveness) int {
 }
 
 func (l Liveness) String() string {
-	return redact.StringWithoutMarkers(l)
-}
-
-// SafeFormat implements the redact.SafeFormatter interface.
-func (l Liveness) SafeFormat(s redact.SafePrinter, _ rune) {
-	s.Printf("liveness(nid:%d epo:%d exp:%s", l.NodeID, l.Epoch, l.Expiration)
+	var extra string
 	if l.Draining || l.Membership.Decommissioning() || l.Membership.Decommissioned() {
-		s.Printf(" drain:%t membership:%s", l.Draining, l.Membership)
+		extra = fmt.Sprintf(" drain:%t membership:%s", l.Draining, l.Membership.String())
 	}
-	s.Printf(")")
+	return fmt.Sprintf("liveness(nid:%d epo:%d exp:%s%s)", l.NodeID, l.Epoch, l.Expiration, extra)
 }
 
 // Decommissioning is a shorthand to check if the membership status is DECOMMISSIONING.
@@ -83,9 +77,6 @@ func (c MembershipStatus) Decommissioned() bool { return c == MembershipStatus_D
 
 // Active is a shorthand to check if the membership status is ACTIVE.
 func (c MembershipStatus) Active() bool { return c == MembershipStatus_ACTIVE }
-
-// SafeValue implements the redact.SafeValue interface.
-func (MembershipStatus) SafeValue() {}
 
 func (c MembershipStatus) String() string {
 	// NB: These strings must not be changed, since the CLI matches on them.
@@ -216,21 +207,6 @@ const (
 	LossOfQuorum
 	ReplicaGCQueue
 	DistSender
-	// TestingIsAliveAndHasHeartbeated is intended to be used by tests that want
-	// to ensure that a node is alive and has heartbeated its liveness record
-	// already.
-	//
-	// This is intended to be used in place of IsAliveNotification, whose usages
-	// aren't very principled, and sometimes expect that a node has heartbeated
-	// its liveness record (by checking the epoch is != 0). Previously, we could
-	// get away with these unprincipled usages because epoch based leases would
-	// proactively heartbeat liveness records when acquiring leases. However, when
-	// using leader leases, this doesn't happen, which then makes these tests
-	// flaky.
-	//
-	// At some point, we'll want to revisit IsAliveNotification and make sure
-	// returning true when the liveness epoch is 0 is indeed well motivated.
-	TestingIsAliveAndHasHeartbeated
 )
 
 func (nv NodeVitality) IsLive(usage VitalityUsage) bool {
@@ -292,8 +268,6 @@ func (nv NodeVitality) IsLive(usage VitalityUsage) bool {
 		return nv.isAlive()
 	case DistSender:
 		return nv.isAvailableNotDraining()
-	case TestingIsAliveAndHasHeartbeated:
-		return nv.testingIsAliveAndHasHeartbeated()
 	}
 
 	// TODO(baptist): Should be an assertion that we don't know this uasge.
@@ -356,13 +330,6 @@ func (nv NodeVitality) isAlive() bool {
 		return true
 	}
 	return nv.now.Less(nv.livenessExpiration)
-}
-
-// testingIsAliveAndHasHeartbeated is like isAlive except it also ensures that
-// the node has heartbeated its liveness epoch at least once. Also see the
-// comment on TestingIsAliveAndHasHeartbeated.
-func (nv NodeVitality) testingIsAliveAndHasHeartbeated() bool {
-	return nv.isAlive() && nv.livenessEpoch != 0
 }
 
 func (nv NodeVitality) IsDecommissioning() bool {

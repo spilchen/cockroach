@@ -10,13 +10,11 @@ import (
 	gosql "database/sql"
 	"fmt"
 	"math/rand"
-	"strings"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/clusterupgrade"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
@@ -25,7 +23,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
-	"github.com/cockroachdb/errors"
 )
 
 var (
@@ -49,12 +46,12 @@ const numFullBackups = 3
 type roundTripSpecs struct {
 	name                 string
 	metamorphicRangeSize bool
-	onlineRestore        bool
 	mock                 bool
 	skip                 string
 }
 
 func registerBackupRestoreRoundTrip(r registry.Registry) {
+
 	for _, sp := range []roundTripSpecs{
 		{
 			name:                 "backup-restore/round-trip",
@@ -65,11 +62,6 @@ func registerBackupRestoreRoundTrip(r registry.Registry) {
 			metamorphicRangeSize: true,
 		},
 		{
-			name:                 "backup-restore/online-restore",
-			metamorphicRangeSize: false,
-			onlineRestore:        true,
-		},
-		{
 			name: "backup-restore/mock",
 			mock: true,
 			skip: "used only for debugging",
@@ -77,19 +69,17 @@ func registerBackupRestoreRoundTrip(r registry.Registry) {
 	} {
 		sp := sp
 		r.Add(registry.TestSpec{
-			Name:              sp.name,
-			Timeout:           4 * time.Hour,
-			Owner:             registry.OwnerDisasterRecovery,
-			Cluster:           r.MakeClusterSpec(4, spec.WorkloadNode()),
-			EncryptionSupport: registry.EncryptionMetamorphic,
-			NativeLibs:        registry.LibGEOS,
-			// See https://github.com/cockroachdb/cockroach/issues/105968
-			CompatibleClouds:           registry.Clouds(spec.GCE, spec.Local),
-			Suites:                     registry.Suites(registry.Nightly),
-			TestSelectionOptOutSuites:  registry.Suites(registry.Nightly),
-			Randomized:                 true,
-			Skip:                       sp.skip,
-			RequiresDeprecatedWorkload: true, // uses schemachange
+			Name:                      sp.name,
+			Timeout:                   4 * time.Hour,
+			Owner:                     registry.OwnerDisasterRecovery,
+			Cluster:                   r.MakeClusterSpec(4),
+			EncryptionSupport:         registry.EncryptionMetamorphic,
+			RequiresLicense:           true,
+			CompatibleClouds:          registry.OnlyGCE,
+			Suites:                    registry.Suites(registry.Nightly),
+			TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
+			Randomized:                true,
+			Skip:                      sp.skip,
 			Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 				backupRestoreRoundTrip(ctx, t, c, sp)
 			},
@@ -102,16 +92,24 @@ func registerBackupRestoreRoundTrip(r registry.Registry) {
 func backupRestoreRoundTrip(
 	ctx context.Context, t test.Test, c cluster.Cluster, sp roundTripSpecs,
 ) {
+	if c.Cloud() != spec.GCE && !c.IsLocal() {
+		t.Skip("uses gs://cockroachdb-backup-testing; see https://github.com/cockroachdb/cockroach/issues/105968")
+	}
 	pauseProbability := 0.2
+	roachNodes := c.Range(1, c.Spec().NodeCount-1)
+	workloadNode := c.Node(c.Spec().NodeCount)
 	testRNG, seed := randutil.NewLockedPseudoRand()
 	t.L().Printf("random seed: %d", seed)
+
+	// Upload cockroach and start cluster.
+	uploadCockroach(ctx, t, c, c.All(), clusterupgrade.CurrentVersion())
 
 	envOption := install.EnvOption([]string{
 		"COCKROACH_MIN_RANGE_MAX_BYTES=1",
 	})
 
-	c.Start(ctx, t.L(), roachtestutil.MaybeUseMemoryBudget(t, 50), install.MakeClusterSettings(envOption), c.CRDBNodes())
-	m := c.NewMonitor(ctx, c.CRDBNodes())
+	c.Start(ctx, t.L(), maybeUseMemoryBudget(t, 50), install.MakeClusterSettings(envOption), roachNodes)
+	m := c.NewMonitor(ctx, roachNodes)
 
 	m.Go(func(ctx context.Context) error {
 		connectFunc := func(node int) (*gosql.DB, error) {
@@ -122,15 +120,14 @@ func backupRestoreRoundTrip(
 
 			return conn, err
 		}
-		// TODO (msbutler): enable compaction for online restore test once inc layer limit is increased.
-		testUtils, err := newCommonTestUtils(ctx, t, c, connectFunc, c.CRDBNodes(), withMock(sp.mock), withOnlineRestore(sp.onlineRestore), withCompaction(!sp.onlineRestore))
+		testUtils, err := newCommonTestUtils(ctx, t, c, connectFunc, roachNodes, sp.mock)
 		if err != nil {
 			return err
 		}
 		defer testUtils.CloseConnections()
 
 		dbs := []string{"bank", "tpcc", schemaChangeDB}
-		runBackgroundWorkload, err := startBackgroundWorkloads(ctx, t.L(), c, m, testRNG, c.CRDBNodes(), c.WorkloadNode(), testUtils, dbs)
+		runBackgroundWorkload, err := startBackgroundWorkloads(ctx, t.L(), c, m, testRNG, roachNodes, workloadNode, testUtils, dbs)
 		if err != nil {
 			return err
 		}
@@ -138,7 +135,7 @@ func backupRestoreRoundTrip(
 		if err != nil {
 			return err
 		}
-		d, err := newBackupRestoreTestDriver(ctx, t, c, testUtils, c.CRDBNodes(), dbs, tables)
+		d, err := newBackupRestoreTestDriver(ctx, t, c, testUtils, roachNodes, dbs, tables)
 		if err != nil {
 			return err
 		}
@@ -160,7 +157,7 @@ func backupRestoreRoundTrip(
 		defer stopBackgroundCommands()
 
 		for i := 0; i < numFullBackups; i++ {
-			allNodes := labeledNodes{Nodes: c.CRDBNodes(), Version: clusterupgrade.CurrentVersion().String()}
+			allNodes := labeledNodes{Nodes: roachNodes, Version: clusterupgrade.CurrentVersion().String()}
 			bspec := backupSpec{
 				PauseProbability: pauseProbability,
 				Plan:             allNodes,
@@ -170,7 +167,7 @@ func backupRestoreRoundTrip(
 			// Run backups.
 			t.L().Printf("starting backup %d", i+1)
 			collection, err := d.createBackupCollection(
-				ctx, t.L(), t, testRNG, bspec, bspec, "round-trip-test-backup",
+				ctx, t.L(), testRNG, bspec, bspec, "round-trip-test-backup",
 				true /* internalSystemsJobs */, false, /* isMultitenant */
 			)
 			if err != nil {
@@ -187,11 +184,6 @@ func backupRestoreRoundTrip(
 					m.ExpectDeaths(int32(n))
 				}
 
-				// Between each reset grab a debug zip from the cluster.
-				zipPath := fmt.Sprintf("debug-%d.zip", timeutil.Now().Unix())
-				if err := testUtils.cluster.FetchDebugZip(ctx, t.L(), zipPath); err != nil {
-					t.L().Printf("failed to fetch a debug zip: %v", err)
-				}
 				if err := testUtils.resetCluster(ctx, t.L(), clusterupgrade.CurrentVersion(), expectDeathsFn, []install.ClusterSettingOption{}); err != nil {
 					return err
 				}
@@ -246,28 +238,18 @@ func startBackgroundWorkloads(
 		return nil, err
 	}
 
-	err := c.RunE(ctx, option.WithNodes(workloadNode), bankInit.String())
+	err := c.RunE(ctx, workloadNode, bankInit.String())
 	if err != nil {
 		return nil, err
 	}
 
-	err = c.RunE(ctx, option.WithNodes(workloadNode), tpccInit.String())
+	err = c.RunE(ctx, workloadNode, tpccInit.String())
 	if err != nil {
 		return nil, err
 	}
-
-	handleChemaChangeError := func(err error) error {
-		// If the UNEXPECTED ERROR detail appears, the workload likely flaked.
-		// Otherwise, the workload could have failed due to other reasons like a node
-		// crash.
-		if err != nil && strings.Contains(errors.FlattenDetails(err), "UNEXPECTED ERROR") {
-			return registry.ErrorWithOwner(registry.OwnerSQLFoundations, errors.Wrapf(err, "schema change workload failed"))
-		}
-		return err
-	}
-	err = c.RunE(ctx, option.WithNodes(workloadNode), scInit.String())
+	err = c.RunE(ctx, workloadNode, scInit.String())
 	if err != nil {
-		return nil, handleChemaChangeError(err)
+		return nil, err
 	}
 
 	run := func() (func(), error) {
@@ -275,18 +257,16 @@ func startBackgroundWorkloads(
 		if err != nil {
 			return nil, err
 		}
+
 		stopBank := workloadWithCancel(m, func(ctx context.Context) error {
-			return c.RunE(ctx, option.WithNodes(workloadNode), bankRun.String())
+			return c.RunE(ctx, workloadNode, bankRun.String())
 		})
 
 		stopTPCC := workloadWithCancel(m, func(ctx context.Context) error {
-			return c.RunE(ctx, option.WithNodes(workloadNode), tpccRun.String())
+			return c.RunE(ctx, workloadNode, tpccRun.String())
 		})
 		stopSC := workloadWithCancel(m, func(ctx context.Context) error {
-			if err := c.RunE(ctx, option.WithNodes(workloadNode), scRun.String()); err != nil {
-				return handleChemaChangeError(err)
-			}
-			return nil
+			return c.RunE(ctx, workloadNode, scRun.String())
 		})
 
 		stopSystemWriter := workloadWithCancel(m, func(ctx context.Context) error {

@@ -8,6 +8,7 @@ package asof
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	apd "github.com/cockroachdb/apd/v3"
@@ -252,13 +253,6 @@ const (
 	// ReplicationCutover is when the DatumToHLC() is used for an
 	// ALTER VIRTUAL CLUSTER ... COMPLETE REPLICATION statement.
 	ReplicationCutover
-
-	// ShowTenantFingerprint is when the DatumToHLC() is used for an SHOW
-	// EXPERIMENTAL_FINGERPRINTS FROM TENANT ... WITH START TIMESTAMP statement.
-	//
-	// ShowTenantFingerprint has the same constraints as AsOf, and so we use the
-	// same value.
-	ShowTenantFingerprint = AsOf
 )
 
 // DatumToHLC performs the conversion from a Datum to an HLC timestamp.
@@ -270,31 +264,37 @@ func DatumToHLC(
 	switch d := d.(type) {
 	case *tree.DString:
 		s := string(*d)
+		// Parse synthetic flag.
+		syn := false
+		if strings.HasSuffix(s, "?") {
+			s = s[:len(s)-1]
+			syn = true
+		}
 		// Attempt to parse as timestamp.
-		//
-		// Disable error annotation since we don't care what the error is if it
-		// occurs.
-		defer func(origValue bool) {
-			evalCtx.GetDateHelper().SkipErrorAnnotation = origValue
-		}(evalCtx.GetDateHelper().SkipErrorAnnotation)
-		evalCtx.GetDateHelper().SkipErrorAnnotation = true
-		if t, _, err := tree.ParseTimestampTZ(evalCtx, s, time.Nanosecond); err == nil {
-			ts.WallTime = t.UnixNano()
+		if dt, _, err := tree.ParseDTimestampTZ(evalCtx, s, time.Nanosecond); err == nil {
+			ts.WallTime = dt.Time.UnixNano()
+			ts.Synthetic = syn
 			break
 		}
 		// Attempt to parse as a decimal.
 		if dec, _, err := apd.NewFromString(s); err == nil {
 			ts, convErr = hlc.DecimalToHLC(dec)
+			ts.Synthetic = syn
 			break
 		}
 		// Attempt to parse as an interval.
-		if iv, err := tree.ParseIntervalWithTypeMetadata(evalCtx.GetIntervalStyle(), s, types.DefaultIntervalTypeMetadata); err == nil {
-			if (iv == duration.Duration{}) {
+		if iv, err := tree.ParseDInterval(evalCtx.GetIntervalStyle(), s); err == nil {
+			if (iv.Duration == duration.Duration{}) {
 				convErr = errors.Errorf("interval value %v too small, absolute value must be >= %v", d, time.Microsecond)
-			} else if (usage == Split && iv.Compare(duration.Duration{}) < 0) {
+			} else if (usage == AsOf && iv.Duration.Compare(duration.Duration{}) > 0 && !syn) {
+				convErr = errors.Errorf("interval value %v too large, AS OF interval must be <= -%v", d, time.Microsecond)
+			} else if (usage == Split && iv.Duration.Compare(duration.Duration{}) < 0) {
+				// Do we need to consider if the timestamp is synthetic (see
+				// hlc.Timestamp.Synthetic), as for AS OF stmt?
 				convErr = errors.Errorf("interval value %v too small, SPLIT AT interval must be >= %v", d, time.Microsecond)
 			}
-			ts.WallTime = duration.Add(stmtTimestamp, iv).UnixNano()
+			ts.WallTime = duration.Add(stmtTimestamp, iv.Duration).UnixNano()
+			ts.Synthetic = syn
 			break
 		}
 		convErr = errors.Errorf("value is neither timestamp, decimal, nor interval")
@@ -307,7 +307,9 @@ func DatumToHLC(
 	case *tree.DDecimal:
 		ts, convErr = hlc.DecimalToHLC(&d.Decimal)
 	case *tree.DInterval:
-		if (usage == Split && d.Duration.Compare(duration.Duration{}) < 0) {
+		if (usage == AsOf && d.Duration.Compare(duration.Duration{}) > 0) {
+			convErr = errors.Errorf("interval value %v too large, AS OF interval must be <= -%v", d, time.Microsecond)
+		} else if (usage == Split && d.Duration.Compare(duration.Duration{}) < 0) {
 			convErr = errors.Errorf("interval value %v too small, SPLIT interval must be >= %v", d, time.Microsecond)
 		}
 		ts.WallTime = duration.Add(stmtTimestamp, d.Duration).UnixNano()
@@ -320,7 +322,7 @@ func DatumToHLC(
 		return ts, convErr
 	}
 	zero := hlc.Timestamp{}
-	if ts == zero {
+	if ts.EqOrdering(zero) {
 		return ts, errors.Errorf("zero timestamp is invalid")
 	} else if ts.Less(zero) {
 		return ts, errors.Errorf("timestamp before 1970-01-01T00:00:00Z is invalid")

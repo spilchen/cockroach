@@ -134,10 +134,8 @@ const (
 	// AdminScatter moves replicas and leaseholders for a selection of ranges.
 	// Best-effort.
 	AdminScatter
-	// AddSSTable links a file into pebble.
+	// AddSSTable links a file into the RocksDB log-structured merge-tree.
 	AddSSTable
-	// LinkExternallSSTable links an external sst into pebble.
-	LinkExternalSSTable
 	// Migrate updates the range state to conform to a specified cluster
 	// version. It is our main mechanism for phasing out legacy code below Raft.
 	Migrate
@@ -171,9 +169,6 @@ const (
 	// IsSpanEmpty is a non-transaction read request used to determine whether
 	// a span contains any keys whatsoever (garbage or otherwise).
 	IsSpanEmpty
-	// Excise is a non-MVCC command that destroys all data in a user MVCC key
-	// span. See ExciseRequest for details.
-	Excise
 	// MaxMethod is the maximum method.
 	MaxMethod Method = iota - 1
 	// NumMethods represents the total number of API methods.

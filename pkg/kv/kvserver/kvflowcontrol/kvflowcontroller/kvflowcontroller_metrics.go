@@ -151,11 +151,13 @@ func newMetrics(c *Controller) *metrics {
 		admissionpb.RegularWorkClass,
 		admissionpb.ElasticWorkClass,
 	} {
+		wc := wc // copy loop variable
 		m.FlowTokensAvailable[wc] = metric.NewFunctionalGauge(
 			annotateMetricTemplateWithWorkClass(wc, flowTokensAvailable),
 			func() int64 {
 				sum := int64(0)
-				c.mu.buckets.Range(func(_ kvflowcontrol.Stream, b *bucket) bool {
+				c.mu.buckets.Range(func(key, value any) bool {
+					b := value.(*bucket)
 					sum += int64(b.tokens(wc))
 					return true
 				})
@@ -227,7 +229,10 @@ func newMetrics(c *Controller) *metrics {
 				// TODO(sumeer): this cap is not ideal. Consider dynamically reducing
 				// the logging frequency to maintain a mean of 400 log entries/10min.
 				const streamStatsCountCap = 20
-				c.mu.buckets.Range(func(stream kvflowcontrol.Stream, b *bucket) bool {
+				c.mu.buckets.Range(func(key, value any) bool {
+					stream := key.(kvflowcontrol.Stream)
+					b := value.(*bucket)
+
 					if b.tokens(wc) <= 0 {
 						count++
 

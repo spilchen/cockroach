@@ -193,15 +193,12 @@ func assertRecomputedStats(
 ) {
 	t.Helper()
 
-	ms, err := rditer.ComputeStatsForRange(context.Background(), desc, r, nowNanos)
+	ms, err := rditer.ComputeStatsForRange(desc, r, nowNanos)
 	require.NoError(t, err)
 
 	// When used with a real wall clock these will not be the same, since it
 	// takes time to load stats.
 	expMS.AgeTo(ms.LastUpdateNanos)
-	// Recomputing stats always has ContainsEstimates = 0, while on-disk stats may
-	// have a non-zero value. ContainsEstimates should be asserted separately.
-	ms.ContainsEstimates = expMS.ContainsEstimates
 	require.Equal(t, expMS, ms, "%s: recomputed stats diverge", name)
 }
 

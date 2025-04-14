@@ -31,7 +31,6 @@ import (
 )
 
 type createSequenceNode struct {
-	zeroInputPlanNode
 	n      *tree.CreateSequence
 	dbDesc catalog.DatabaseDescriptor
 }
@@ -51,6 +50,10 @@ func (p *planner) CreateSequence(ctx context.Context, n *tree.CreateSequence) (p
 		return nil, err
 	}
 	n.Name.ObjectNamePrefix = prefix
+
+	if err := p.CheckPrivilege(ctx, dbDesc, privilege.CREATE); err != nil {
+		return nil, err
+	}
 
 	return &createSequenceNode{
 		n:      n,

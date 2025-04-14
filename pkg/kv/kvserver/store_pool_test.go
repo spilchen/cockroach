@@ -63,12 +63,6 @@ func TestStorePoolUpdateLocalStore(t *testing.T) {
 					L0NumFiles:              5,
 					L0NumFilesThreshold:     1000,
 				},
-				IOThresholdMax: admissionpb.IOThreshold{
-					L0NumSubLevels:          5,
-					L0NumSubLevelsThreshold: 20,
-					L0NumFiles:              5,
-					L0NumFilesThreshold:     1000,
-				},
 			},
 		},
 		{
@@ -83,12 +77,6 @@ func TestStorePoolUpdateLocalStore(t *testing.T) {
 				QueriesPerSecond: 50,
 				WritesPerSecond:  25,
 				IOThreshold: admissionpb.IOThreshold{
-					L0NumSubLevels:          10,
-					L0NumSubLevelsThreshold: 20,
-					L0NumFiles:              10,
-					L0NumFilesThreshold:     1000,
-				},
-				IOThresholdMax: admissionpb.IOThreshold{
 					L0NumSubLevels:          10,
 					L0NumSubLevelsThreshold: 20,
 					L0NumFiles:              10,
@@ -115,7 +103,7 @@ func TestStorePoolUpdateLocalStore(t *testing.T) {
 
 	replica := Replica{RangeID: 1}
 	replica.mu.Lock()
-	replica.shMu.state.Stats = &enginepb.MVCCStats{
+	replica.mu.state.Stats = &enginepb.MVCCStats{
 		KeyBytes: 2,
 		ValBytes: 4,
 	}
@@ -150,11 +138,7 @@ func TestStorePoolUpdateLocalStore(t *testing.T) {
 		t.Errorf("expected WritesPerSecond %f, but got %f", expectedWPS, desc.Capacity.WritesPerSecond)
 	}
 	if expectedNumL0Sublevels := int64(5); desc.Capacity.IOThreshold.L0NumSubLevels != expectedNumL0Sublevels {
-		t.Errorf("expected L0 Sub-Levels %d, but got %d", expectedNumL0Sublevels, desc.Capacity.IOThreshold.L0NumSubLevels)
-	}
-	ioScoreMax, _ := desc.Capacity.IOThresholdMax.Score()
-	if expectedIOThresholdScoreMax := 0.25; ioScoreMax != expectedIOThresholdScoreMax {
-		t.Errorf("expected IOThresholdMax score %f, but got %f", expectedIOThresholdScoreMax, ioScoreMax)
+		t.Errorf("expected L0 Sub-Levels %d, but got %d", expectedNumL0Sublevels, desc.Capacity.IOThreshold.L0NumFiles)
 	}
 
 	sp.UpdateLocalStoreAfterRebalance(roachpb.StoreID(2), rangeUsageInfo, roachpb.REMOVE_VOTER)
@@ -176,10 +160,6 @@ func TestStorePoolUpdateLocalStore(t *testing.T) {
 	}
 	if expectedNumL0Sublevels := int64(10); desc.Capacity.IOThreshold.L0NumSubLevels != expectedNumL0Sublevels {
 		t.Errorf("expected L0 Sub-Levels %d, but got %d", expectedNumL0Sublevels, desc.Capacity.IOThreshold.L0NumFiles)
-	}
-	ioScoreMax, _ = desc.Capacity.IOThresholdMax.Score()
-	if expectedIOThresholdScoreMax := 0.5; ioScoreMax != expectedIOThresholdScoreMax {
-		t.Errorf("expected IOThresholdMax score %f, but got %f", expectedIOThresholdScoreMax, ioScoreMax)
 	}
 
 	sp.UpdateLocalStoresAfterLeaseTransfer(roachpb.StoreID(1), roachpb.StoreID(2), rangeUsageInfo)
@@ -242,7 +222,7 @@ func TestStorePoolUpdateLocalStoreBeforeGossip(t *testing.T) {
 	eng := storage.NewDefaultInMemForTesting()
 	stopper.AddCloser(eng)
 
-	cfg.Transport = NewDummyRaftTransport(cfg.AmbientCtx, cfg.Settings, cfg.Clock)
+	cfg.Transport = NewDummyRaftTransport(cfg.Settings, cfg.AmbientCtx.Tracer)
 	store := NewStore(ctx, cfg, eng, &node)
 	// Fake an ident because this test doesn't want to start the store
 	// but without an Ident there will be NPEs.

@@ -13,7 +13,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/bench/rttanalysis"
 	"github.com/cockroachdb/cockroach/pkg/ccl/multiregionccl/multiregionccltestutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/pgurlutils"
+	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 )
 
 const numNodes = 4
@@ -22,7 +22,7 @@ const numNodes = 4
 // and counts how many round trips the Stmt specified by the test case performs.
 var reg = rttanalysis.NewRegistry(numNodes, rttanalysis.MakeClusterConstructor(func(
 	tb testing.TB, knobs base.TestingKnobs,
-) (*gosql.DB, *gosql.DB, func()) {
+) (*gosql.DB, func()) {
 	cluster, _, cleanup := multiregionccltestutils.TestingCreateMultiRegionCluster(
 		tb, numNodes, knobs,
 	)
@@ -37,14 +37,14 @@ var reg = rttanalysis.NewRegistry(numNodes, rttanalysis.MakeClusterConstructor(f
 	if _, err := db.Exec("GRANT admin TO testuser"); err != nil {
 		tb.Fatal(err)
 	}
-	url, testuserCleanup := pgurlutils.PGUrl(
+	url, testuserCleanup := sqlutils.PGUrl(
 		tb, cluster.Server(0).ApplicationLayer().AdvSQLAddr(), "rttanalysisccl", url.User("testuser"),
 	)
 	conn, err := gosql.Open("postgres", url.String())
 	if err != nil {
 		tb.Fatal(err)
 	}
-	return conn, nil, func() {
+	return conn, func() {
 		cleanup()
 		testuserCleanup()
 	}

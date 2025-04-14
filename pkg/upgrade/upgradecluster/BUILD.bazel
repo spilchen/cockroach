@@ -26,7 +26,7 @@ go_library(
         "//pkg/util/retry",
         "@com_github_cockroachdb_errors//:errors",
         "@com_github_cockroachdb_redact//:redact",
-        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//:go_default_library",
     ],
 )
 
@@ -38,6 +38,7 @@ go_test(
         "main_test.go",
         "nodes_test.go",
     ],
+    args = ["-test.timeout=55s"],
     embed = [":upgradecluster"],
     deps = [
         "//pkg/kv/kvserver/liveness/livenesspb",
@@ -53,6 +54,6 @@ go_test(
         "//pkg/util/leaktest",
         "//pkg/util/retry",
         "//pkg/util/syncutil",
-        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//:go_default_library",
     ],
 )

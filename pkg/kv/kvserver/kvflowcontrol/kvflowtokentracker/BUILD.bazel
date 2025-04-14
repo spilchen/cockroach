@@ -18,6 +18,7 @@ go_library(
 go_test(
     name = "kvflowtokentracker_test",
     srcs = ["tracker_test.go"],
+    args = ["-test.timeout=295s"],
     data = glob(["testdata/**"]),
     embed = [":kvflowtokentracker"],
     deps = [

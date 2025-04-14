@@ -41,20 +41,14 @@ CREATE TABLE t2 (x INT PRIMARY KEY, y greeting); INSERT INTO t2(x, y) VALUES (0,
 statement ok
 ALTER TABLE t1 SPLIT AT VALUES(0),(10),(20);
 ALTER TABLE t2 SPLIT AT VALUES(0),(10),(20);
-
-retry
-statement ok
 ALTER TABLE t1 EXPERIMENTAL_RELOCATE VALUES (ARRAY[1], 0), (ARRAY[2], 10), (ARRAY[3], 20);
-
-retry
-statement ok
 ALTER TABLE t2 EXPERIMENTAL_RELOCATE VALUES (ARRAY[1], 0), (ARRAY[2], 10), (ARRAY[3], 20);
 
 query TTTI colnames
 SELECT start_key, end_key, replicas, lease_holder from [SHOW RANGES FROM TABLE t1 WITH DETAILS] ORDER BY lease_holder, start_key
 ----
 start_key           end_key                 replicas  lease_holder
-<before:/Table/72>  …/1/0                   {1}       1
+<before:/Table/65>  …/1/0                   {1}       1
 …/1/0               …/1/10                  {1}       1
 …/1/10              …/1/20                  {2}       2
 …/1/20              <after:/Table/110/1/0>  {3}       3

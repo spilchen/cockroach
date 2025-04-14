@@ -25,7 +25,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
-	"github.com/cockroachdb/cockroach/pkg/multitenant/tenantcapabilitiespb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql"
@@ -213,8 +212,7 @@ func checkRestarts(t *testing.T, magicVals *filterVals) {
 //		s, sqlDB, _ := serverutils.StartServer(t, params)
 //		defer s.Stopper().Stop(context.Background())
 //		{
-//			pgURL, cleanup := s.ApplicationLayer().PGUrl(t,
-//				serverutils.CertsDirPrefix("TestTxnAutoRetry"), serverutils.User(username.RootUser))
+//			pgURL, cleanup := sqlutils.PGUrl(t, s.AdvSQLAddr(), "TestTxnAutoRetry", url.User(security.RootUser)
 //			defer cleanup()
 //			if err := aborter.Init(pgURL); err != nil {
 //				t.Fatal(err)
@@ -450,13 +448,12 @@ func TestTxnAutoRetry(t *testing.T) {
 
 	aborter := NewTxnAborter()
 	defer aborter.Close(t)
-	params, cmdFilters := createTestServerParamsAllowTenants()
+	params, cmdFilters := createTestServerParams()
 	params.Knobs.SQLExecutor = aborter.executorKnobs()
 	s, sqlDB, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
 	{
-		pgURL, cleanup := s.ApplicationLayer().PGUrl(t,
-			serverutils.CertsDirPrefix("TestTxnAutoRetry"), serverutils.User(username.RootUser))
+		pgURL, cleanup := sqlutils.PGUrl(t, s.AdvSQLAddr(), "TestTxnAutoRetry", url.User(username.RootUser))
 		defer cleanup()
 		if err := aborter.Init(pgURL); err != nil {
 			t.Fatal(err)
@@ -630,13 +627,12 @@ func TestAbortedTxnOnlyRetriedOnce(t *testing.T) {
 
 	aborter := NewTxnAborter()
 	defer aborter.Close(t)
-	params, _ := createTestServerParamsAllowTenants()
+	params, _ := createTestServerParams()
 	params.Knobs.SQLExecutor = aborter.executorKnobs()
 	s, sqlDB, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
 	{
-		pgURL, cleanup := s.ApplicationLayer().PGUrl(t,
-			serverutils.CertsDirPrefix("TestAbortedTxnOnlyRetriedOnce"), serverutils.User(username.RootUser))
+		pgURL, cleanup := sqlutils.PGUrl(t, s.AdvSQLAddr(), "TestAbortedTxnOnlyRetriedOnce", url.User(username.RootUser))
 		defer cleanup()
 		if err := aborter.Init(pgURL); err != nil {
 			t.Fatal(err)
@@ -673,7 +669,7 @@ CREATE TABLE t.test (k INT PRIMARY KEY, v TEXT);
 // rollbackStrategy is the type of statement which a client can use to
 // rollback aborted txns from retryable errors. We accept two statements
 // for rolling back to the cockroach_restart savepoint. See
-// *connExecutor.execStmtInAbortedState for more about transaction retries.
+// *Executor.execStmtInAbortedTxn for more about transaction retries.
 type rollbackStrategy int
 
 const (
@@ -787,14 +783,12 @@ func TestTxnUserRestart(t *testing.T) {
 			t.Run(fmt.Sprintf("err=%s,stgy=%d", tc.expectedErr, rs), func(t *testing.T) {
 				aborter := NewTxnAborter()
 				defer aborter.Close(t)
-				params, cmdFilters := createTestServerParamsAllowTenants()
+				params, cmdFilters := createTestServerParams()
 				params.Knobs.SQLExecutor = aborter.executorKnobs()
 				s, sqlDB, _ := serverutils.StartServer(t, params)
 				defer s.Stopper().Stop(context.Background())
 				{
-
-					pgURL, cleanup := s.ApplicationLayer().PGUrl(t,
-						serverutils.CertsDirPrefix("TestTxnUserRestart"), serverutils.User(username.RootUser))
+					pgURL, cleanup := sqlutils.PGUrl(t, s.AdvSQLAddr(), "TestTxnUserRestart", url.User(username.RootUser))
 					defer cleanup()
 					if err := aborter.Init(pgURL); err != nil {
 						t.Fatal(err)
@@ -869,7 +863,7 @@ func TestCommitWaitState(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	params, _ := createTestServerParamsAllowTenants()
+	params, _ := createTestServerParams()
 	s, sqlDB, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
 	if _, err := sqlDB.Exec(`
@@ -905,14 +899,12 @@ func TestErrorOnCommitFinalizesTxn(t *testing.T) {
 
 	aborter := NewTxnAborter()
 	defer aborter.Close(t)
-	params, _ := createTestServerParamsAllowTenants()
+	params, _ := createTestServerParams()
 	params.Knobs.SQLExecutor = aborter.executorKnobs()
 	s, sqlDB, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
 	{
-
-		pgURL, cleanup := s.ApplicationLayer().PGUrl(t,
-			serverutils.CertsDirPrefix("TestErrorOnCommitFinalizesTxn"), serverutils.User(username.RootUser))
+		pgURL, cleanup := sqlutils.PGUrl(t, s.AdvSQLAddr(), "TestErrorOnCommitFinalizesTxn", url.User(username.RootUser))
 		defer cleanup()
 		if err := aborter.Init(pgURL); err != nil {
 			t.Fatal(err)
@@ -994,13 +986,12 @@ func TestRollbackInRestartWait(t *testing.T) {
 
 	aborter := NewTxnAborter()
 	defer aborter.Close(t)
-	params, _ := createTestServerParamsAllowTenants()
+	params, _ := createTestServerParams()
 	params.Knobs.SQLExecutor = aborter.executorKnobs()
 	s, sqlDB, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
 	{
-		pgURL, cleanup := s.ApplicationLayer().PGUrl(t,
-			serverutils.CertsDirPrefix("TestRollbackInRestartWait"), serverutils.User(username.RootUser))
+		pgURL, cleanup := sqlutils.PGUrl(t, s.AdvSQLAddr(), "TestRollbackInRestartWait", url.User(username.RootUser))
 		defer cleanup()
 		if err := aborter.Init(pgURL); err != nil {
 			t.Fatal(err)
@@ -1056,7 +1047,7 @@ func TestUnexpectedStatementInRestartWait(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	params, _ := createTestServerParamsAllowTenants()
+	params, _ := createTestServerParams()
 	s, sqlDB, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
 
@@ -1107,7 +1098,7 @@ func TestNonRetryableError(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	params, cmdFilters := createTestServerParamsAllowTenants()
+	params, cmdFilters := createTestServerParams()
 	s, sqlDB, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
 
@@ -1199,7 +1190,7 @@ func TestReacquireLeaseOnRestart(t *testing.T) {
 		DisableMaxOffsetCheck: true,
 	}
 
-	params, _ := createTestServerParamsAllowTenants()
+	params, _ := createTestServerParams()
 	params.Knobs.Store = storeTestingKnobs
 	params.Knobs.KVClient = clientTestingKnobs
 	var sqlDB *gosql.DB
@@ -1249,7 +1240,7 @@ func TestFlushUncommitedDescriptorCacheOnRestart(t *testing.T) {
 		},
 	}
 
-	params, _ := createTestServerParamsAllowTenants()
+	params, _ := createTestServerParams()
 	params.Knobs.Store = testingKnobs
 	s, sqlDB, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
@@ -1319,9 +1310,7 @@ func TestDistSQLRetryableError(t *testing.T) {
 	// targetKey is represents one of the rows in the table.
 	// +2 since the first two available ids are allocated to the database and
 	// public schema.
-	var firstTableID uint32
-	var codec keys.SQLCodec
-	func() {
+	firstTableID := func() (id uint32) {
 		tc := serverutils.StartCluster(t, 3, /* numNodes */
 			base.TestClusterArgs{
 				ReplicationMode: base.ReplicationManual,
@@ -1332,12 +1321,12 @@ func TestDistSQLRetryableError(t *testing.T) {
 		createTable(db)
 		row := db.QueryRow("SELECT 't'::REGCLASS::OID")
 		require.NotNil(t, row)
-		require.NoError(t, row.Scan(&firstTableID))
-		codec = tc.Server(0).Codec()
+		require.NoError(t, row.Scan(&id))
+		return id
 	}()
 	indexID := uint32(1)
 	valInTable := uint64(2)
-	indexKey := codec.IndexPrefix(firstTableID, indexID)
+	indexKey := keys.SystemSQLCodec.IndexPrefix(firstTableID, indexID)
 	targetKey := encoding.EncodeUvarintAscending(indexKey, valInTable)
 
 	restarted := true
@@ -1375,11 +1364,6 @@ func TestDistSQLRetryableError(t *testing.T) {
 			},
 		})
 	defer tc.Stopper().Stop(context.Background())
-
-	if tc.DefaultTenantDeploymentMode().IsExternal() {
-		tc.GrantTenantCapabilities(ctx, t, serverutils.TestTenantID(),
-			map[tenantcapabilitiespb.ID]string{tenantcapabilitiespb.CanAdminRelocateRange: "true"})
-	}
 
 	db := tc.ServerConn(0)
 	createTable(db)
@@ -1475,7 +1459,7 @@ func TestRollbackToSavepointFromUnusualStates(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	params, _ := createTestServerParamsAllowTenants()
+	params, _ := createTestServerParams()
 	s, sqlDB, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
 
@@ -1538,19 +1522,9 @@ func TestTxnAutoRetriesDisabledAfterResultsHaveBeenSentToClient(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	params, _ := createTestServerParamsAllowTenants()
+	params, _ := createTestServerParams()
 	s, sqlDB, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
-	defer sqlDB.Close()
-
-	// Tests rely on a smaller buffer size. The setting only affects newly created
-	// connections, so we take care to create new connections for each test using
-	// the Conn() method.
-	ctx := context.Background()
-	sqlConn, err := sqlDB.Conn(ctx)
-	require.NoError(t, err)
-	_, err = sqlConn.ExecContext(ctx, "SET CLUSTER SETTING sql.defaults.results_buffer.size = '16KiB'")
-	require.NoError(t, err)
 
 	tests := []struct {
 		name                              string
@@ -1576,8 +1550,22 @@ func TestTxnAutoRetriesDisabledAfterResultsHaveBeenSentToClient(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sqlConn, err := sqlDB.Conn(ctx)
-			require.NoError(t, err)
+			// Cleanup the connection state after each test so the next one can run
+			// statements.
+			// TODO(andrei): Once we're on go 1.9, this test should use the new
+			// db.Conn() method to tie each test to a connection; then this cleanup
+			// wouldn't be necessary. Also, the test is currently technically
+			// incorrect, as there's no guarantee that the state check at the end will
+			// happen on the right connection.
+			defer func(autoCommit bool) {
+				if autoCommit {
+					// No cleanup necessary.
+					return
+				}
+				if _, err := sqlDB.Exec("ROLLBACK"); err != nil {
+					t.Fatal(err)
+				}
+			}(tc.autoCommit)
 
 			var savepoint string
 			if tc.clientDirectedRetry {
@@ -1604,12 +1592,12 @@ func TestTxnAutoRetriesDisabledAfterResultsHaveBeenSentToClient(t *testing.T) {
         FROM generate_series(1, 10000) AS t(x);
 				%s`,
 				prefix, suffix)
-			_, err = sqlConn.ExecContext(ctx, sql)
+			_, err := sqlDB.Exec(sql)
 			if !isRetryableErr(err) {
 				t.Fatalf("expected retriable error, got: %v", err)
 			}
 			var state string
-			if err := sqlConn.QueryRowContext(ctx, "SHOW TRANSACTION STATUS").Scan(&state); err != nil {
+			if err := sqlDB.QueryRow("SHOW TRANSACTION STATUS").Scan(&state); err != nil {
 				t.Fatal(err)
 			}
 			if expStateStr := tc.expectedTxnStateAfterRetriableErr; state != expStateStr {
@@ -1627,7 +1615,7 @@ func TestTxnAutoRetryReasonAvailable(t *testing.T) {
 	const numRetries = 3
 	retryCount := 0
 
-	params, cmdFilters := createTestServerParamsAllowTenants()
+	params, cmdFilters := createTestServerParams()
 	params.Knobs.SQLExecutor = &sql.ExecutorTestingKnobs{
 		BeforeRestart: func(ctx context.Context, reason error) {
 			retryCount++
@@ -1659,8 +1647,6 @@ func TestTxnAutoRetryReasonAvailable(t *testing.T) {
 	r.Exec(t, `
 CREATE DATABASE t;
 CREATE TABLE t.test (k TEXT PRIMARY KEY, v TEXT);
-`)
-	r.Exec(t, `
 INSERT INTO t.test (k, v) VALUES ('test_key', 'test_val');
 SELECT * from t.test WHERE k = 'test_key';
 `)

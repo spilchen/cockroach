@@ -22,10 +22,8 @@ import (
 
 	"github.com/cockroachdb/apd/v3"
 	"github.com/cockroachdb/cockroach/pkg/base"
-	"github.com/cockroachdb/cockroach/pkg/ccl"
 	"github.com/cockroachdb/cockroach/pkg/cli/clisqlclient"
 	"github.com/cockroachdb/cockroach/pkg/kv"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/kvcoord"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql"
@@ -37,9 +35,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/datapathutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/pgurlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
+	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/encoding"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
@@ -48,9 +46,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/stop"
 	"github.com/cockroachdb/datadriven"
 	"github.com/cockroachdb/errors"
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgtype"
 	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,7 +84,6 @@ const csvData = `%d|155190|7706|1|17|21168.23|0.04|0.02|N|O|1996-03-13|1996-02-1
 
 func TestDataDriven(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	defer ccl.TestingEnableEnterprise()() // allow usage of READ COMMITTED
 	ctx := context.Background()
 
 	doTest := func(t *testing.T, d *datadriven.TestData, conn clisqlclient.Conn) string {
@@ -204,7 +201,7 @@ func TestDataDriven(t *testing.T) {
 
 								s := srv.ApplicationLayer()
 
-								url, cleanup := pgurlutils.PGUrl(t, s.AdvSQLAddr(), t.Name(), url.User(username.RootUser))
+								url, cleanup := sqlutils.PGUrl(t, s.AdvSQLAddr(), t.Name(), url.User(username.RootUser))
 								defer cleanup()
 								var sqlConnCtx clisqlclient.Context
 								conn := sqlConnCtx.MakeSQLConn(io.Discard, io.Discard, url.String())
@@ -267,11 +264,8 @@ func TestCopyFromTransaction(t *testing.T) {
 		defer srv.Stopper().Stop(ctx)
 
 		s := srv.ApplicationLayer()
-		// Disable pipelining. Without this, pipelined writes performed as part
-		// of the COPY can be lost, which can then cause the COPY to fail.
-		kvcoord.PipelinedWritesEnabled.Override(ctx, &s.ClusterSettings().SV, false)
 
-		url, cleanup := pgurlutils.PGUrl(t, s.AdvSQLAddr(), "copytest", url.User(username.RootUser))
+		url, cleanup := sqlutils.PGUrl(t, s.AdvSQLAddr(), "copytest", url.User(username.RootUser))
 		defer cleanup()
 		var sqlConnCtx clisqlclient.Context
 
@@ -279,7 +273,7 @@ func TestCopyFromTransaction(t *testing.T) {
 			valToDecimal := func(v driver.Value) *apd.Decimal {
 				mt, ok := v.(pgtype.Numeric)
 				require.True(t, ok)
-				buf, err := mt.MarshalJSON()
+				buf, err := mt.EncodeText(nil, nil)
 				require.NoError(t, err)
 				decimal, _, err := apd.NewFromString(string(buf))
 				require.NoError(t, err)
@@ -418,7 +412,7 @@ func TestCopyFromTimeout(t *testing.T) {
 
 	s := srv.ApplicationLayer()
 
-	pgURL, cleanup := pgurlutils.PGUrl(
+	pgURL, cleanup := sqlutils.PGUrl(
 		t,
 		s.AdvSQLAddr(),
 		"TestCopyFromTimeout",
@@ -481,12 +475,12 @@ func TestShowQueriesIncludesCopy(t *testing.T) {
 	defer log.Scope(t).Close(t)
 	ctx := context.Background()
 
-	srv := serverutils.StartServerOnly(t, base.TestServerArgs{})
-	defer srv.Stopper().Stop(ctx)
+	s := serverutils.StartServerOnly(t, base.TestServerArgs{})
+	defer s.Stopper().Stop(ctx)
 
-	pgURL, cleanup := pgurlutils.PGUrl(
+	pgURL, cleanup := sqlutils.PGUrl(
 		t,
-		srv.ApplicationLayer().AdvSQLAddr(),
+		s.AdvSQLAddr(),
 		"TestShowQueriesIncludesCopy",
 		url.User(username.RootUser),
 	)
@@ -580,11 +574,10 @@ func TestLargeDynamicRows(t *testing.T) {
 			return nil
 		},
 	}
-	srv := serverutils.StartServerOnly(t, params)
-	defer srv.Stopper().Stop(ctx)
-	s := srv.ApplicationLayer()
+	s := serverutils.StartServerOnly(t, params)
+	defer s.Stopper().Stop(ctx)
 
-	url, cleanup := s.PGUrl(t)
+	url, cleanup := sqlutils.PGUrl(t, s.AdvSQLAddr(), "copytest", url.User(username.RootUser))
 	defer cleanup()
 	var sqlConnCtx clisqlclient.Context
 	conn := sqlConnCtx.MakeSQLConn(io.Discard, io.Discard, url.String())
@@ -594,10 +587,10 @@ func TestLargeDynamicRows(t *testing.T) {
 	err := conn.Exec(ctx, `SET COPY_FAST_PATH_ENABLED = 'true'`)
 	require.NoError(t, err)
 
-	// 4.0 MiB is minimum, but due to #117070 use 5MiB instead to avoid flakes.
-	// Copy sets max row size to this value / 3.
-	const memLimit = kvserverbase.MaxCommandSizeFloor + 1<<20
-	kvserverbase.MaxCommandSize.Override(ctx, &s.ClusterSettings().SV, memLimit)
+	// 4.0 MiB is minimum, copy sets max row size to this value / 3
+	for _, l := range []serverutils.ApplicationLayerInterface{s, s.SystemLayer()} {
+		kvserverbase.MaxCommandSize.Override(ctx, &l.ClusterSettings().SV, 4<<20)
+	}
 
 	err = conn.Exec(ctx, "CREATE TABLE t (s STRING)")
 	require.NoError(t, err)
@@ -616,7 +609,9 @@ func TestLargeDynamicRows(t *testing.T) {
 	batchNumber = 0
 
 	// Reset and make sure we use 1 batch.
-	kvserverbase.MaxCommandSize.Override(ctx, &s.ClusterSettings().SV, kvserverbase.MaxCommandSizeDefault)
+	for _, l := range []serverutils.ApplicationLayerInterface{s, s.SystemLayer()} {
+		kvserverbase.MaxCommandSize.Override(ctx, &l.ClusterSettings().SV, kvserverbase.MaxCommandSizeDefault)
+	}
 
 	// This won't work if the batch size gets set to less than 5. When the batch
 	// size is 4, the test hook will count an extra empty batch.
@@ -635,10 +630,10 @@ func TestTinyRows(t *testing.T) {
 	defer log.Scope(t).Close(t)
 	ctx := context.Background()
 
-	srv := serverutils.StartServerOnly(t, base.TestServerArgs{})
-	defer srv.Stopper().Stop(ctx)
+	s := serverutils.StartServerOnly(t, base.TestServerArgs{})
+	defer s.Stopper().Stop(ctx)
 
-	url, cleanup := pgurlutils.PGUrl(t, srv.ApplicationLayer().AdvSQLAddr(), "copytest", url.User(username.RootUser))
+	url, cleanup := sqlutils.PGUrl(t, s.AdvSQLAddr(), "copytest", url.User(username.RootUser))
 	defer cleanup()
 	var sqlConnCtx clisqlclient.Context
 	conn := sqlConnCtx.MakeSQLConn(io.Discard, io.Discard, url.String())
@@ -791,6 +786,13 @@ func (c *copyReader) generateRows() {
 	c.generatedRows = strings.NewReader(sb.String())
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func BenchmarkCopyCSVEndToEnd(b *testing.B) {
 	defer leaktest.AfterTest(b)()
 	defer log.Scope(b).Close(b)
@@ -801,7 +803,7 @@ func BenchmarkCopyCSVEndToEnd(b *testing.B) {
 	})
 	defer s.Stopper().Stop(ctx)
 
-	pgURL, cleanup, err := pgurlutils.PGUrlE(
+	pgURL, cleanup, err := sqlutils.PGUrlE(
 		s.AdvSQLAddr(),
 		"BenchmarkCopyEndToEnd", /* prefix */
 		url.User(username.RootUser),

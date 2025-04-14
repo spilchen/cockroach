@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/rpc"
 	"github.com/cockroachdb/cockroach/pkg/rpc/nodedialer"
+	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
@@ -49,7 +50,7 @@ func (s *KeyVisualizerServer) saveBoundaries(
 		ctx,
 		"upsert tenant boundaries",
 		nil,
-		sessiondata.NodeUserSessionDataOverride,
+		sessiondata.InternalExecutorOverride{User: username.RootUserName()},
 		`UPSERT INTO system.span_stats_tenant_boundaries(
 			tenant_id,
 			boundaries
@@ -103,9 +104,7 @@ func (s *KeyVisualizerServer) getSamplesFromFanOut(
 			nodeID, err)
 	}
 
-	err := iterateNodes(ctx,
-		s.status.serverIterator,
-		s.status.stopper,
+	err := s.status.iterateNodes(ctx,
 		"iterating nodes for key visualizer samples",
 		noTimeout,
 		dialFn,

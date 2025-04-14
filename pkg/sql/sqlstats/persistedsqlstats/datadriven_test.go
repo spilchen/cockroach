@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/persistedsqlstats"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/datapathutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
@@ -64,8 +65,6 @@ func TestSQLStatsDataDriven(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	skip.UnderRace(t)
-
 	stubTime := &stubTime{}
 	injector := newRuntimeKnobsInjector()
 
@@ -83,9 +82,9 @@ func TestSQLStatsDataDriven(t *testing.T) {
 	defer cluster.Stopper().Stop(ctx)
 
 	server := cluster.Server(0 /* idx */).ApplicationLayer()
-	sqlStats := server.SQLServer().(*sql.Server).GetSQLStatsProvider()
+	sqlStats := server.SQLServer().(*sql.Server).GetSQLStatsProvider().(*persistedsqlstats.PersistedSQLStats)
 
-	appStats := sqlStats.GetApplicationStats("app1")
+	appStats := sqlStats.GetApplicationStats("app1", false)
 
 	// Open two connections so that we can run statements without messing up
 	// the SQL stats.
@@ -93,6 +92,10 @@ func TestSQLStatsDataDriven(t *testing.T) {
 	observerConn := cluster.ServerConn(1 /* idx */)
 
 	observer := sqlutils.MakeSQLRunner(observerConn)
+	_, err := sqlConn.Exec(`SET CLUSTER SETTING sql.metrics.statement_details.plan_collection.enabled = true;`)
+	if err != nil {
+		t.Errorf("failed to enable plan collection due to %s", err.Error())
+	}
 
 	execDataDrivenTestCmd := func(t *testing.T, d *datadriven.TestData) string {
 		switch d.Cmd {
@@ -116,7 +119,7 @@ func TestSQLStatsDataDriven(t *testing.T) {
 			}
 			return strings.Join(rows, "\n")
 		case "sql-stats-flush":
-			sqlStats.MaybeFlush(ctx, cluster.ApplicationLayer(0).AppStopper())
+			sqlStats.Flush(ctx)
 		case "set-time":
 			mustHaveArgsOrFatal(t, d, timeArgs)
 
@@ -144,12 +147,12 @@ func TestSQLStatsDataDriven(t *testing.T) {
 			// them.
 			fingerprint = strings.Replace(fingerprint, "%", " ", -1)
 
-			previouslySampled := appStats.StatementSampled(
+			previouslySampled, savePlanForStats := appStats.ShouldSample(
 				fingerprint,
 				implicitTxn,
 				dbName,
 			)
-			return fmt.Sprintf("%t", previouslySampled)
+			return fmt.Sprintf("%t, %t", previouslySampled, savePlanForStats)
 		case "skip":
 			var issue int
 			d.ScanArgs(t, "issue-num", &issue)

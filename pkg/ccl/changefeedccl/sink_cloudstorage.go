@@ -377,7 +377,7 @@ const flushQueueDepth = 256
 
 func makeCloudStorageSink(
 	ctx context.Context,
-	u *changefeedbase.SinkURL,
+	u sinkURL,
 	srcID base.SQLInstanceID,
 	settings *cluster.Settings,
 	encodingOpts changefeedbase.EncodingOptions,
@@ -388,7 +388,7 @@ func makeCloudStorageSink(
 	testingKnobs *TestingKnobs,
 ) (Sink, error) {
 	var targetMaxFileSize int64 = 16 << 20 // 16MB
-	if fileSizeParam := u.ConsumeParam(changefeedbase.SinkParamFileSize); fileSizeParam != `` {
+	if fileSizeParam := u.consumeParam(changefeedbase.SinkParamFileSize); fileSizeParam != `` {
 		var err error
 		if targetMaxFileSize, err = humanizeutil.ParseBytes(fileSizeParam); err != nil {
 			return nil, pgerror.Wrapf(err, pgcode.Syntax, `parsing %s`, fileSizeParam)
@@ -431,7 +431,7 @@ func makeCloudStorageSink(
 	}
 	s.flushGroup.GoCtx(s.asyncFlusher)
 
-	if partitionFormat := u.ConsumeParam(changefeedbase.SinkParamPartitionFormat); partitionFormat != "" {
+	if partitionFormat := u.consumeParam(changefeedbase.SinkParamPartitionFormat); partitionFormat != "" {
 		dateFormat, ok := partitionDateFormats[partitionFormat]
 		if !ok {
 			return nil, errors.Errorf("invalid partition_format of %s", partitionFormat)
@@ -464,7 +464,7 @@ func makeCloudStorageSink(
 	}
 
 	switch encodingOpts.Envelope {
-	case changefeedbase.OptEnvelopeWrapped, changefeedbase.OptEnvelopeBare, changefeedbase.OptEnvelopeEnriched:
+	case changefeedbase.OptEnvelopeWrapped, changefeedbase.OptEnvelopeBare:
 	default:
 		return nil, errors.Errorf(`this sink is incompatible with %s=%s`,
 			changefeedbase.OptEnvelope, encodingOpts.Envelope)
@@ -548,7 +548,6 @@ func (s *cloudStorageSink) EmitRow(
 	key, value []byte,
 	updated, mvcc hlc.Timestamp,
 	alloc kvevent.Alloc,
-	headers rowHeaders,
 ) (retErr error) {
 	if s.files == nil {
 		return errors.New(`cannot EmitRow on a closed sink`)
@@ -571,7 +570,7 @@ func (s *cloudStorageSink) EmitRow(
 		}
 	}()
 
-	s.metrics.recordMessageSize(int64(len(key) + len(value) + headersLen(headers)))
+	s.metrics.recordMessageSize(int64(len(key) + len(value)))
 	file, err := s.getOrCreateFile(topic, mvcc)
 	if err != nil {
 		return err
@@ -888,8 +887,6 @@ func (f *cloudStorageSinkFile) flushToStorage(
 		if err := f.codec.Close(); err != nil {
 			return err
 		}
-		// Reset reference to underlying codec to prevent accidental reuse.
-		f.codec = nil
 	}
 
 	compressedBytes := f.buf.Len()

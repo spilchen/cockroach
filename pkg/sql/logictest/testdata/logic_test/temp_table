@@ -150,17 +150,10 @@ SELECT * from pg_temp.view_on_temp
 2
 
 # A "permanent" view on a temporary table gets upgraded to temporary.
-# Weak isolation levels emit extra notices, so skip them.
-skipif config weak-iso-level-configs
 query T noticetrace
 CREATE VIEW upgrade_temp_view AS SELECT a FROM temp_table
 ----
 NOTICE: view "upgrade_temp_view" will be a temporary view
-
-onlyif config weak-iso-level-configs
-statement ok
-CREATE VIEW upgrade_temp_view AS SELECT a FROM temp_table
-
 
 query I
 SELECT * from pg_temp.upgrade_temp_view
@@ -328,8 +321,6 @@ user testuser
 statement ok
 USE to_drop;
 SET experimental_enable_temp_tables=true;
-
-statement ok
 CREATE TABLE not_temp (i INT PRIMARY KEY);
 CREATE TEMPORARY TABLE testuser_tmp (i INT PRIMARY KEY);
 CREATE TEMPORARY VIEW tempuser_view AS SELECT i FROM testuser_tmp;
@@ -339,8 +330,6 @@ user root
 
 statement ok
 USE to_drop;
-
-statement ok
 CREATE TEMPORARY TABLE root_temp (i INT PRIMARY KEY);
 
 let $before_drop
@@ -348,8 +337,6 @@ SELECT now()
 
 statement ok
 USE test;
-
-statement ok
 DROP DATABASE to_drop CASCADE
 
 query T
@@ -396,8 +383,6 @@ SELECT * FROM pg_temp.t
 
 statement ok
 USE defaultdb;
-
-statement ok
 DROP DATABASE to_drop CASCADE;
 
 statement ok
@@ -411,8 +396,6 @@ SELECT * FROM pg_temp.t
 
 statement ok
 USE defaultdb;
-
-statement ok
 DROP DATABASE to_drop CASCADE;
 
 subtest end
@@ -423,8 +406,6 @@ user testuser
 
 statement ok
 USE defaultdb;
-
-statement ok
 CREATE TEMPORARY TABLE from_other_session(i INT PRIMARY KEY)
 
 user root

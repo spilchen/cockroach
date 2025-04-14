@@ -6,17 +6,16 @@
 package changefeedccl
 
 import (
-	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"hash/fnv"
-	"io"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
-	"github.com/IBM/sarama"
+	"github.com/Shopify/sarama"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/changefeedbase"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/util/admission"
@@ -27,12 +26,16 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
-	"github.com/klauspost/compress/zstd"
 	"github.com/rcrowley/go-metrics"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kversion"
+	"github.com/twmb/franz-go/pkg/sasl"
+	sasloauth "github.com/twmb/franz-go/pkg/sasl/oauth"
+	saslplain "github.com/twmb/franz-go/pkg/sasl/plain"
+	saslscram "github.com/twmb/franz-go/pkg/sasl/scram"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
 type kafkaSinkClientV2 struct {
@@ -95,7 +98,6 @@ func newKafkaSinkClientV2(
 
 	recordResize := func(numRecords int64) {}
 	if m := mb(requiresResourceAccounting); m != nil { // `m` can be nil in tests.
-		baseOpts = append(baseOpts, kgo.WithHooks(&kgoMetricsAdapter{throttling: m.getKafkaThrottlingMetrics(settings)}))
 		recordResize = func(numRecords int64) {
 			m.recordInternalRetry(numRecords, true)
 		}
@@ -301,19 +303,14 @@ type kafkaBuffer struct {
 	batchCfg sinkBatchConfig
 }
 
-func (b *kafkaBuffer) Append(key []byte, value []byte, attrs attributes) {
+func (b *kafkaBuffer) Append(key []byte, value []byte, _ attributes) {
 	// HACK: kafka sink v1 encodes nil keys as sarama.ByteEncoder(key) which is != nil, and unit tests rely on this.
 	// So do something equivalent.
 	if key == nil {
 		key = []byte{}
 	}
 
-	var headers []kgo.RecordHeader
-	for k, v := range attrs.headers {
-		headers = append(headers, kgo.RecordHeader{Key: k, Value: v})
-	}
-
-	b.messages = append(b.messages, &kgo.Record{Key: key, Value: value, Topic: b.topic, Headers: headers})
+	b.messages = append(b.messages, &kgo.Record{Key: key, Value: value, Topic: b.topic})
 	b.byteCount += len(value)
 }
 
@@ -329,7 +326,7 @@ var _ BatchBuffer = (*kafkaBuffer)(nil)
 
 func makeKafkaSinkV2(
 	ctx context.Context,
-	u *changefeedbase.SinkURL,
+	u sinkURL,
 	targets changefeedbase.Targets,
 	jsonConfig changefeedbase.SinkSpecificJSONConfig,
 	parallelism int,
@@ -352,9 +349,9 @@ func makeKafkaSinkV2(
 		return nil, err
 	}
 
-	kafkaTopicPrefix := u.ConsumeParam(changefeedbase.SinkParamTopicPrefix)
-	kafkaTopicName := u.ConsumeParam(changefeedbase.SinkParamTopicName)
-	if schemaTopic := u.ConsumeParam(changefeedbase.SinkParamSchemaTopic); schemaTopic != `` {
+	kafkaTopicPrefix := u.consumeParam(changefeedbase.SinkParamTopicPrefix)
+	kafkaTopicName := u.consumeParam(changefeedbase.SinkParamTopicName)
+	if schemaTopic := u.consumeParam(changefeedbase.SinkParamSchemaTopic); schemaTopic != `` {
 		return nil, errors.Errorf(`%s is not yet supported`, changefeedbase.SinkParamSchemaTopic)
 	}
 
@@ -365,13 +362,13 @@ func makeKafkaSinkV2(
 
 	topicNamer, err := MakeTopicNamer(
 		targets,
-		WithPrefix(kafkaTopicPrefix), WithSingleName(kafkaTopicName), WithSanitizeFn(changefeedbase.SQLNameToKafkaName))
+		WithPrefix(kafkaTopicPrefix), WithSingleName(kafkaTopicName), WithSanitizeFn(SQLNameToKafkaName))
 
 	if err != nil {
 		return nil, err
 	}
 
-	if unknownParams := u.RemainingQueryParams(); len(unknownParams) > 0 {
+	if unknownParams := u.remainingQueryParams(); len(unknownParams) > 0 {
 		return nil, errors.Errorf(
 			`unknown kafka sink query parameters: %s`, strings.Join(unknownParams, ", "))
 	}
@@ -383,12 +380,12 @@ func makeKafkaSinkV2(
 	}
 
 	return makeBatchingSink(ctx, sinkTypeKafka, client, time.Duration(batchCfg.Frequency), retryOpts,
-		parallelism, topicNamer, pacerFactory, timeSource, mb(true), settings), nil
+		parallelism, topicNamer, pacerFactory, timeSource, mb(true)), nil
 }
 
 func buildKgoConfig(
 	ctx context.Context,
-	u *changefeedbase.SinkURL,
+	u sinkURL,
 	jsonStr changefeedbase.SinkSpecificJSONConfig,
 	netMetrics *cidr.NetMetrics,
 ) ([]kgo.Opt, error) {
@@ -440,13 +437,41 @@ func buildKgoConfig(
 		opts = append(opts, kgo.Dialer(netMetrics.Wrap(dialer.DialContext, "kafka")))
 	}
 
-	if dialConfig.authMechanism != nil {
-		authOpts, err := dialConfig.authMechanism.KgoOpts(ctx)
-		if err != nil {
-			return nil, err
+	if dialConfig.saslEnabled {
+		var s sasl.Mechanism
+		switch dialConfig.saslMechanism {
+		// TODO(#126991): Remove this sarama dependency.
+		case sarama.SASLTypeOAuth:
+			tp, err := newKgoOauthTokenProvider(ctx, dialConfig)
+			if err != nil {
+				return nil, err
+			}
+			s = sasloauth.Oauth(tp)
+		case sarama.SASLTypePlaintext, "":
+			s = saslplain.Plain(func(ctc context.Context) (saslplain.Auth, error) {
+				return saslplain.Auth{
+					User: dialConfig.saslUser,
+					Pass: dialConfig.saslPassword,
+				}, nil
+			})
+		case sarama.SASLTypeSCRAMSHA256:
+			s = saslscram.Sha256(func(ctx context.Context) (saslscram.Auth, error) {
+				return saslscram.Auth{
+					User: dialConfig.saslUser,
+					Pass: dialConfig.saslPassword,
+				}, nil
+			})
+		case sarama.SASLTypeSCRAMSHA512:
+			s = saslscram.Sha512(func(ctx context.Context) (saslscram.Auth, error) {
+				return saslscram.Auth{
+					User: dialConfig.saslUser,
+					Pass: dialConfig.saslPassword,
+				}, nil
+			})
+		default:
+			return nil, errors.Errorf(`unsupported SASL mechanism: %s`, dialConfig.saslMechanism)
 		}
-		opts = append(opts, authOpts...)
-		log.VInfof(ctx, 2, "applied kafka auth mechanism: %+#v\n", dialConfig.authMechanism)
+		opts = append(opts, kgo.SASL(s))
 	}
 
 	// Apply some statement level overrides. The flush related ones (Messages, MaxMessages, Bytes) are not applied here, but on the sinkBatchConfig instead.
@@ -467,9 +492,7 @@ func buildKgoConfig(
 		opts = append(opts, kgo.MaxBufferedRecords(sinkCfg.Flush.MaxMessages))
 	}
 
-	if sinkCfg.ClientID != "" {
-		opts = append(opts, kgo.ClientID(sinkCfg.ClientID))
-	}
+	opts = append(opts, kgo.ClientID(`CockroachDB`))
 
 	switch strings.ToUpper(sinkCfg.RequiredAcks) {
 	case ``, `ONE`, `1`: // This is our default.
@@ -484,29 +507,20 @@ func buildKgoConfig(
 
 	// TODO(#126991): Remove this sarama dependency.
 	// NOTE: kgo lets you give multiple compression options in preference order, which is cool but the config json doesnt support that. Should we?
-	var comp kgo.CompressionCodec
 	switch sarama.CompressionCodec(sinkCfg.Compression) {
 	case sarama.CompressionNone:
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.NoCompression()))
 	case sarama.CompressionGZIP:
-		comp = kgo.GzipCompression()
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.GzipCompression()))
 	case sarama.CompressionSnappy:
-		comp = kgo.SnappyCompression()
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.SnappyCompression()))
 	case sarama.CompressionLZ4:
-		comp = kgo.Lz4Compression()
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.Lz4Compression()))
 	case sarama.CompressionZSTD:
-		comp = kgo.ZstdCompression()
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.ZstdCompression()))
 	default:
 		return nil, errors.Errorf(`unknown compression codec: %v`, sinkCfg.Compression)
 	}
-
-	if level := sinkCfg.CompressionLevel; level != sarama.CompressionLevelDefault {
-		if err := validateCompressionLevel(sinkCfg.Compression, level); err != nil {
-			return nil, err
-		}
-		comp = comp.WithLevel(level)
-	}
-
-	opts = append(opts, kgo.ProducerBatchCompression(comp))
 
 	if version := sinkCfg.Version; version != "" {
 		if !strings.HasPrefix(version, `v`) {
@@ -523,34 +537,6 @@ func buildKgoConfig(
 	}
 
 	return opts, nil
-}
-
-// NOTE: kgo will ignore invalid compression levels, but the v1 sinks will fail validations. So we have to validate these ourselves.
-func validateCompressionLevel(compressionType compressionCodec, level int) error {
-	switch sarama.CompressionCodec(compressionType) {
-	case sarama.CompressionNone:
-		return nil
-	case sarama.CompressionGZIP:
-		if level < gzip.HuffmanOnly || level > gzip.BestCompression {
-			return errors.Errorf(`invalid gzip compression level: %d`, level)
-		}
-	case sarama.CompressionSnappy:
-		return errors.Errorf(`snappy does not support compression levels`)
-	case sarama.CompressionLZ4:
-		// The v1 sink ignores `level` for lz4, So let's use kgo's default
-		// behavior, which is to apply the level if it's valid, and fall back to
-		// the default otherwise.
-		return nil
-	case sarama.CompressionZSTD:
-		w, err := zstd.NewWriter(io.Discard, zstd.WithEncoderLevel(zstd.EncoderLevel(level)))
-		if err != nil {
-			return errors.Errorf(`invalid zstd compression level: %d`, level)
-		}
-		_ = w.Close()
-	default:
-		return errors.Errorf(`unknown compression codec: %v`, compressionType)
-	}
-	return nil
 }
 
 type kgoLogAdapter struct {
@@ -610,6 +596,45 @@ func (p *kgoChangefeedTopicPartitioner) Partition(r *kgo.Record, n int) int {
 		return int(r.Partition)
 	}
 	return p.inner.Partition(r, n)
+}
+
+func newKgoOauthTokenProvider(
+	ctx context.Context, dialConfig kafkaDialConfig,
+) (func(ctx context.Context) (sasloauth.Auth, error), error) {
+
+	// grant_type is by default going to be set to 'client_credentials' by the
+	// clientcredentials library as defined by the spec, however non-compliant
+	// auth server implementations may want a custom type
+	var endpointParams url.Values
+	if dialConfig.saslGrantType != `` {
+		endpointParams = url.Values{"grant_type": {dialConfig.saslGrantType}}
+	}
+
+	tokenURL, err := url.Parse(dialConfig.saslTokenURL)
+	if err != nil {
+		return nil, errors.Wrap(err, "malformed token url")
+	}
+
+	// the clientcredentials.Config's TokenSource method creates an
+	// oauth2.TokenSource implementation which returns tokens for the given
+	// endpoint, returning the same cached result until its expiration has been
+	// reached, and then once expired re-requesting a new token from the endpoint.
+	cfg := clientcredentials.Config{
+		ClientID:       dialConfig.saslClientID,
+		ClientSecret:   dialConfig.saslClientSecret,
+		TokenURL:       tokenURL.String(),
+		Scopes:         dialConfig.saslScopes,
+		EndpointParams: endpointParams,
+	}
+	ts := cfg.TokenSource(ctx)
+
+	return func(ctx context.Context) (sasloauth.Auth, error) {
+		tok, err := ts.Token()
+		if err != nil {
+			return sasloauth.Auth{}, err
+		}
+		return sasloauth.Auth{Token: tok.AccessToken}, nil
+	}, nil
 }
 
 type kgoMetricsAdapter struct {

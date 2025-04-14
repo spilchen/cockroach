@@ -12,7 +12,6 @@ import (
 )
 
 // StmtStatsEnable determines whether to collect per-statement statistics.
-// TODO(117690): Unify StmtStatsEnable and TxnStatsEnable into a single cluster setting.
 var StmtStatsEnable = settings.RegisterBoolSetting(
 	settings.ApplicationLevel,
 	"sql.metrics.statement_details.enabled", "collect per-statement query statistics", true,
@@ -31,7 +30,6 @@ var TxnStatsNumStmtFingerprintIDsToRecord = settings.RegisterIntSetting(
 
 // TxnStatsEnable determines whether to collect per-application transaction
 // statistics.
-// TODO(117690): Unify StmtStatsEnable and TxnStatsEnable into a single cluster setting.
 var TxnStatsEnable = settings.RegisterBoolSetting(
 	settings.ApplicationLevel,
 	"sql.metrics.transaction_details.enabled", "collect per-application transaction statistics", true,
@@ -57,13 +55,32 @@ var DumpStmtStatsToLogBeforeReset = settings.RegisterBoolSetting(
 	settings.WithName("sql.metrics.statement_details.dump_to_logs.enabled"),
 	settings.WithPublic)
 
+// SampleLogicalPlans specifies whether we periodically sample the logical plan
+// for each fingerprint.
+var SampleLogicalPlans = settings.RegisterBoolSetting(
+	settings.ApplicationLevel,
+	"sql.metrics.statement_details.plan_collection.enabled",
+	"periodically save a logical plan for each fingerprint",
+	false,
+	settings.WithPublic)
+
+// LogicalPlanCollectionPeriod specifies the interval between collections of
+// logical plans for each fingerprint.
+var LogicalPlanCollectionPeriod = settings.RegisterDurationSetting(
+	settings.ApplicationLevel,
+	"sql.metrics.statement_details.plan_collection.period",
+	"the time until a new logical plan is collected",
+	5*time.Minute,
+	settings.NonNegativeDuration,
+	settings.WithPublic)
+
 // MaxMemSQLStatsStmtFingerprints specifies the maximum of unique statement
 // fingerprints we store in memory.
 var MaxMemSQLStatsStmtFingerprints = settings.RegisterIntSetting(
 	settings.ApplicationLevel,
 	"sql.metrics.max_mem_stmt_fingerprints",
 	"the maximum number of statement fingerprints stored in memory",
-	7500,
+	100000,
 	settings.WithPublic)
 
 // MaxMemSQLStatsTxnFingerprints specifies the maximum of unique transaction
@@ -72,7 +89,7 @@ var MaxMemSQLStatsTxnFingerprints = settings.RegisterIntSetting(
 	settings.ApplicationLevel,
 	"sql.metrics.max_mem_txn_fingerprints",
 	"the maximum number of transaction fingerprints stored in memory",
-	7500,
+	100000,
 	settings.WithPublic)
 
 // MaxMemReportedSQLStatsStmtFingerprints specifies the maximum of unique statement

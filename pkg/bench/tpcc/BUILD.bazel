@@ -17,6 +17,7 @@ go_test(
         "tpcc_bench_options_test.go",
         "tpcc_bench_test.go",
     ],
+    args = ["-test.timeout=295s"],
     embed = [":tpcc"],
     deps = [
         "//pkg/base",
@@ -25,7 +26,6 @@ go_test(
         "//pkg/security/securitytest",
         "//pkg/server",
         "//pkg/testutils",
-        "//pkg/testutils/pgurlutils",
         "//pkg/testutils/serverutils",
         "//pkg/testutils/skip",
         "//pkg/testutils/sqlutils",

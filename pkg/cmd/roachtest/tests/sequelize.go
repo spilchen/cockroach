@@ -19,9 +19,6 @@ import (
 )
 
 var sequelizeCockroachDBReleaseTagRegex = regexp.MustCompile(`^v(?P<major>\d+)\.(?P<minor>\d+)\.(?P<point>\d+)$`)
-
-// WARNING: DO NOT MODIFY the name of the below constant/variable without approval from the docs team.
-// This is used by docs automation to produce a list of supported versions for ORM's.
 var supportedSequelizeCockroachDBRelease = "v6.0.5"
 
 // This test runs sequelize's full test suite against a single cockroach node.
@@ -94,7 +91,7 @@ func registerSequelize(r registry.Registry) {
 		// can use npm to reduce the potential of trying to add another nodesource key
 		// (preventing gpg: dearmoring failed: File exists) errors.
 		if err := c.RunE(
-			ctx, option.WithNodes(node), `sudo npm i -g npm`,
+			ctx, node, `sudo npm i -g npm`,
 		); err != nil {
 			if err := repeatRunE(
 				ctx,
@@ -151,7 +148,7 @@ echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.co
 
 		// Version telemetry is already disabled in the sequelize-cockroachdb test suite.
 		t.Status("running Sequelize test suite")
-		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(node),
+		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), node,
 			fmt.Sprintf(`cd /mnt/data1/sequelize/ && npm test --crdb_version=%s`, version),
 		)
 		rawResultsStr := result.Stdout + result.Stderr

@@ -111,7 +111,6 @@ func init() {
 				changefeedbase.SinkParamClientKey,
 				changefeedbase.SinkParamClientCert,
 				changefeedbase.SinkParamConfluentAPISecret,
-				changefeedbase.SinkParamAzureAccessKey,
 			})
 			if err != nil {
 				return nil, err

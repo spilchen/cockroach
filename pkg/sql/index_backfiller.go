@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/admission/admissionpb"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
+	"github.com/cockroachdb/errors"
 )
 
 // IndexBackfillPlanner holds dependencies for an index backfiller
@@ -43,19 +44,23 @@ func (ib *IndexBackfillPlanner) MaybePrepareDestIndexesForBackfill(
 	if !current.MinimumWriteTimestamp.IsEmpty() {
 		return current, nil
 	}
-	minWriteTimestamp := ib.execCfg.Clock.Now()
+	// Pick an arbitrary read timestamp for the reads of the backfill.
+	// It's safe to use any timestamp to read even if we've partially backfilled
+	// at an earlier timestamp because other writing transactions have been
+	// writing at the appropriate timestamps in-between.
+	backfillReadTimestamp := ib.execCfg.Clock.Now()
 	targetSpans := make([]roachpb.Span, len(current.DestIndexIDs))
 	for i, idxID := range current.DestIndexIDs {
 		targetSpans[i] = td.IndexSpan(ib.execCfg.Codec, idxID)
 	}
 	if err := scanTargetSpansToPushTimestampCache(
-		ctx, ib.execCfg.DB, minWriteTimestamp, targetSpans,
+		ctx, ib.execCfg.DB, backfillReadTimestamp, targetSpans,
 	); err != nil {
 		return scexec.BackfillProgress{}, err
 	}
 	return scexec.BackfillProgress{
 		Backfill:              current.Backfill,
-		MinimumWriteTimestamp: minWriteTimestamp,
+		MinimumWriteTimestamp: backfillReadTimestamp,
 	}, nil
 }
 
@@ -66,7 +71,20 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	tracker scexec.BackfillerProgressWriter,
 	job *jobs.Job,
 	descriptor catalog.TableDescriptor,
-) (retErr error) {
+) (err error) {
+	// Potentially install a protected timestamp before the GC interval is hit,
+	// which can help avoid transaction retry errors, with shorter GC intervals.
+	protectedTimestampCleaner := ib.execCfg.ProtectedTimestampManager.TryToProtectBeforeGC(ctx,
+		job,
+		descriptor,
+		progress.MinimumWriteTimestamp)
+	defer func() {
+		cleanupError := protectedTimestampCleaner(ctx)
+		if cleanupError != nil {
+			err = errors.CombineErrors(cleanupError, err)
+		}
+	}()
+
 	var completed = struct {
 		syncutil.Mutex
 		g roachpb.SpanGroup
@@ -83,12 +101,8 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 		if meta.BulkProcessorProgress == nil {
 			return nil
 		}
-		progress.CompletedSpans = append(progress.CompletedSpans, addCompleted(
-			meta.BulkProcessorProgress.CompletedSpans...)...)
-		knobs := &ib.execCfg.DistSQLSrv.TestingKnobs
-		if knobs.RunBeforeIndexBackfillProgressUpdate != nil {
-			knobs.RunBeforeIndexBackfillProgressUpdate(progress.CompletedSpans)
-		}
+		progress.CompletedSpans = addCompleted(
+			meta.BulkProcessorProgress.CompletedSpans...)
 		return tracker.SetBackfillProgress(ctx, progress)
 	}
 	var spansToDo []roachpb.Span
@@ -102,26 +116,19 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	if len(spansToDo) == 0 { // already done
 		return nil
 	}
-
 	now := ib.execCfg.DB.Clock().Now()
-	// Pick now as the read timestamp for the backfill. It's safe to use this
-	// timestamp to read even if we've partially backfilled at an earlier
-	// timestamp because other writing transactions have been writing at the
-	// appropriate timestamps in-between.
-	readAsOf := now
-	run, retErr := ib.plan(
+	run, err := ib.plan(
 		ctx,
 		descriptor,
+		progress.MinimumWriteTimestamp,
 		now,
 		progress.MinimumWriteTimestamp,
-		readAsOf,
 		spansToDo,
 		progress.DestIndexIDs,
-		progress.SourceIndexID,
 		updateFunc,
 	)
-	if retErr != nil {
-		return retErr
+	if err != nil {
+		return err
 	}
 	return run(ctx)
 }
@@ -168,29 +175,27 @@ func (ib *IndexBackfillPlanner) plan(
 	nowTimestamp, writeAsOf, readAsOf hlc.Timestamp,
 	sourceSpans []roachpb.Span,
 	indexesToBackfill []descpb.IndexID,
-	sourceIndexID descpb.IndexID,
 	callback func(_ context.Context, meta *execinfrapb.ProducerMetadata) error,
 ) (runFunc func(context.Context) error, _ error) {
 
 	var p *PhysicalPlan
-	var extEvalCtx extendedEvalContext
+	var evalCtx extendedEvalContext
 	var planCtx *PlanningCtx
 	td := tabledesc.NewBuilder(tableDesc.TableDesc()).BuildExistingMutableTable()
 	if err := DescsTxn(ctx, ib.execCfg, func(
 		ctx context.Context, txn isql.Txn, descriptors *descs.Collection,
 	) error {
 		sd := NewInternalSessionData(ctx, ib.execCfg.Settings, "plan-index-backfill")
-		extEvalCtx = createSchemaChangeEvalCtx(ctx, ib.execCfg, sd, nowTimestamp, descriptors)
-		planCtx = ib.execCfg.DistSQLPlanner.NewPlanningCtx(
-			ctx, &extEvalCtx, nil /* planner */, txn.KV(), FullDistribution,
-		)
-		// TODO(ajwerner): Adopt metamorphic.ConstantWithTestRange for the
+		evalCtx = createSchemaChangeEvalCtx(ctx, ib.execCfg, sd, nowTimestamp, descriptors)
+		planCtx = ib.execCfg.DistSQLPlanner.NewPlanningCtx(ctx, &evalCtx,
+			nil /* planner */, txn.KV(), DistributionTypeSystemTenantOnly)
+		// TODO(ajwerner): Adopt util.ConstantWithMetamorphicTestRange for the
 		// batch size. Also plumb in a testing knob.
 		chunkSize := indexBackfillBatchSize.Get(&ib.execCfg.Settings.SV)
 		const writeAtRequestTimestamp = true
 		spec, err := initIndexBackfillerSpec(
-			*td.TableDesc(), writeAsOf, writeAtRequestTimestamp, chunkSize,
-			indexesToBackfill, sourceIndexID,
+			*td.TableDesc(), writeAsOf, readAsOf, writeAtRequestTimestamp, chunkSize,
+			indexesToBackfill,
 		)
 		if err != nil {
 			return err
@@ -210,12 +215,11 @@ func (ib *IndexBackfillPlanner) plan(
 			ib.execCfg.RangeDescriptorCache,
 			nil, /* txn - the flow does not run wholly in a txn */
 			ib.execCfg.Clock,
-			extEvalCtx.Tracing,
+			evalCtx.Tracing,
 		)
 		defer recv.Release()
-		// Copy the eval.Context, as dsp.Run() might change it.
-		evalCtxCopy := extEvalCtx.Context.Copy()
-		ib.execCfg.DistSQLPlanner.Run(ctx, planCtx, nil, p, recv, evalCtxCopy, nil)
+		evalCtxCopy := evalCtx
+		ib.execCfg.DistSQLPlanner.Run(ctx, planCtx, nil, p, recv, &evalCtxCopy, nil)
 		return cbw.Err()
 	}, nil
 }

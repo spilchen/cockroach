@@ -10,10 +10,11 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"slices"
+	"sort"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
+	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
@@ -21,27 +22,19 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/allocatorimpl"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/plan"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/storepool"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/batcheval"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/benignerror"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/concurrency"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverpb"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/rditer"
-	"github.com/cockroachdb/cockroach/pkg/raft"
-	"github.com/cockroachdb/cockroach/pkg/raft/raftpb"
-	"github.com/cockroachdb/cockroach/pkg/raft/tracker"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/rpc"
 	"github.com/cockroachdb/cockroach/pkg/rpc/nodedialer"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/storage"
-	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
-	"github.com/cockroachdb/cockroach/pkg/util/metamorphic"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/retry"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
@@ -50,45 +43,15 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/logtags"
-	"github.com/cockroachdb/redact"
+	"go.etcd.io/raft/v3"
+	"go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/tracker"
 )
-
-// EnableEstimatedMVCCStatsInSplit controls whether the MVCC stats produced
-// during splits are estimated (when enabled) or 100% accurate (when disabled).
-// Defaults to true but metamorphically changed in tests.
-var EnableEstimatedMVCCStatsInSplit = settings.RegisterBoolSetting(
-	settings.SystemVisible,
-	"kv.split.estimated_mvcc_stats.enabled",
-	"if enabled, MVCC stats will be computed estimated (as opposed to "+
-		"computed accurately) during splits",
-	metamorphic.ConstantWithTestBool("kv.split.estimated_mvcc_stats.enabled", true))
-
-// EnableMVCCStatsRecomputationInSplit controls whether the MVCC stats for a
-// range are re-computed at the beginning of the split (in AdminSplit). Doing so
-// prevents stats estimates by successive splits from drifting too much from the
-// real stats. However, re-computation is expensive, so it can be disabled using
-// this setting if it's causing performance issues.
-// Defaults to true but metamorphically changed in tests.
-var EnableMVCCStatsRecomputationInSplit = settings.RegisterBoolSetting(
-	settings.SystemVisible,
-	"kv.split.mvcc_stats_recomputation.enabled",
-	"if enabled, MVCC stats will be recomputed at the beginning of a split "+
-		"to prevent stats estimates from drifting",
-	metamorphic.ConstantWithTestBool("kv.split.mvcc_stats_recomputation.enabled", true))
 
 // mergeApplicationTimeout is the timeout when waiting for a merge command to be
 // applied on all range replicas. There doesn't appear to be any strong reason
 // why this value was chosen in particular, but it seems to work.
 const mergeApplicationTimeout = 5 * time.Second
-
-// EnableEstimatedStatsForExternalBytes controls whether we should bypass normal
-// stats recalcuation during splits if the underlying store has external bytes
-// (i.e. has external files in its stores).
-var EnableEstimatedStatsForExternalBytes = settings.RegisterBoolSetting(
-	settings.SystemOnly,
-	"kv.range_split.estimated_stats_for_external_bytes.enabled",
-	"allow splits to use estimated stats when the range being split has external bytes in its underlying store",
-	true)
 
 // sendSnapshotTimeout is the timeout for sending snapshots. While a snapshot is
 // in transit, Raft log truncation is halted to allow the recipient to catch up.
@@ -100,11 +63,9 @@ var EnableEstimatedStatsForExternalBytes = settings.RegisterBoolSetting(
 var sendSnapshotTimeout = envutil.EnvOrDefaultDuration(
 	"COCKROACH_RAFT_SEND_SNAPSHOT_TIMEOUT", 1*time.Hour)
 
-const manualAdminReason = "manual"
-
-// AdminSplit divides the range into two ranges using args.SplitKey.
+// AdminSplit divides the range into into two ranges using args.SplitKey.
 func (r *Replica) AdminSplit(
-	ctx context.Context, args kvpb.AdminSplitRequest, reason redact.RedactableString,
+	ctx context.Context, args kvpb.AdminSplitRequest, reason string,
 ) (reply kvpb.AdminSplitResponse, _ *kvpb.Error) {
 	if len(args.SplitKey) == 0 {
 		return kvpb.AdminSplitResponse{}, kvpb.NewErrorf("cannot split range with no key provided")
@@ -134,9 +95,9 @@ func maybeDescriptorChangedError(
 	return false, nil
 }
 
-func splitSnapshotWarningStr(rangeID roachpb.RangeID, status *raft.Status) redact.RedactableString {
-	var s redact.RedactableString
-	if status != nil && status.RaftState == raftpb.StateLeader {
+func splitSnapshotWarningStr(rangeID roachpb.RangeID, status *raft.Status) string {
+	var s string
+	if status != nil && status.RaftState == raft.StateLeader {
 		for replicaID, pr := range status.Progress {
 			if replicaID == status.Lead {
 				// TODO(tschottdorf): remove this line once we have picked up
@@ -147,7 +108,7 @@ func splitSnapshotWarningStr(rangeID roachpb.RangeID, status *raft.Status) redac
 				// This follower is in good working order.
 				continue
 			}
-			s += redact.Sprintf("; r%d/%d is ", rangeID, replicaID)
+			s += fmt.Sprintf("; r%d/%d is ", rangeID, replicaID)
 			switch pr.State {
 			case tracker.StateSnapshot:
 				// If the Raft snapshot queue is backed up, replicas can spend
@@ -161,7 +122,7 @@ func splitSnapshotWarningStr(rangeID roachpb.RangeID, status *raft.Status) redac
 				s += "being probed (may or may not need a Raft snapshot)"
 			default:
 				// Future proofing.
-				s += redact.Sprintf("in unknown state %s", redact.Safe(pr.State))
+				s += "in unknown state " + pr.State.String()
 			}
 		}
 	}
@@ -202,13 +163,11 @@ func splitTxnAttempt(
 	ctx context.Context,
 	store *Store,
 	txn *kv.Txn,
-	leftDesc *roachpb.RangeDescriptor,
-	rightDesc *roachpb.RangeDescriptor,
+	rightRangeID roachpb.RangeID,
+	splitKey roachpb.RKey,
+	expiration hlc.Timestamp,
 	oldDesc *roachpb.RangeDescriptor,
-	reason redact.RedactableString,
-	preSplitLeftUserStats enginepb.MVCCStats,
-	preSplitStats enginepb.MVCCStats,
-	useEstimatedStatsForExternalBytes bool,
+	reason string,
 ) error {
 	txn.SetDebugName(splitTxnName)
 
@@ -217,6 +176,12 @@ func splitTxnAttempt(
 	if err != nil {
 		return err
 	}
+	// TODO(tbg): return desc from conditionalGetDescValueFromDB and don't pass
+	// in oldDesc any more (just the start key).
+	desc := oldDesc
+	oldDesc = nil // prevent accidental use
+
+	leftDesc, rightDesc := prepareSplitDescs(rightRangeID, splitKey, expiration, desc)
 
 	// Update existing range descriptor for left hand side of
 	// split. Note that we mutate the descriptor for the left hand
@@ -240,7 +205,7 @@ func splitTxnAttempt(
 	}
 
 	// Log the split into the range event log.
-	if err := store.logSplit(ctx, txn, *leftDesc, *rightDesc, reason.StripMarkers(), true /* logAsync */); err != nil {
+	if err := store.logSplit(ctx, txn, *leftDesc, *rightDesc, reason, true /* logAsync */); err != nil {
 		return err
 	}
 
@@ -263,12 +228,8 @@ func splitTxnAttempt(
 		Commit: true,
 		InternalCommitTrigger: &roachpb.InternalCommitTrigger{
 			SplitTrigger: &roachpb.SplitTrigger{
-				LeftDesc:              *leftDesc,
-				RightDesc:             *rightDesc,
-				PreSplitLeftUserStats: preSplitLeftUserStats,
-				PreSplitStats:         preSplitStats,
-				UseEstimatesBecauseExternalBytesArePresent: useEstimatedStatsForExternalBytes,
-				ManualSplit: string(reason) == manualAdminReason,
+				LeftDesc:  *leftDesc,
+				RightDesc: *rightDesc,
 			},
 		},
 	})
@@ -289,20 +250,11 @@ func splitTxnStickyUpdateAttempt(
 	newDesc := *desc
 	newDesc.StickyBit = expiration
 
-	{
-		b := txn.NewBatch()
-		descKey := keys.RangeDescriptorKey(desc.StartKey)
-		if err := updateRangeDescriptor(b, descKey, dbDescValue, &newDesc); err != nil {
-			return err
-		}
-		// Run this batch first to ensure that the transaction record is created in
-		// the right place. The sticky bit trigger relies on this.
-		if err := txn.Run(ctx, b); err != nil {
-			return err
-		}
-	}
-
 	b := txn.NewBatch()
+	descKey := keys.RangeDescriptorKey(desc.StartKey)
+	if err := updateRangeDescriptor(b, descKey, dbDescValue, &newDesc); err != nil {
+		return err
+	}
 	if err := updateRangeAddressing(b, &newDesc); err != nil {
 		return err
 	}
@@ -341,7 +293,7 @@ func (r *Replica) adminSplitWithDescriptor(
 	args kvpb.AdminSplitRequest,
 	desc *roachpb.RangeDescriptor,
 	delayable bool,
-	reason redact.RedactableString,
+	reason string,
 	findFirstSafeKey bool,
 ) (kvpb.AdminSplitResponse, error) {
 	var err error
@@ -434,7 +386,7 @@ func (r *Replica) adminSplitWithDescriptor(
 		if !storage.IsValidSplitKey(foundSplitKey) {
 			return reply, errors.Errorf("cannot split range at key %s", splitKey)
 		}
-		if _, _, err := keys.DecodeTenantPrefix(splitKey.AsRawKey()); err != nil {
+		if _, _, err := keys.DecodeTenantPrefixE(splitKey.AsRawKey()); err != nil {
 			return reply, errors.Wrapf(err, "checking for valid tenantID")
 		}
 	}
@@ -473,89 +425,17 @@ func (r *Replica) adminSplitWithDescriptor(
 		return reply, errors.Wrap(err, "unable to allocate range id for right hand side")
 	}
 
-	var extra redact.RedactableString
+	var extra string
 	if delayable {
 		extra += maybeDelaySplitToAvoidSnapshot(ctx, (*splitDelayHelper)(r))
 	}
 	extra += splitSnapshotWarningStr(r.RangeID, r.RaftStatus())
 
-	log.KvDistribution.Infof(ctx, "initiating a split of this range at key %v [r%d] (%s)%s",
+	log.Infof(ctx, "initiating a split of this range at key %v [r%d] (%s)%s",
 		splitKey, rightRangeID, reason, extra)
 
-	leftDesc, rightDesc := prepareSplitDescs(rightRangeID, splitKey, args.ExpirationTime, desc)
-
-	// TODO(ssd): Calculating MVCC stats on a range with external files in
-	// the underlying store is expensive. Here, we check whether the
-	// underlying store has external bytes and, if it does, instruct
-	// splitTrigger to use a crude estimate. We need to revisit this
-	// heuristic once we start to prioritize the performance of the
-	// foreground workload during an Online restore operation.
-	useEstimatedStatsForExternalBytes := EnableEstimatedStatsForExternalBytes.Get(&r.store.ClusterSettings().SV)
-	if useEstimatedStatsForExternalBytes {
-		// If we don't already have estimated stats, let's not make the
-		// problem worse by introducing them, regardless of whether or
-		// not we have internal bytes.
-		if r.GetMVCCStats().ContainsEstimates == 0 {
-			useEstimatedStatsForExternalBytes = false
-		} else if hasExternal, err := r.HasExternalBytes(); err != nil {
-			log.Warningf(ctx, "failed to get approximate disk bytes: %v", err)
-			useEstimatedStatsForExternalBytes = false
-		} else {
-			useEstimatedStatsForExternalBytes = hasExternal
-		}
-	}
-
-	// If MVCC stats estimates are enabled, pre-compute some stats here to pass to
-	// splitTrigger (where we hold latches, so it's more expensive to do so).
-	var userOnlyLeftStats enginepb.MVCCStats
-	var totalStats enginepb.MVCCStats
-	if EnableEstimatedMVCCStatsInSplit.Get(&r.store.ClusterSettings().SV) &&
-		reason != manualAdminReason &&
-		!useEstimatedStatsForExternalBytes {
-		// If the stats contain estimates, re-compute them to prevent estimates
-		// from compounding across splits. See makeEstimatedSplitStatsHelper for more
-		// details on how splits introduce stats estimates.
-		// This computation can be expensive, so it's guarded by the
-		// EnableMVCCStatsRecomputationInSplit cluster setting.
-		if r.GetMVCCStats().ContainsEstimates > 0 &&
-			EnableMVCCStatsRecomputationInSplit.Get(&r.store.ClusterSettings().SV) {
-			req := kvpb.RecomputeStatsRequest{
-				RequestHeader: kvpb.RequestHeader{Key: desc.StartKey.AsRawKey()},
-			}
-			var ba kv.Batch
-			ba.AddRawRequest(&req)
-			if err = r.store.DB().Run(ctx, &ba); err != nil {
-				// An error here is most likely because a descriptor mismatch was
-				// detected in cmd_recompute_stats. Unfortunately, that error is
-				// different from the descriptor-changed errors handled here in
-				// replica_command; the latter present as ConditionFailedError. We log
-				// the error here, and let the code below handle the descriptor-changed
-				// error coming from splitTxnAttempt.
-				if errors.Is(err, batcheval.RecomputeStatsMismatchError) {
-					log.Warningf(ctx, "failed to re-compute MVCCStats pre split: %v", err)
-				} else {
-					return reply, errors.Wrapf(err, "failed to re-compute MVCCStats pre split")
-				}
-			}
-		}
-
-		// The LHS user-only stats will be used in splitTrigger to estimate the total
-		// post-split LHS stats by combining these stats with the non-user stats
-		// computed in splitTrigger. More details in makeEstimatedSplitStatsHelper.
-		userOnlyLeftStats, err = rditer.ComputeStatsForRangeUserOnly(
-			ctx, leftDesc, r.store.TODOEngine(), r.store.Clock().NowAsClockTimestamp().WallTime)
-		if err != nil {
-			return reply, errors.Wrapf(err, "unable to compute user-only pre-split stats for LHS range")
-		}
-
-		// The total stats will be used in splitTrigger to potentially fall back to
-		// accurate-stats computation, if the pre-split total stats here vary too
-		// much from the total stats at the time of the split (in splitTrigger).
-		totalStats = r.GetMVCCStats()
-	}
-
 	if err := r.store.DB().Txn(ctx, func(ctx context.Context, txn *kv.Txn) error {
-		return splitTxnAttempt(ctx, r.store, txn, leftDesc, rightDesc, desc, reason, userOnlyLeftStats, totalStats, useEstimatedStatsForExternalBytes)
+		return splitTxnAttempt(ctx, r.store, txn, rightRangeID, splitKey, args.ExpirationTime, desc, reason)
 	}); err != nil {
 		// The ConditionFailedError can occur because the descriptors acting
 		// as expected values in the CPuts used to update the left or right
@@ -614,20 +494,10 @@ func (r *Replica) adminUnsplitWithDescriptor(
 		newDesc.StickyBit = hlc.Timestamp{}
 		descKey := keys.RangeDescriptorKey(newDesc.StartKey)
 
-		{
-			b := txn.NewBatch()
-			if err := updateRangeDescriptor(b, descKey, dbDescValue, &newDesc); err != nil {
-				return err
-			}
-			// Run this batch first to ensure that the transaction record is
-			// created in the right place. The sticky bit trigger relies on
-			// this.
-			if err := txn.Run(ctx, b); err != nil {
-				return err
-			}
-		}
-
 		b := txn.NewBatch()
+		if err := updateRangeDescriptor(b, descKey, dbDescValue, &newDesc); err != nil {
+			return err
+		}
 		if err := updateRangeAddressing(b, &newDesc); err != nil {
 			return err
 		}
@@ -719,7 +589,7 @@ func (r *Replica) executeAdminCommandWithDescriptor(
 // The supplied RangeDescriptor is used as a form of optimistic lock. See the
 // comment of "AdminSplit" for more information on this pattern.
 func (r *Replica) AdminMerge(
-	ctx context.Context, args kvpb.AdminMergeRequest, reason redact.RedactableString,
+	ctx context.Context, args kvpb.AdminMergeRequest, reason string,
 ) (kvpb.AdminMergeResponse, *kvpb.Error) {
 	var reply kvpb.AdminMergeResponse
 
@@ -882,48 +752,12 @@ func (r *Replica) AdminMerge(
 		// Intents have been placed, so the merge is now in its critical phase. Get
 		// a consistent view of the data from the right-hand range. If the merge
 		// commits, we'll write this data to the left-hand range in the merge
-		// trigger. This consistent view is dependent on two things (a) the
-		// SubsumeRequest is evaluated at a leaseholder that is at least as recent
-		// as the leaseholder that evaluated the deletion intent placed on the RHS
-		// RangeDescriptor, (b) the SubsumeRequest freezes the range for new reads
-		// and writes at the leaseholder, and freezes the closed timestamp so
-		// follower reads cannot occur at a timestamp beyond what is accounted for
-		// in SubsumeResponse.ClosedTimestamp (see batcheval.Subsume for more
-		// details).
-		//
-		// When SubsumeRequest does a write (on newer cluster versions), (a) is
-		// guaranteed by the fact that this request needs to be replicated and so
-		// cannot be successfully processed by a stale leaseholder (due to the
-		// protection in RaftCommand.ProposerLeaseSequence). When SubsumeRequest
-		// is a read, it may seem that (a) is not guaranteed since the request
-		// below is sent outside the txn, and does not set a timestamp, so could
-		// be assigned a timestamp lower than the txn timestamp, and routed to an
-		// older leaseholder. The reason this doesn't happen is subtle:
-		// - Say the txn (whose txn coordinator is this node) got assigned a
-		//   timestamp t1.
-		// - The intent put went to the RHS leaseholder which was ahead, at
-		//   timestamp t2. The response to the intent put will bump up the local
-		//   hlc.Timestamp to t2.
-		// - This SubsumeRequest does not set kvpb.Header.Timestamp, but it will
-		//   include in kvpb.Header.Now a value that is >= t2. When this request
-		//   is received by an old leaseholder (the aforementioned hazard), the
-		//   old leaseholder will bump its hlc.Clock to >= t2 and stop being the
-		//   leaseholder, and reject the request. The request will get eventually
-		//   (successfully) retried at a leaseholder that has the lease at
-		//   timestamp >= t2.
-		//
-		// This must be a single request in a BatchRequest: there are multiple
-		// places that do special logic (needed for safety) that rely on
-		// BatchRequest.IsSingleSubsumeRequest() returning true.
-		shouldPreserveLocks := concurrency.UnreplicatedLockReliabilityMerge.Get(&r.ClusterSettings().SV)
+		// trigger.
 		br, pErr := kv.SendWrapped(ctx, r.store.DB().NonTransactionalSender(),
 			&kvpb.SubsumeRequest{
-				RequestHeader: kvpb.RequestHeader{
-					Key: rightDesc.StartKey.AsRawKey(),
-				},
-				PreserveUnreplicatedLocks: shouldPreserveLocks,
-				LeftDesc:                  *origLeftDesc,
-				RightDesc:                 rightDesc,
+				RequestHeader: kvpb.RequestHeader{Key: rightDesc.StartKey.AsRawKey()},
+				LeftDesc:      *origLeftDesc,
+				RightDesc:     rightDesc,
 			})
 		if pErr != nil {
 			return pErr.GoError()
@@ -980,38 +814,24 @@ func (r *Replica) AdminMerge(
 	// is finicky and only allows disabling pipelining before any operations have
 	// been sent, even in prior epochs. Calling DisablePipelining() on a restarted
 	// transaction yields an error.
-	for attempt := 1; ; attempt++ {
+	for {
 		txn := kv.NewTxn(ctx, r.store.DB(), r.NodeID())
 		err := runMergeTxn(txn)
 		if err != nil {
-			if attempt < 3 {
-				log.VEventf(ctx, 2, "merge txn failed: %s", err)
-			} else {
-				log.Warningf(ctx, "merge txn failed (attempt %d): %s", attempt, err)
-			}
+			log.VEventf(ctx, 2, "merge txn failed: %s", err)
 			if rollbackErr := txn.Rollback(ctx); rollbackErr != nil {
 				log.VEventf(ctx, 2, "merge txn rollback failed: %s", rollbackErr)
 			}
 		}
 		if !errors.HasType(err, (*kvpb.TransactionRetryWithProtoRefreshError)(nil)) {
 			if err != nil {
-				return reply, kvpb.NewError(errors.Wrap(err, "merge failed"))
+				return reply, kvpb.NewErrorf("merge failed: %s", err)
 			}
 			return reply, nil
 		}
 	}
 }
 
-// waitForApplication is waiting for application at all replicas (voters or
-// non-voters). This is an outlier in that the system is typically expected to
-// function with only a quorum of voters being available. So it should be used
-// extremely sparingly.
-//
-// IMPORTANT: if adding a call to this method, ensure that whatever command is
-// needing this behavior sets
-// ReplicatedEvalResult.DoTimelyApplicationToAllReplicas. That ensures that
-// replication flow control will not arbitrarily delay application on a
-// replica by maintaining a non-empty send-queue.
 func waitForApplication(
 	ctx context.Context,
 	dialer *nodedialer.Dialer,
@@ -1183,6 +1003,7 @@ func (r *Replica) WaitForLeaseAppliedIndex(
 func (r *Replica) ChangeReplicas(
 	ctx context.Context,
 	desc *roachpb.RangeDescriptor,
+	priority kvserverpb.SnapshotRequest_Priority,
 	reason kvserverpb.RangeLogEventReason,
 	details string,
 	chgs kvpb.ReplicationChanges,
@@ -1206,12 +1027,13 @@ func (r *Replica) ChangeReplicas(
 			return nil, errors.New("must disable replicate queue to use ChangeReplicas manually")
 		}
 	}
-	return r.changeReplicasImpl(ctx, desc, kvserverpb.SnapshotRequest_OTHER, 0.0, reason, details, chgs)
+	return r.changeReplicasImpl(ctx, desc, priority, kvserverpb.SnapshotRequest_OTHER, 0.0, reason, details, chgs)
 }
 
 func (r *Replica) changeReplicasImpl(
 	ctx context.Context,
 	desc *roachpb.RangeDescriptor,
+	priority kvserverpb.SnapshotRequest_Priority,
 	senderName kvserverpb.SnapshotRequest_QueueName,
 	senderQueuePriority float64,
 	reason kvserverpb.RangeLogEventReason,
@@ -1280,7 +1102,7 @@ func (r *Replica) changeReplicasImpl(
 		_ = roachpb.ReplicaSet.LearnerDescriptors
 		var err error
 		desc, err = r.initializeRaftLearners(
-			ctx, desc, senderName, senderQueuePriority, reason, details, adds, roachpb.LEARNER,
+			ctx, desc, priority, senderName, senderQueuePriority, reason, details, adds, roachpb.LEARNER,
 		)
 		if err != nil {
 			return nil, err
@@ -1326,7 +1148,7 @@ func (r *Replica) changeReplicasImpl(
 		// disruption to foreground traffic. See
 		// https://github.com/cockroachdb/cockroach/issues/63199 for an example.
 		desc, err = r.initializeRaftLearners(
-			ctx, desc, senderName, senderQueuePriority, reason, details, adds, roachpb.NON_VOTER,
+			ctx, desc, priority, senderName, senderQueuePriority, reason, details, adds, roachpb.NON_VOTER,
 		)
 		if err != nil {
 			return nil, err
@@ -1893,6 +1715,7 @@ func getChangesByNodeID(chgs kvpb.ReplicationChanges) changesByNodeID {
 func (r *Replica) initializeRaftLearners(
 	ctx context.Context,
 	desc *roachpb.RangeDescriptor,
+	priority kvserverpb.SnapshotRequest_Priority,
 	senderName kvserverpb.SnapshotRequest_QueueName,
 	senderQueuePriority float64,
 	reason kvserverpb.RangeLogEventReason,
@@ -2041,7 +1864,9 @@ func (r *Replica) initializeRaftLearners(
 		// orphaned learner. Second, this tickled some bugs in etcd/raft around
 		// switching between StateSnapshot and StateProbe. Even if we worked through
 		// these, it would be susceptible to future similar issues.
-		if err := r.sendSnapshotUsingDelegate(ctx, rDesc, senderName, senderQueuePriority); err != nil {
+		if err := r.sendSnapshotUsingDelegate(
+			ctx, rDesc, kvserverpb.SnapshotRequest_INITIAL, priority, senderName, senderQueuePriority,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -2308,16 +2133,27 @@ func prepareChangeReplicasTrigger(
 				}
 				added = append(added, rDesc)
 			case internalChangeTypeRemoveLearner, internalChangeTypeRemoveNonVoter:
-				rDesc, ok := updatedDesc.RemoveReplica(chg.target.NodeID, chg.target.StoreID)
+				rDesc, ok := updatedDesc.GetReplicaDescriptor(chg.target.StoreID)
 				if !ok {
-					return nil, errors.Errorf("target %v not found", chg.target)
+					return nil, errors.Errorf("target %s not found", chg.target)
 				}
-				if prevTyp := rDesc.Type; prevTyp != roachpb.LEARNER && prevTyp != roachpb.NON_VOTER {
-					return nil, errors.Errorf("cannot remove %s target %v, not a LEARNER or NON_VOTER",
-						prevTyp, chg.target)
+				prevTyp := rDesc.Type
+				isRaftLearner := prevTyp == roachpb.LEARNER || prevTyp == roachpb.NON_VOTER
+				if !useJoint || isRaftLearner {
+					rDesc, _ = updatedDesc.RemoveReplica(chg.target.NodeID, chg.target.StoreID)
+				} else if prevTyp != roachpb.VOTER_FULL {
+					// NB: prevTyp is already known to be VOTER_FULL because of
+					// !InAtomicReplicationChange() and the learner handling
+					// above. We check it anyway.
+					return nil, errors.AssertionFailedf("cannot transition from %s to VOTER_OUTGOING", prevTyp)
+				} else {
+					rDesc, _, _ = updatedDesc.SetReplicaType(chg.target.NodeID, chg.target.StoreID, roachpb.VOTER_OUTGOING)
 				}
 				removed = append(removed, rDesc)
 			case internalChangeTypeDemoteVoterToLearner:
+				// Demotion is similar to removal, except that a demotion
+				// cannot apply to a learner, and that the resulting type is
+				// different when entering a joint config.
 				rDesc, ok := updatedDesc.GetReplicaDescriptor(chg.target.StoreID)
 				if !ok {
 					return nil, errors.Errorf("target %s not found", chg.target)
@@ -2363,9 +2199,6 @@ func prepareChangeReplicasTrigger(
 				updatedDesc.SetReplicaType(rDesc.NodeID, rDesc.StoreID, roachpb.VOTER_FULL)
 				isJoint = true
 			case roachpb.VOTER_OUTGOING:
-				// Note: Replicas have not been given a VOTER_OUTGOING type since v20.1.
-				// However, we have not run the migration to remove existing replicas
-				// with the type from old clusters, so we retain this code. See #42251.
 				updatedDesc.RemoveReplica(rDesc.NodeID, rDesc.StoreID)
 				isJoint = true
 			case roachpb.VOTER_DEMOTING_LEARNER:
@@ -2740,6 +2573,12 @@ func (r *Replica) getSenderReplicas(
 		return nil, err
 	}
 
+	// Unless all nodes are on V23.1, don't delegate. This prevents sending to a
+	// node that doesn't understand the request.
+	if !r.store.ClusterSettings().Version.IsActive(ctx, clusterversion.V23_1) {
+		return []roachpb.ReplicaDescriptor{coordinator}, nil
+	}
+
 	// Check follower snapshots, if zero just self-delegate.
 	numFollowers := int(NumDelegateLimit.Get(&r.ClusterSettings().SV))
 	if numFollowers == 0 {
@@ -2925,7 +2764,7 @@ func (r *Replica) getSenderReplicas(
 // there is either an initialized[2] replica or a `ReplicaPlaceholder`[3] to
 // accept the snapshot by creating a placeholder if necessary. Finally, a *Raft
 // snapshot* message is manually handed to the replica's Raft node (by calling
-// `stepRaftGroupRaftMuLocked` + `handleRaftReadyRaftMuLocked`). During the application
+// `stepRaftGroup` + `handleRaftReadyRaftMuLocked`). During the application
 // process, several other SSTs may be created for direct ingestion. An SST for
 // the unreplicated range-ID local keys is created for the Raft entries, hard
 // state, and truncated state. An SST is created for deleting each subsumed
@@ -2955,6 +2794,8 @@ func (r *Replica) getSenderReplicas(
 func (r *Replica) sendSnapshotUsingDelegate(
 	ctx context.Context,
 	recipient roachpb.ReplicaDescriptor,
+	snapType kvserverpb.SnapshotRequest_Type,
+	priority kvserverpb.SnapshotRequest_Priority,
 	senderQueueName kvserverpb.SnapshotRequest_QueueName,
 	senderQueuePriority float64,
 ) (retErr error) {
@@ -2985,11 +2826,12 @@ func (r *Replica) sendSnapshotUsingDelegate(
 		)
 	}
 
-	status := r.RaftBasicStatus()
-	if status.Empty() {
-		// This code path is sometimes hit during scatter for replicas that haven't
-		// woken up yet.
-		return benignerror.New(errors.Wrap(errMarkSnapshotError, "raft status not initialized"))
+	status := r.RaftStatus()
+	if status == nil {
+		// This code path is sometimes hit during scatter for replicas that
+		// haven't woken up yet.
+		retErr = benignerror.New(errors.Wrap(errMarkSnapshotError, "raft status not initialized"))
+		return
 	}
 
 	snapUUID := uuid.MakeV4()
@@ -3010,8 +2852,10 @@ func (r *Replica) sendSnapshotUsingDelegate(
 		RangeID:              r.RangeID,
 		CoordinatorReplica:   sender,
 		RecipientReplica:     recipient,
+		DeprecatedPriority:   priority,
 		SenderQueueName:      senderQueueName,
 		SenderQueuePriority:  senderQueuePriority,
+		DeprecatedType:       snapType,
 		Term:                 kvpb.RaftTerm(status.Term),
 		DelegatedSender:      sender,
 		FirstIndex:           appliedIndex,
@@ -3143,13 +2987,13 @@ func (r *Replica) validateSnapshotDelegationRequest(
 	// is not too far behind the leaseholder. If the delegate is too far behind
 	// that is also needs a snapshot, then any snapshot it sends will be useless.
 	r.mu.RLock()
-	replIdx := r.shMu.state.RaftAppliedIndex + 1
-	status := r.raftBasicStatusRLocked()
+	replIdx := r.mu.state.RaftAppliedIndex + 1
+	status := r.raftStatusRLocked()
 	r.mu.RUnlock()
 
-	if status.Empty() {
-		// This code path is sometimes hit during scatter for replicas that haven't
-		// woken up yet.
+	if status == nil {
+		// This code path is sometimes hit during scatter for replicas that
+		// haven't woken up yet.
 		return errors.Errorf("raft status not initialized")
 	}
 	replTerm := kvpb.RaftTerm(status.Term)
@@ -3237,12 +3081,6 @@ var traceSnapshotThreshold = settings.RegisterDurationSetting(
 		"trace logged (set to 0 to disable);", 0,
 )
 
-var externalFileSnapshotting = settings.RegisterBoolSetting(
-	settings.SystemOnly,
-	"kv.snapshot.external_files.enabled",
-	"enables sending external files as metadata during a snapshot",
-	false)
-
 // followerSendSnapshot receives a delegate snapshot request and generates the
 // snapshot from this replica. The entire process of generating and transmitting
 // the snapshot is handled, and errors are propagated back to the leaseholder.
@@ -3304,6 +3142,16 @@ func (r *Replica) followerSendSnapshot(
 	defer snap.Close()
 	log.Event(ctx, "generated snapshot")
 
+	// We avoid shipping over the past Raft log in the snapshot by changing the
+	// truncated state (we're allowed to -- it's an unreplicated key and not
+	// subject to mapping across replicas). The actual sending happens in
+	// kvBatchSnapshotStrategy.Send and results in no log entries being sent at
+	// all. Note that Metadata.Index is really the applied index of the replica.
+	snap.State.TruncatedState = &kvserverpb.RaftTruncatedState{
+		Index: kvpb.RaftIndex(snap.RaftSnap.Metadata.Index),
+		Term:  kvpb.RaftTerm(snap.RaftSnap.Metadata.Term),
+	}
+
 	// See comment on DeprecatedUsingAppliedStateKey for why we need to set this
 	// explicitly for snapshots going out to followers.
 	snap.State.DeprecatedUsingAppliedStateKey = true
@@ -3312,48 +3160,31 @@ func (r *Replica) followerSendSnapshot(
 	// a snapshot for a non-system range. This allows us to send metadata of
 	// sstables in shared storage as opposed to streaming their contents. Keys
 	// in higher levels of the LSM are still streamed in the snapshot.
-	nonSystemRange := snap.State.Desc.StartKey.AsRawKey().Compare(keys.TableDataMin) >= 0
-	sharedReplicate := r.store.cfg.SharedStorageEnabled && nonSystemRange
-
-	// Use external replication if we aren't using shared
-	// replication, are dealing with a non-system range, are on at
-	// least 24.1, and our store has external files.
-	externalReplicate := !sharedReplicate && nonSystemRange &&
-		externalFileSnapshotting.Get(&r.store.ClusterSettings().SV)
-	if externalReplicate {
-		start := snap.State.Desc.StartKey.AsRawKey()
-		end := snap.State.Desc.EndKey.AsRawKey()
-		total, _, external, err := r.store.StateEngine().ApproximateDiskBytes(start, end)
-		if err != nil {
-			log.Warningf(ctx, "could not determine if store has external bytes: %v", err)
-			externalReplicate = false
-		}
-
-		// Enable ExternalReplicate only if we have more
-		// external bytes than local bytes.
-		externalReplicate = external > (total - external)
-	}
+	sharedReplicate := r.store.cfg.SharedStorageEnabled && snap.State.Desc.StartKey.AsRawKey().Compare(keys.TableDataMin) >= 0
 
 	// Create new snapshot request header using the delegate snapshot request.
 	header := kvserverpb.SnapshotRequest_Header{
-		State: snap.State,
+		State:                                snap.State,
+		DeprecatedUnreplicatedTruncatedState: true,
 		RaftMessageRequest: kvserverpb.RaftMessageRequest{
 			RangeID:     req.RangeID,
 			FromReplica: req.CoordinatorReplica,
 			ToReplica:   req.RecipientReplica,
 			Message: raftpb.Message{
 				Type:     raftpb.MsgSnap,
-				From:     raftpb.PeerID(req.CoordinatorReplica.ReplicaID),
-				To:       raftpb.PeerID(req.RecipientReplica.ReplicaID),
+				From:     uint64(req.CoordinatorReplica.ReplicaID),
+				To:       uint64(req.RecipientReplica.ReplicaID),
 				Term:     uint64(req.Term),
 				Snapshot: &snap.RaftSnap,
 			},
 		},
 		RangeSize:           rangeSize,
+		DeprecatedPriority:  req.DeprecatedPriority,
 		SenderQueueName:     req.SenderQueueName,
 		SenderQueuePriority: req.SenderQueuePriority,
+		DeprecatedStrategy:  kvserverpb.SnapshotRequest_KV_BATCH,
+		DeprecatedType:      req.DeprecatedType,
 		SharedReplicate:     sharedReplicate,
-		ExternalReplicate:   externalReplicate,
 		RangeKeysInOrder:    true,
 	}
 	newBatchFn := func() storage.WriteBatch {
@@ -3362,7 +3193,7 @@ func (r *Replica) followerSendSnapshot(
 	sent := func() {
 		r.store.metrics.RangeSnapshotsGenerated.Inc(1)
 	}
-	comparisonResult := r.store.getLocalityComparison(req.CoordinatorReplica.NodeID,
+	comparisonResult := r.store.getLocalityComparison(ctx, req.CoordinatorReplica.NodeID,
 		req.RecipientReplica.NodeID)
 
 	recordBytesSent := func(inc int64) {
@@ -3388,7 +3219,7 @@ func (r *Replica) followerSendSnapshot(
 			// it is used for rebalance.
 			// See AllocatorAction.Priority
 			if header.SenderQueuePriority > 0 {
-				r.store.metrics.RangeSnapshotUpreplicationSentBytes.Inc(inc)
+				r.store.metrics.RangeSnapshotRecoverySentBytes.Inc(inc)
 			} else {
 				r.store.metrics.RangeSnapshotRebalancingSentBytes.Inc(inc)
 			}
@@ -3752,9 +3583,9 @@ type RelocateOneOptions interface {
 	Allocator() allocatorimpl.Allocator
 	// StorePool returns the store's configured store pool.
 	StorePool() storepool.AllocatorStorePool
-	// LoadSpanConfig loads the span configuration for the range with start key.
-	LoadSpanConfig(ctx context.Context, startKey roachpb.RKey) (*roachpb.SpanConfig, error)
-	// Leaseholder returns the descriptor of the replica which holds the lease
+	// SpanConfig returns the span configuration for the range with start key.
+	SpanConfig(ctx context.Context, startKey roachpb.RKey) (*roachpb.SpanConfig, error)
+	// LeaseHolder returns the descriptor of the replica which holds the lease
 	// on the range with start key.
 	Leaseholder(ctx context.Context, startKey roachpb.RKey) (roachpb.ReplicaDescriptor, error)
 }
@@ -3773,15 +3604,15 @@ func (roo *replicaRelocateOneOptions) StorePool() storepool.AllocatorStorePool {
 	return roo.store.cfg.StorePool
 }
 
-// LoadSpanConfig loads the span configuration for the range with start key.
-func (roo *replicaRelocateOneOptions) LoadSpanConfig(
+// SpanConfig returns the span configuration for the range with start key.
+func (roo *replicaRelocateOneOptions) SpanConfig(
 	ctx context.Context, startKey roachpb.RKey,
 ) (*roachpb.SpanConfig, error) {
 	confReader, err := roo.store.GetConfReader(ctx)
 	if err != nil {
 		return nil, errors.Wrap(err, "can't relocate range")
 	}
-	conf, _, err := confReader.GetSpanConfigForKey(ctx, startKey)
+	conf, err := confReader.GetSpanConfigForKey(ctx, startKey)
 	if err != nil {
 		return nil, err
 	}
@@ -3825,7 +3656,7 @@ func RelocateOne(
 	allocator := options.Allocator()
 	storePool := options.StorePool()
 
-	conf, err := options.LoadSpanConfig(ctx, desc.StartKey)
+	conf, err := options.SpanConfig(ctx, desc.StartKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -3998,16 +3829,13 @@ func RelocateOne(
 					[]roachpb.ReplicaDescriptor(nil),
 					existingVoters[:len(existingVoters)-added]...,
 				)
-				slices.SortStableFunc(sortedTargetReplicas, func(a, b roachpb.ReplicaDescriptor) int {
-					// finalRelocationTargets[0] goes to the front (if it's present).
-					front := args.finalRelocationTargets()[0].StoreID
-					if a.StoreID == front {
-						return -1
-					} else if b.StoreID == front {
-						return +1
-					}
-					return 0
-				})
+				sort.Slice(
+					sortedTargetReplicas, func(i, j int) bool {
+						sl := sortedTargetReplicas
+						// finalRelocationTargets[0] goes to the front (if it's present).
+						return sl[i].StoreID == args.finalRelocationTargets()[0].StoreID
+					},
+				)
 				for _, rDesc := range sortedTargetReplicas {
 					if rDesc.StoreID != curLeaseholder.StoreID {
 						transferTarget = &roachpb.ReplicationTarget{
@@ -4186,26 +4014,28 @@ func (r *Replica) adminScatter(
 	}
 
 	// Loop until we hit an error or until we hit `maxAttempts` for the range.
+	// Note that we disable lease transfers until the final step as transferring
+	// the lease prevents any further action on this node.
+	var allowLeaseTransfer bool
+	var err error
+	requeue := true
+	canTransferLease := func(ctx context.Context, repl plan.LeaseCheckReplica, conf *roachpb.SpanConfig) bool {
+		return allowLeaseTransfer
+	}
 	for re := retry.StartWithCtx(ctx, retryOpts); re.Next(); {
 		if currentAttempt == maxAttempts {
 			break
 		}
-		desc, conf := r.DescAndSpanConfig()
-		_, err := rq.replicaCanBeProcessed(ctx, r, false /* acquireLeaseIfNeeded */)
-		if err != nil {
-			// The replica can not be processed, so skip it.
-			break
+		if currentAttempt == maxAttempts-1 || !requeue {
+			allowLeaseTransfer = true
 		}
-		_, err = rq.processOneChange(
-			ctx, r, desc, conf, true /* scatter */, false, /* dryRun */
+		desc, conf := r.DescAndSpanConfig()
+		requeue, err = rq.processOneChange(
+			ctx, r, desc, conf, canTransferLease, true /* scatter */, false, /* dryRun */
 		)
 		if err != nil {
-			// If the error is expected to be transient, retry processing the range.
-			// This is most likely to occur when concurrent split and scatters are
-			// issued, in which case the scatter may fail due to the range split
-			// updating the descriptor while processing.
-			if IsRetriableReplicationChangeError(err) {
-				log.VEventf(ctx, 1, "retrying scatter process after retryable error: %v", err)
+			// TODO(tbg): can this use IsRetriableReplicationError?
+			if isSnapshotError(err) {
 				continue
 			}
 			break
@@ -4226,14 +4056,9 @@ func (r *Replica) adminScatter(
 			newLeaseholderIdx := rand.Intn(len(potentialLeaseTargets))
 			targetStoreID := potentialLeaseTargets[newLeaseholderIdx].StoreID
 			if targetStoreID != r.store.StoreID() {
-				if tokenErr := r.allocatorToken.TryAcquire(ctx, "scatter"); tokenErr != nil {
-					log.Warningf(ctx, "failed to scatter lease to s%d: %+v", targetStoreID, tokenErr)
-				} else {
-					defer r.allocatorToken.Release(ctx)
-					log.VEventf(ctx, 2, "randomly transferring lease to s%d", targetStoreID)
-					if err := r.AdminTransferLease(ctx, targetStoreID, false /* bypassSafetyChecks */); err != nil {
-						log.Warningf(ctx, "failed to scatter lease to s%d: %+v", targetStoreID, err)
-					}
+				log.VEventf(ctx, 2, "randomly transferring lease to s%d", targetStoreID)
+				if err := r.AdminTransferLease(ctx, targetStoreID, false /* bypassSafetyChecks */); err != nil {
+					log.Warningf(ctx, "failed to scatter lease to s%d: %+v", targetStoreID, err)
 				}
 			}
 		}

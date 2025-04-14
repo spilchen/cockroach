@@ -14,9 +14,9 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/sql"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/persistedsqlstats"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/testcluster"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
@@ -28,8 +28,6 @@ import (
 func TestPersistedSQLStatsReset(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
-
-	skip.UnderStress(t, "the test is too slow to run under stress")
 
 	ctx := context.Background()
 	cluster := serverutils.StartCluster(t, 3 /* numNodes */, base.TestClusterArgs{})
@@ -68,7 +66,7 @@ func TestPersistedSQLStatsReset(t *testing.T) {
 	}
 
 	sqlStats := server.SQLServer().(*sql.Server).GetSQLStatsProvider()
-	sqlStats.MaybeFlush(ctx, cluster.ApplicationLayer(0).AppStopper())
+	sqlStats.(*persistedsqlstats.PersistedSQLStats).Flush(ctx)
 
 	checkInsertedStmtStatsAndUpdateFingerprintIDs(t, appName, observer, expectedStmtFingerprintToFingerprintID)
 	checkInsertedTxnStats(t, appName, observer, expectedStmtFingerprintToFingerprintID)
