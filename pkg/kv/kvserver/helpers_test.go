@@ -32,7 +32,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/rangefeed"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/rditer"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/split"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/storeliveness"
 	"github.com/cockroachdb/cockroach/pkg/raft"
 	"github.com/cockroachdb/cockroach/pkg/raft/raftpb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -53,10 +52,6 @@ import (
 
 func (s *Store) Transport() *RaftTransport {
 	return s.cfg.Transport
-}
-
-func (s *Store) StoreLivenessTransport() *storeliveness.Transport {
-	return s.cfg.StoreLiveness.Transport
 }
 
 func (s *Store) FindTargetAndTransferLease(
@@ -599,7 +594,7 @@ func (r *Replica) ReadCachedProtectedTS() (readAt, earliestProtectionTimestamp h
 func (r *Replica) ClosedTimestampPolicy() roachpb.RangeClosedTimestampPolicy {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return toClientClosedTsPolicy(r.closedTimestampPolicyRLocked())
+	return r.closedTimestampPolicyRLocked()
 }
 
 // TripBreaker synchronously trips the breaker.
@@ -695,21 +690,4 @@ func NewRangefeedTxnPusher(
 		r:    r,
 		span: span,
 	}
-}
-
-// SupportFromEnabled exports (replicaRLockedStoreLiveness).SupportFromEnabled
-// for testing purposes.
-func (r *Replica) SupportFromEnabled() bool {
-	return (*replicaRLockedStoreLiveness)(r).SupportFromEnabled()
-}
-
-// RaftFortificationEnabledForRangeID exports raftFortificationEnabledForRangeID
-// for use in tests.
-func RaftFortificationEnabledForRangeID(fracEnabled float64, rangeID roachpb.RangeID) bool {
-	return raftFortificationEnabledForRangeID(fracEnabled, rangeID)
-}
-
-// ProcessTick exports processTick for use in tests.
-func (s *Store) ProcessTick(ctx context.Context, rangeID roachpb.RangeID) {
-	s.processTick(ctx, rangeID)
 }

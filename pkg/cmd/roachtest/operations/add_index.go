@@ -12,20 +12,14 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/operation"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/operations/helpers"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestflags"
-	"github.com/cockroachdb/cockroach/pkg/sql/randgen"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
-	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
-	"github.com/lib/pq/oid"
 )
 
 type cleanupAddedIndex struct {
 	db, table, index string
-	locked           bool
 }
 
 func (cl *cleanupAddedIndex) Cleanup(
@@ -34,10 +28,6 @@ func (cl *cleanupAddedIndex) Cleanup(
 	conn := c.Conn(ctx, o.L(), 1, option.VirtualClusterName(roachtestflags.VirtualCluster))
 	defer conn.Close()
 
-	if cl.locked {
-		helpers.SetSchemaLocked(ctx, o, conn, cl.db, cl.table, false /* lock */)
-		defer helpers.SetSchemaLocked(ctx, o, conn, cl.db, cl.table, true /* lock */)
-	}
 	o.Status(fmt.Sprintf("dropping index %s", cl.index))
 	_, err := conn.ExecContext(ctx, fmt.Sprintf("DROP INDEX %s.%s@%s", cl.db, cl.table, cl.index))
 	if err != nil {
@@ -52,22 +42,9 @@ func runAddIndex(
 	defer conn.Close()
 
 	rng, _ := randutil.NewPseudoRand()
-	dbName := helpers.PickRandomDB(ctx, o, conn, helpers.SystemDBs)
-	tableName := helpers.PickRandomTable(ctx, o, conn, dbName)
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE %s", dbName)); err != nil {
-		o.Fatal(err)
-	}
-
-	rows, err := conn.QueryContext(ctx, fmt.Sprintf(
-		`
-SELECT
-	attname, atttypid
-FROM
-	pg_catalog.pg_attribute
-WHERE
-	attrelid = '%s.%s'::REGCLASS::OID;
-`,
-		dbName, tableName))
+	dbName := pickRandomDB(ctx, o, conn, systemDBs)
+	tableName := pickRandomTable(ctx, o, conn, dbName)
+	rows, err := conn.QueryContext(ctx, fmt.Sprintf("SELECT column_name FROM [SHOW COLUMNS FROM %s.%s]", dbName, tableName))
 	if err != nil {
 		o.Fatal(err)
 	}
@@ -77,50 +54,23 @@ WHERE
 		return nil
 	}
 	var colName string
-	var colType oid.Oid
-	if err := rows.Scan(&colName, &colType); err != nil {
+	if err := rows.Scan(&colName); err != nil {
 		o.Fatal(err)
 	}
 
-	// If the table's schema is locked, then unlock the table and make sure it will
-	// be re-locked during cleanup.
-	// TODO(#129694): Remove schema unlocking/re-locking once automation is internalized.
-	locked := helpers.IsSchemaLocked(o, conn, dbName, tableName)
-	if locked {
-		helpers.SetSchemaLocked(ctx, o, conn, dbName, tableName, false /* lock */)
-		defer helpers.SetSchemaLocked(ctx, o, conn, dbName, tableName, true /* lock */)
-	}
-
-	predicateClause := ""
-	// If a types OID is known basic SQL type, we can optionally choose to make
-	// this a partial index.
-	if typ, exists := types.OidToType[colType]; exists {
-		randomValue := randgen.RandDatum(rng, typ, false)
-		predicates := []string{"<", ">", "<=", ">=", "=", "<>"}
-		predicate := predicates[rng.Intn(len(predicates))]
-		str := tree.AsStringWithFlags(randomValue, tree.FmtParsable)
-		// Use an RNG to determine if we want to add the final predicate,
-		// currently there is a 50% chance of making partial indexes.
-		if rng.Intn(2) != 0 {
-			predicateClause = fmt.Sprintf("WHERE (%s %s %s)", colName, predicate, str)
-		}
-	}
-
 	indexName := fmt.Sprintf("add_index_op_%d", rng.Uint32())
-	o.Status(fmt.Sprintf("adding index to column %s in table %s.%s %s", colName, dbName, tableName, predicateClause))
-	createIndexStmt := fmt.Sprintf("CREATE INDEX %s ON %s.%s (%s) %s", indexName, dbName, tableName, colName, predicateClause)
+	o.Status(fmt.Sprintf("adding index to column %s in table %s.%s", colName, dbName, tableName))
+	createIndexStmt := fmt.Sprintf("CREATE INDEX %s ON %s.%s (%s)", indexName, dbName, tableName, colName)
 	_, err = conn.ExecContext(ctx, createIndexStmt)
 	if err != nil {
 		o.Fatal(err)
 	}
 
 	o.Status(fmt.Sprintf("index %s created", indexName))
-
 	return &cleanupAddedIndex{
-		db:     dbName,
-		table:  tableName,
-		index:  indexName,
-		locked: locked,
+		db:    dbName,
+		table: tableName,
+		index: indexName,
 	}
 }
 

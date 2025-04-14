@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 
 	"github.com/cockroachdb/cockroach/pkg/util/metric"
-	"github.com/cockroachdb/errors"
 	"github.com/gogo/protobuf/proto"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 )
@@ -30,12 +29,12 @@ var _ metric.PrometheusExportable = (*AggCounter)(nil)
 // NewCounter constructs a new AggCounter.
 func NewCounter(metadata metric.Metadata, childLabels ...string) *AggCounter {
 	c := &AggCounter{g: *metric.NewCounter(metadata)}
-	c.initWithBTreeStorageType(childLabels)
+	c.init(childLabels)
 	return c
 }
 
 // GetName is part of the metric.Iterable interface.
-func (c *AggCounter) GetName(useStaticLabels bool) string { return c.g.GetName(useStaticLabels) }
+func (c *AggCounter) GetName() string { return c.g.GetName() }
 
 // GetHelp is part of the metric.Iterable interface.
 func (c *AggCounter) GetHelp() string { return c.g.GetHelp() }
@@ -58,8 +57,8 @@ func (c *AggCounter) GetType() *io_prometheus_client.MetricType {
 }
 
 // GetLabels is part of the metric.PrometheusExportable interface.
-func (c *AggCounter) GetLabels(useStaticLabels bool) []*io_prometheus_client.LabelPair {
-	return c.g.GetLabels(useStaticLabels)
+func (c *AggCounter) GetLabels() []*io_prometheus_client.LabelPair {
+	return c.g.GetLabels()
 }
 
 // ToPrometheusMetric is part of the metric.PrometheusExportable interface.
@@ -83,30 +82,7 @@ func (c *AggCounter) AddChild(labelVals ...string) *Counter {
 	return child
 }
 
-// Inc increments the counter value by i for the given label values. If a
-// counter with the given label values doesn't exist yet, it creates a new
-// counter and increments it. Panics if the number of label values doesn't
-// match the number of labels defined for this counter and if the storage type
-// is not StorageTypeCache.
-func (c *AggCounter) Inc(i int64, labelVals ...string) {
-	if len(c.labels) != len(labelVals) {
-		panic(errors.AssertionFailedf(
-			"cannot increment child with %d label values %v to a metric with %d labels %v",
-			len(labelVals), labelVals, len(c.labels), c.labels))
-	}
-
-	// If the child already exists, increment it.
-	if child, ok := c.get(labelVals...); ok {
-		child.(*Counter).Inc(i)
-		return
-	}
-
-	// Otherwise, create a new child and increment it.
-	child := c.AddChild(labelVals...)
-	child.Inc(i)
-}
-
-// RemoveChild removes a Gauge from this AggGauge. This method panics if a Gauge
+// RemoveChild removes a Counter from this AggCounter. This method panics if a Counter
 // does not exist for this set of labelVals.
 func (g *AggCounter) RemoveChild(labelVals ...string) {
 	key := &Counter{labelValuesSlice: labelValuesSlice(labelVals)}
@@ -169,12 +145,12 @@ var _ metric.PrometheusExportable = (*AggCounterFloat64)(nil)
 // NewCounterFloat64 constructs a new AggCounterFloat64.
 func NewCounterFloat64(metadata metric.Metadata, childLabels ...string) *AggCounterFloat64 {
 	c := &AggCounterFloat64{g: *metric.NewCounterFloat64(metadata)}
-	c.initWithBTreeStorageType(childLabels)
+	c.init(childLabels)
 	return c
 }
 
 // GetName is part of the metric.Iterable interface.
-func (c *AggCounterFloat64) GetName(useStaticLabels bool) string { return c.g.GetName(useStaticLabels) }
+func (c *AggCounterFloat64) GetName() string { return c.g.GetName() }
 
 // GetHelp is part of the metric.Iterable interface.
 func (c *AggCounterFloat64) GetHelp() string { return c.g.GetHelp() }
@@ -197,8 +173,8 @@ func (c *AggCounterFloat64) GetType() *io_prometheus_client.MetricType {
 }
 
 // GetLabels is part of the metric.PrometheusExportable interface.
-func (c *AggCounterFloat64) GetLabels(useStaticLabels bool) []*io_prometheus_client.LabelPair {
-	return c.g.GetLabels(useStaticLabels)
+func (c *AggCounterFloat64) GetLabels() []*io_prometheus_client.LabelPair {
+	return c.g.GetLabels()
 }
 
 // ToPrometheusMetric is part of the metric.PrometheusExportable interface.

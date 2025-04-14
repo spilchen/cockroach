@@ -439,21 +439,14 @@ func (p *Provider) computeVirtualMachineToVM(cvm compute.VirtualMachine) (*vm.VM
 	for key, value := range cvm.Tags {
 		tags[key] = *value
 	}
-	// cvm.ID is of the form "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}"
-	// which encodes the subscription id.
-	azureSubscription := ""
-	if *cvm.ID != "" {
-		azureSubscription = strings.Split(strings.TrimPrefix(*cvm.ID, "/subscriptions/"), "/")[0]
-	}
 
 	m := &vm.VM{
-		Name:              *cvm.Name,
-		Labels:            tags,
-		Provider:          ProviderName,
-		ProviderID:        *cvm.ID,
-		ProviderAccountID: azureSubscription,
-		RemoteUser:        remoteUser,
-		VPC:               "global",
+		Name:       *cvm.Name,
+		Labels:     tags,
+		Provider:   ProviderName,
+		ProviderID: *cvm.ID,
+		RemoteUser: remoteUser,
+		VPC:        "global",
 		// We add a fake availability-zone suffix since other roachprod
 		// code assumes particular formats. For example, "eastus2z".
 		Zone: *cvm.Location + "z",
@@ -812,14 +805,11 @@ func (p *Provider) createVM(
 	opts vm.CreateOpts,
 	providerOpts ProviderOpts,
 ) (machine compute.VirtualMachine, err error) {
-
 	startupArgs := azureStartupArgs{
-		StartupArgs: vm.DefaultStartupArgs(
-			vm.WithVMName(name),
-			vm.WithSharedUser(remoteUser),
-		),
-		DiskControllerNVMe: false,
-		AttachedDiskLun:    nil,
+		RemoteUser:           remoteUser,
+		DisksInitializedFile: vm.DisksInitializedFile,
+		OSInitializedFile:    vm.OSInitializedFile,
+		StartupLogs:          vm.StartupLogs,
 	}
 	useNVMe := MachineSupportsNVMe(providerOpts.MachineType)
 	if useNVMe {

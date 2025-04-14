@@ -20,7 +20,6 @@ import (
 var errEmptyColumnName = pgerror.New(pgcode.Syntax, "empty column name")
 
 type renameColumnNode struct {
-	zeroInputPlanNode
 	n         *tree.RenameColumn
 	tableDesc *tabledesc.Mutable
 }

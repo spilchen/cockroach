@@ -18,7 +18,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/raft"
 	"github.com/cockroachdb/cockroach/pkg/raft/raftpb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
-	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/util/admission/admissionpb"
 	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -114,11 +113,10 @@ type ACWorkQueue interface {
 }
 
 type rangeControllerInitState struct {
-	term            uint64
-	replicaSet      rac2.ReplicaSet
-	leaseholder     roachpb.ReplicaID
-	nextRaftIndex   uint64
-	forceFlushIndex uint64
+	term          uint64
+	replicaSet    rac2.ReplicaSet
+	leaseholder   roachpb.ReplicaID
+	nextRaftIndex uint64
 	// These fields are required options for the RangeController specific to the
 	// replica and range, rather than the store or node, so we pass them as part
 	// of the range controller init state.
@@ -204,56 +202,9 @@ type SideChannelInfoUsingRaftMessageRequest struct {
 // We *strongly* prefer methods to be called without holding Replica.mu, since
 // then the callee (implementation of Processor) does not need to worry about
 // (a) deadlocks, since it sometimes needs to lock Replica.mu itself, (b) the
-// amount of work it is doing under this critical section. There are four
+// amount of work it is doing under this critical section. There are three
 // exceptions to this, due to difficulty in changing the calling code:
-// InitRaftLocked, OnDescChangedLocked, ForceFlushIndexChangedLocked,
-// HoldsSendTokensLocked.
-//
-// Liveness and Ready processing:
-//
-// Processor.HandleRaftReadyRaftMuLocked is unconditionally called from
-// Replica.handleRaftReadyRaftMuLocked, and is critical for maintaining
-// liveness of RACv2 processing. Without such liveness, throughput and latency
-// of this range and other ranges can suffer (since many ranges share the same
-// token pool). These calls must not be conditional on the presence of a
-// Ready, for the following cases:
-//
-//   - Leadership change: Transitions into and out of leadership for this
-//     replica, and more broadly any change in the leader (the old and new
-//     leader can both be some other replica). This has been elaborated on in
-//     the paragraph above.
-//
-//   - At the leader, any transitions into and out of StateReplicate for any
-//     replica.
-//
-//   - Leaseholder change: This currently happens via code in
-//     Replica.handleRaftReadyRaftMuLocked, which also does all state machine
-//     application, noticing that state machine application has changed the
-//     leaseholder, and calling EnqueueRaftReady on the raftScheduler.
-//
-//   - RangeDescriptor change: RACv2 is only interested in the set of
-//     ReplicaDescriptors. Processor.OnDescChangedLocked calls EnqueueRaftReady
-//     on the raftScheduler.
-//
-//   - AdmittedLogEntry advancing what has been admitted: It explicitly
-//     schedules Ready processing by calling EnqueueRaftReady on the
-//     raftScheduler.
-//
-//   - ForceFlushIndexChangedLocked advancing what needs to be force-flushed:
-//     It explicitly schedules Ready processing by calling EnqueueRaftReady on
-//     the raftScheduler.
-//
-//   - ProbeToCloseTimerScheduler closing replicaSendStreams: It explicitly
-//     schedules Ready processing by calling EnqueueRaftReady on the
-//     raftScheduler.
-//
-// Liveness and Ticking (and quiescing):
-//
-// Processor.HoldsSendTokensLocked is used to prevent range quiescing at the
-// leader. While not quiesced, Processor.MaybeSendPingsRaftMuLocked, is used
-// to send pings to followers that are holding tokens when ticking the Raft
-// group. This ticking needs to happen even if there is no Ready to process at
-// the leader.
+// InitRaftLocked, OnDescChangedLocked, HoldsSendTokensLocked.
 type Processor interface {
 	// InitRaftLocked is called when raft.RawNode is initialized for the
 	// Replica. NB: can be called twice before the Replica is fully initialized.
@@ -294,14 +245,6 @@ type Processor interface {
 	// Both Replica.raftMu and Replica.mu are held.
 	OnDescChangedLocked(
 		ctx context.Context, desc *roachpb.RangeDescriptor, tenantID roachpb.TenantID)
-
-	// ForceFlushIndexChangedLocked sets the force flush index, i.e., the index
-	// (inclusive) up to which all replicas with a send-queue must be
-	// force-flushed in MsgAppPull mode. It may be rarely called with no change
-	// to the index.
-	//
-	// Both Replica.raftMu and Replica.mu are held.
-	ForceFlushIndexChangedLocked(ctx context.Context, index uint64)
 
 	// HandleRaftReadyRaftMuLocked corresponds to processing that happens when
 	// Replica.handleRaftReadyRaftMuLocked is called. It must be called even
@@ -409,15 +352,7 @@ type Processor interface {
 	// InspectRaftMuLocked returns a handle to inspect the state of the
 	// underlying range controller. It is used to power /inspectz-style debugging
 	// pages.
-	//
-	// raftMu is held.
 	InspectRaftMuLocked(ctx context.Context) (kvflowinspectpb.Handle, bool)
-	// StatusRaftMuLocked returns basic information about the underlying range
-	// controller and its send streams.
-	//
-	// raftMu is held.
-	StatusRaftMuLocked() serverpb.RACStatus
-
 	// SendStreamStats sets the stats for the replica send streams that belong to
 	// the range controller. It is only populated on the leader. The stats struct
 	// is provided by the caller and should be empty, it is then populated before
@@ -467,8 +402,6 @@ type processorImpl struct {
 	leaderStoreID roachpb.StoreID
 	// leaseholderID is the currently known leaseholder replica.
 	leaseholderID roachpb.ReplicaID
-
-	forceFlushIndex uint64
 
 	// State at a follower.
 	follower struct {
@@ -663,23 +596,6 @@ func (p *processorImpl) OnDescChangedLocked(
 	}
 }
 
-// ForceFlushIndexChangedLocked implements Processor.
-func (p *processorImpl) ForceFlushIndexChangedLocked(ctx context.Context, index uint64) {
-	p.opts.ReplicaMutexAsserter.RaftMuAssertHeld()
-	p.opts.ReplicaMutexAsserter.ReplicaMuAssertHeld()
-	if buildutil.CrdbTestBuild && p.forceFlushIndex > index {
-		panic(errors.AssertionFailedf("force-flush index decreased from %d to %d",
-			p.forceFlushIndex, index))
-	}
-	p.forceFlushIndex = index
-	if p.leader.rc != nil {
-		p.leader.rc.ForceFlushIndexChangedLocked(ctx, index)
-		// Schedule ready processing so that the RangeController can act on the
-		// change.
-		p.opts.RaftScheduler.EnqueueRaftReady(p.opts.RangeID)
-	}
-}
-
 // makeStateConsistentRaftMuLocked uses the union of the latest state
 // retrieved from RaftNode and the p.desc.replicas set to initialize or update
 // the internal state of processorImpl.
@@ -804,17 +720,16 @@ func (p *processorImpl) createLeaderStateRaftMuLocked(
 	}
 	p.term = term
 	rc := p.opts.RangeControllerFactory.New(ctx, rangeControllerInitState{
-		term:            term,
-		replicaSet:      p.desc.replicas,
-		leaseholder:     p.leaseholderID,
-		nextRaftIndex:   nextUnstableIndex,
-		forceFlushIndex: p.forceFlushIndex,
-		rangeID:         p.opts.RangeID,
-		tenantID:        p.desc.tenantID,
-		localReplicaID:  p.opts.ReplicaID,
-		raftInterface:   p.raftInterface,
-		msgAppSender:    p.opts.MsgAppSender,
-		muAsserter:      p.opts.ReplicaMutexAsserter,
+		term:           term,
+		replicaSet:     p.desc.replicas,
+		leaseholder:    p.leaseholderID,
+		nextRaftIndex:  nextUnstableIndex,
+		rangeID:        p.opts.RangeID,
+		tenantID:       p.desc.tenantID,
+		localReplicaID: p.opts.ReplicaID,
+		raftInterface:  p.raftInterface,
+		msgAppSender:   p.opts.MsgAppSender,
+		muAsserter:     p.opts.ReplicaMutexAsserter,
 	})
 
 	func() {
@@ -1242,15 +1157,6 @@ func (p *processorImpl) InspectRaftMuLocked(ctx context.Context) (kvflowinspectp
 	return p.leader.rc.InspectRaftMuLocked(ctx), true
 }
 
-// StatusRaftMuLocked implements Processor.
-func (p *processorImpl) StatusRaftMuLocked() serverpb.RACStatus {
-	p.opts.ReplicaMutexAsserter.RaftMuAssertHeld()
-	if p.leader.rc == nil {
-		return serverpb.RACStatus{}
-	}
-	return p.leader.rc.StatusRaftMuLocked()
-}
-
 // SendStreamStats implements Processor.
 func (p *processorImpl) SendStreamStats(stats *rac2.RangeSendStreamStats) {
 	p.leader.rcReferenceUpdateMu.RLock()
@@ -1275,7 +1181,6 @@ type RangeControllerFactoryImpl struct {
 	scheduler                  rac2.Scheduler
 	sendTokenWatcher           *rac2.SendTokenWatcher
 	waitForEvalConfig          *rac2.WaitForEvalConfig
-	raftMaxInflightBytes       uint64
 	knobs                      *kvflowcontrol.TestingKnobs
 }
 
@@ -1288,7 +1193,6 @@ func NewRangeControllerFactoryImpl(
 	scheduler rac2.Scheduler,
 	sendTokenWatcher *rac2.SendTokenWatcher,
 	waitForEvalConfig *rac2.WaitForEvalConfig,
-	raftMaxInflightBytes uint64,
 	knobs *kvflowcontrol.TestingKnobs,
 ) RangeControllerFactoryImpl {
 	return RangeControllerFactoryImpl{
@@ -1300,7 +1204,6 @@ func NewRangeControllerFactoryImpl(
 		scheduler:                  scheduler,
 		sendTokenWatcher:           sendTokenWatcher,
 		waitForEvalConfig:          waitForEvalConfig,
-		raftMaxInflightBytes:       raftMaxInflightBytes,
 		knobs:                      knobs,
 	}
 }
@@ -1325,16 +1228,14 @@ func (f RangeControllerFactoryImpl) New(
 			EvalWaitMetrics:        f.evalWaitMetrics,
 			RangeControllerMetrics: f.rangeControllerMetrics,
 			WaitForEvalConfig:      f.waitForEvalConfig,
-			RaftMaxInflightBytes:   f.raftMaxInflightBytes,
 			ReplicaMutexAsserter:   state.muAsserter,
 			Knobs:                  f.knobs,
 		},
 		rac2.RangeControllerInitState{
-			Term:            state.term,
-			ReplicaSet:      state.replicaSet,
-			Leaseholder:     state.leaseholder,
-			NextRaftIndex:   state.nextRaftIndex,
-			ForceFlushIndex: state.forceFlushIndex,
+			Term:          state.term,
+			ReplicaSet:    state.replicaSet,
+			Leaseholder:   state.leaseholder,
+			NextRaftIndex: state.nextRaftIndex,
 		},
 	)
 }

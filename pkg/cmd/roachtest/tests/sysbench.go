@@ -7,18 +7,14 @@ package tests
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachprod-microbench/util"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
@@ -27,12 +23,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	roachprodErrors "github.com/cockroachdb/cockroach/pkg/roachprod/errors"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
-	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 )
 
 type sysbenchWorkload int
@@ -61,12 +54,6 @@ var sysbenchWorkloadName = map[sysbenchWorkload]string{
 	oltpWriteOnly:      "oltp_write_only",
 }
 
-type extraSetup struct {
-	nameSuffix string
-	stmts      []string
-	useDRPC    bool
-}
-
 func (w sysbenchWorkload) String() string {
 	return sysbenchWorkloadName[w]
 }
@@ -79,7 +66,6 @@ type sysbenchOptions struct {
 	tables       int
 	rowsPerTable int
 	usePostgres  bool
-	extra        extraSetup // invoked before the workload starts
 }
 
 func (o *sysbenchOptions) cmd(haproxy bool) string {
@@ -154,24 +140,12 @@ func runSysbench(ctx context.Context, t test.Test, c cluster.Cluster, opts sysbe
 		}
 	} else {
 		t.Status("installing cockroach")
-		settings := install.MakeClusterSettings()
-		if opts.extra.useDRPC {
-			settings.Env = append(settings.Env, "COCKROACH_EXPERIMENTAL_DRPC_ENABLED=true")
-			t.L().Printf("extra setup to use DRPC")
-		}
-		c.Start(ctx, t.L(), option.NewStartOpts(option.NoBackupSchedule), settings, c.CRDBNodes())
+		c.Start(ctx, t.L(), option.DefaultStartOpts(), install.MakeClusterSettings(), c.CRDBNodes())
 		if len(c.CRDBNodes()) >= 3 {
 			err := roachtestutil.WaitFor3XReplication(ctx, t.L(), c.Conn(ctx, t.L(), 1))
 			require.NoError(t, err)
 		}
-		conn := c.Conn(ctx, t.L(), 1)
-		runner := sqlutils.MakeSQLRunner(conn)
-		runner.Exec(t, `CREATE DATABASE sysbench`)
-		for _, stmt := range opts.extra.stmts {
-			runner.Exec(t, stmt)
-			t.L().Printf(`executed extra setup statement: %s`, stmt)
-		}
-		_ = conn.Close()
+		c.Run(ctx, option.WithNodes(c.Node(1)), `./cockroach sql --url={pgurl:1} -e "CREATE DATABASE sysbench"`)
 	}
 
 	useHAProxy := len(c.CRDBNodes()) > 1
@@ -194,44 +168,24 @@ func runSysbench(ctx context.Context, t test.Test, c cluster.Cluster, opts sysbe
 	var start time.Time
 	runWorkload := func(ctx context.Context) error {
 		t.Status("preparing workload")
-		cmd := opts.cmd(useHAProxy /* haproxy */)
-		{
-			result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(c.WorkloadNode()), roachtestutil.PrefixCmdOutputWithTimestamp(cmd+" prepare"))
-			if err != nil {
-				return err
-			} else if msg, crashed := detectSysbenchCrash(result); crashed {
-				t.Skipf("%s; skipping test", msg)
-			} else if strings.Contains(result.Stdout, "FATAL") {
-				// sysbench prepare doesn't exit on errors for some reason, so we have
-				// to check that it didn't silently fail. We've seen it do so, causing
-				// the run step to segfault. Segfaults are an ignored error, so in the
-				// past, this would cause the test to silently fail.
-				return errors.Newf("sysbench prepare failed with FATAL error")
-			}
-		}
-
-		t.Status("warming up via oltp_read_only")
-		{
-			opts := opts
-			opts.workload = oltpReadOnly
-			opts.duration = 3 * time.Minute
-
-			result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(c.WorkloadNode()),
-				opts.cmd(useHAProxy)+" run")
-
-			if msg, crashed := detectSysbenchCrash(result); crashed {
-				t.L().Printf("%s; proceeding to main workload anyway", msg)
-				err = nil
-			}
-			require.NoError(t, err)
-		}
+		c.Run(ctx, option.WithNodes(c.WorkloadNode()), opts.cmd(false /* haproxy */)+" prepare")
 
 		t.Status("running workload")
+		cmd := opts.cmd(useHAProxy /* haproxy */) + " run"
 		start = timeutil.Now()
-		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(c.WorkloadNode()), roachtestutil.PrefixCmdOutputWithTimestamp(cmd+" run"))
+		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(c.WorkloadNode()), cmd)
 
-		if msg, crashed := detectSysbenchCrash(result); crashed {
-			t.Skipf("%s; skipping test", msg)
+		// Sysbench occasionally segfaults. When that happens, don't fail the
+		// test.
+		if result.RemoteExitStatus == roachprodErrors.SegmentationFaultExitCode {
+			t.L().Printf("sysbench segfaulted; passing test anyway")
+			return nil
+		} else if result.RemoteExitStatus == roachprodErrors.IllegalInstructionExitCode {
+			t.L().Printf("sysbench crashed with illegal instruction; passing test anyway")
+			return nil
+		} else if result.RemoteExitStatus == roachprodErrors.AssertionFailureExitCode {
+			t.L().Printf("sysbench crashed with an assertion failure; passing test anyway")
+			return nil
 		}
 
 		if err != nil {
@@ -239,27 +193,7 @@ func runSysbench(ctx context.Context, t test.Test, c cluster.Cluster, opts sysbe
 		}
 
 		t.Status("exporting results")
-		idx := strings.Index(result.Stdout, "SQL statistics:")
-		if idx < 0 {
-			return errors.Errorf("no SQL statistics found in sysbench output:\n%s", result.Stdout)
-		}
-		t.L().Printf("sysbench results:\n%s", result.Stdout[idx:])
-
-		if err := exportSysbenchResults(t, c, result.Stdout, start, opts); err != nil {
-			return err
-		}
-
-		// Also produce standard Go benchmark output. This can be used to run
-		// benchstat comparisons.
-		goBenchOutput, err := sysbenchToGoBench(t.Name(), result.Stdout[idx:])
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(t.ArtifactsDir(), "bench.txt"), []byte(goBenchOutput), 0666); err != nil {
-			return err
-		}
-
-		return nil
+		return exportSysbenchResults(t, result.Stdout, start)
 	}
 	if opts.usePostgres {
 		if err := runWorkload(ctx); err != nil {
@@ -273,36 +207,20 @@ func runSysbench(ctx context.Context, t test.Test, c cluster.Cluster, opts sysbe
 }
 
 func registerSysbench(r registry.Registry) {
-	coreThree := func(w sysbenchWorkload) bool {
-		switch w {
-		case oltpReadOnly, oltpReadWrite, oltpWriteOnly:
-			return true
-		default:
-			return false
-		}
-	}
-
 	for _, d := range []struct {
 		n, cpus int
 		pick    func(sysbenchWorkload) bool // nil means true for all
-		extra   extraSetup
 	}{
 		{n: 1, cpus: 32},
 		{n: 3, cpus: 32},
-		{n: 3, cpus: 8, pick: coreThree},
-		{n: 3, cpus: 8, pick: coreThree,
-			extra: extraSetup{
-				nameSuffix: "-settings",
-				stmts: []string{
-					`set cluster setting sql.stats.flush.enabled = false`,
-					`set cluster setting sql.metrics.statement_details.enabled = false`,
-					`set cluster setting kv.split_queue.enabled = false`,
-					`set cluster setting kv.consistency_queue.enabled = false`,
-					`set cluster setting kv.transaction.write_buffering.enabled = true`,
-				},
-				useDRPC: true,
-			},
-		},
+		{n: 3, cpus: 8, pick: func(w sysbenchWorkload) bool {
+			switch w {
+			case oltpReadOnly, oltpReadWrite, oltpWriteOnly:
+				return true
+			default:
+				return false
+			}
+		}},
 	} {
 		for w := sysbenchWorkload(0); w < numSysbenchWorkloads; w++ {
 			if d.pick != nil && !d.pick(w) {
@@ -316,22 +234,15 @@ func registerSysbench(r registry.Registry) {
 				concurrency:  conc,
 				tables:       10,
 				rowsPerTable: 10000000,
-				extra:        d.extra,
-			}
-
-			benchname := "sysbench"
-			if d.extra.nameSuffix != "" {
-				benchname += d.extra.nameSuffix
 			}
 
 			r.Add(registry.TestSpec{
-				Name:                      fmt.Sprintf("%s/%s/nodes=%d/cpu=%d/conc=%d", benchname, w, d.n, d.cpus, conc),
-				Benchmark:                 true,
-				Owner:                     registry.OwnerTestEng,
-				Cluster:                   r.MakeClusterSpec(d.n+1, spec.CPU(d.cpus), spec.WorkloadNode(), spec.WorkloadNodeCPU(16)),
-				CompatibleClouds:          registry.OnlyGCE,
-				Suites:                    registry.Suites(registry.Nightly),
-				TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
+				Name:             fmt.Sprintf("sysbench/%s/nodes=%d/cpu=%d/conc=%d", w, d.n, d.cpus, conc),
+				Benchmark:        true,
+				Owner:            registry.OwnerTestEng,
+				Cluster:          r.MakeClusterSpec(d.n+1, spec.CPU(d.cpus), spec.WorkloadNode(), spec.WorkloadNodeCPU(16)),
+				CompatibleClouds: registry.OnlyGCE,
+				Suites:           registry.Suites(registry.Nightly),
 				Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 					runSysbench(ctx, t, c, opts)
 				},
@@ -370,41 +281,12 @@ type sysbenchMetrics struct {
 	Reconnects   string `json:"reconnects"`
 }
 
-type openmetricsValues struct {
-	Value string
-	Time  int64
-}
-
-// Define units for sysbench metrics
-var units = map[string]string{
-	// Transaction rates - operations per second
-	"transactions": "unit=\"ops/sec\",is_higher_better=\"true\"",
-
-	// Query rates - queries per second
-	"qps":       "unit=\"qps\",is_higher_better=\"true\"",
-	"read_qps":  "unit=\"qps\",is_higher_better=\"true\"",
-	"write_qps": "unit=\"qps\",is_higher_better=\"true\"",
-	"other_qps": "unit=\"qps\",is_higher_better=\"true\"",
-
-	// Latency - milliseconds
-	"p95_latency": "unit=\"ms\",is_higher_better=\"false\"",
-
-	// Error rates - errors per second
-	"errors": "unit=\"errors/sec\",is_higher_better=\"false\"",
-
-	// Reconnection rates - reconnects per second
-	"reconnects": "unit=\"reconnects/sec\",is_higher_better=\"false\"",
-}
-
-// exportSysbenchResults parses the output of `sysbench` into a stats
-// file and writes it to the perf directory that roachperf expects. The
-// format of the stats file is dependent on t.ExportOpenmetrics().
-// Sysbench does have a way to customize the report output via injecting
-// a custom `sysbench.hooks.report_intermediate` hook, but then we would
-// lose the human-readable output in the test itself.
-func exportSysbenchResults(
-	t test.Test, c cluster.Cluster, result string, start time.Time, opts sysbenchOptions,
-) error {
+// exportSysbenchResults parses the output of `sysbench` into a JSON file
+// and writes it to the perf directory that roachperf expects. Sysbench does
+// have a way to customize the report output via injecting a custom
+// `sysbench.hooks.report_intermediate` hook, but then we would lose the
+// human-readable output in the test itself.
+func exportSysbenchResults(t test.Test, result string, start time.Time) error {
 	// Parse the results into a JSON file that roachperf understands.
 	// The output of the results look like:
 	// 		1. Start up information.
@@ -427,63 +309,6 @@ func exportSysbenchResults(
 
 	var snapshotsFound int
 	s := bufio.NewScanner(strings.NewReader(result))
-	labels := map[string]string{
-		"distribution":   opts.distribution,
-		"duration":       fmt.Sprintf("%f", opts.duration.Seconds()),
-		"concurrency":    fmt.Sprintf("%d", opts.concurrency),
-		"table":          fmt.Sprintf("%d", opts.tables),
-		"rows-per-table": fmt.Sprintf("%d", opts.rowsPerTable),
-		"use-postgres":   fmt.Sprintf("%t", opts.usePostgres),
-	}
-	labelString := roachtestutil.GetOpenmetricsLabelString(t, c, labels)
-	openmetricsMap := make(map[string][]openmetricsValues)
-
-	// Counters for aggregated metrics
-	var totalQpsSum, readQpsSum, writeQpsSum, otherQpsSum float64
-	var sampleCount int64
-
-	tick := func(fields []string, qpsByType []string) error {
-		snapshotTick := sysbenchMetrics{
-			Time:         start.Unix(),
-			Threads:      fields[1],
-			Transactions: fields[3],
-			Qps:          fields[5],
-			ReadQps:      qpsByType[0],
-			WriteQps:     qpsByType[1],
-			OtherQps:     qpsByType[2],
-			P95Latency:   fields[10],
-			Errors:       fields[12],
-			Reconnects:   fields[14],
-		}
-
-		// Add to aggregation counters
-		qpsVal, _ := strconv.ParseFloat(fields[5], 64)
-		readQpsVal, _ := strconv.ParseFloat(qpsByType[0], 64)
-		writeQpsVal, _ := strconv.ParseFloat(qpsByType[1], 64)
-		otherQpsVal, _ := strconv.ParseFloat(qpsByType[2], 64)
-
-		totalQpsSum += qpsVal
-		readQpsSum += readQpsVal
-		writeQpsSum += writeQpsVal
-		otherQpsSum += otherQpsVal
-		sampleCount++
-
-		if t.ExportOpenmetrics() {
-			addCurrentSnapshotToOpenmetrics(snapshotTick, openmetricsMap)
-		} else {
-			var snapshotTickBytes []byte
-			snapshotTickBytes, err = json.Marshal(snapshotTick)
-			if err != nil {
-				return errors.Errorf("error marshaling metrics")
-			}
-			snapshotTickBytes = append(snapshotTickBytes, []byte("\n")...)
-			metricBytes = append(metricBytes, snapshotTickBytes...)
-		}
-
-		start = start.Add(time.Second)
-		return nil
-	}
-
 	for s.Scan() {
 		if matched := regex.MatchString(s.Text()); !matched {
 			continue
@@ -503,11 +328,26 @@ func exportSysbenchResults(
 		if len(qpsByType) != 3 {
 			return errors.Errorf("QPS metrics output in unexpected format, expected 3 fields got: %d", len(qpsByType))
 		}
-
-		if err := tick(fields, qpsByType); err != nil {
-			return err
+		snapshotTick := sysbenchMetrics{
+			Time:         start.Unix(),
+			Threads:      fields[1],
+			Transactions: fields[3],
+			Qps:          fields[5],
+			ReadQps:      qpsByType[0],
+			WriteQps:     qpsByType[1],
+			OtherQps:     qpsByType[2],
+			P95Latency:   fields[10],
+			Errors:       fields[12],
+			Reconnects:   fields[14],
 		}
 
+		snapshotTickBytes, err := json.Marshal(snapshotTick)
+		if err != nil {
+			return errors.Errorf("error marshaling metrics")
+		}
+		metricBytes = append(metricBytes, snapshotTickBytes...)
+		metricBytes = append(metricBytes, []byte("\n")...)
+		start = start.Add(time.Second)
 	}
 	// Guard against the possibility that the format changed and we no longer
 	// get any output.
@@ -523,200 +363,5 @@ func exportSysbenchResults(
 		return err
 	}
 
-	if t.ExportOpenmetrics() {
-		metricBytes = getOpenmetricsBytes(openmetricsMap, labelString)
-	}
-
-	// Write the standard metrics file
-	if err := os.WriteFile(fmt.Sprintf("%s/%s", perfDir, roachtestutil.GetBenchmarkMetricsFileName(t)), metricBytes, 0666); err != nil {
-		return err
-	}
-
-	// If using OpenMetrics, also calculate and write aggregated metrics
-	if t.ExportOpenmetrics() && sampleCount > 0 {
-		floatSampleCount := float64(sampleCount)
-		avgTotalQps := totalQpsSum / floatSampleCount
-		avgReadQps := readQpsSum / floatSampleCount
-		avgWriteQps := writeQpsSum / floatSampleCount
-		avgOtherQps := otherQpsSum / floatSampleCount
-
-		// Create aggregated metrics exactly matching roachperf's expected format
-		aggregatedMetrics := roachtestutil.AggregatedPerfMetrics{
-			{
-				Name:           "total_qps",
-				Value:          roachtestutil.MetricPoint(avgTotalQps),
-				Unit:           "ops/s",
-				IsHigherBetter: true,
-			},
-			{
-				Name:           "read_qps",
-				Value:          roachtestutil.MetricPoint(avgReadQps),
-				Unit:           "ops/s",
-				IsHigherBetter: true,
-			},
-			{
-				Name:           "write_qps",
-				Value:          roachtestutil.MetricPoint(avgWriteQps),
-				Unit:           "ops/s",
-				IsHigherBetter: true,
-			},
-			{
-				Name:           "other_qps",
-				Value:          roachtestutil.MetricPoint(avgOtherQps),
-				Unit:           "ops/s",
-				IsHigherBetter: true,
-			},
-		}
-
-		aggregatedBuf := &bytes.Buffer{}
-
-		labels, err := roachtestutil.GetLabels(labelString)
-		if err != nil {
-			return errors.Wrap(err, "failed to get labels")
-		}
-		// Convert aggregated metrics to OpenMetrics format
-		if err := roachtestutil.GetAggregatedMetricBytes(
-			aggregatedMetrics,
-			labels,
-			timeutil.Now(),
-			aggregatedBuf,
-		); err != nil {
-			return errors.Wrap(err, "failed to format aggregated metrics")
-		}
-
-		// Write aggregated metrics
-		aggregatedFileName := "aggregated_" + roachtestutil.GetBenchmarkMetricsFileName(t)
-		aggregatedPath := filepath.Join(perfDir, aggregatedFileName)
-		if err := os.WriteFile(aggregatedPath, aggregatedBuf.Bytes(), 0644); err != nil {
-			return errors.Wrap(err, "failed to write aggregated metrics")
-		}
-
-		t.L().Printf("Wrote aggregated metrics to %s", aggregatedPath)
-	}
-
-	return nil
-}
-
-// Add sysbenchMetrics to the openmetricsMap
-func addCurrentSnapshotToOpenmetrics(
-	metrics sysbenchMetrics, openmetricsMap map[string][]openmetricsValues,
-) {
-	time := metrics.Time
-	openmetricsMap["transactions"] = append(openmetricsMap["transactions"], openmetricsValues{Value: metrics.Transactions, Time: time})
-	openmetricsMap["qps"] = append(openmetricsMap["qps"], openmetricsValues{Value: metrics.Qps, Time: time})
-	openmetricsMap["read_qps"] = append(openmetricsMap["read_qps"], openmetricsValues{Value: metrics.ReadQps, Time: time})
-	openmetricsMap["write_qps"] = append(openmetricsMap["write_qps"], openmetricsValues{Value: metrics.WriteQps, Time: time})
-	openmetricsMap["other_qps"] = append(openmetricsMap["other_qps"], openmetricsValues{Value: metrics.OtherQps, Time: time})
-	openmetricsMap["p95_latency"] = append(openmetricsMap["p95_latency"], openmetricsValues{Value: metrics.P95Latency, Time: time})
-	openmetricsMap["errors"] = append(openmetricsMap["errors"], openmetricsValues{Value: metrics.Errors, Time: time})
-	openmetricsMap["reconnects"] = append(openmetricsMap["reconnects"], openmetricsValues{Value: metrics.Reconnects, Time: time})
-}
-
-// Convert openmetricsMap to bytes for writing to file
-func getOpenmetricsBytes(openmetricsMap map[string][]openmetricsValues, labelString string) []byte {
-	metricsBuf := bytes.NewBuffer([]byte{})
-	for key, values := range openmetricsMap {
-		metricName := util.SanitizeMetricName(key)
-		metricsBuf.WriteString(roachtestutil.GetOpenmetricsGaugeType(metricName))
-		for _, value := range values {
-			metricsBuf.WriteString(fmt.Sprintf("%s{%s,%s} %s %d\n",
-				metricName,
-				labelString,
-				units[key],
-				value.Value,
-				value.Time))
-		}
-	}
-
-	// Add # EOF at the end for openmetrics
-	metricsBuf.WriteString("# EOF\n")
-	return metricsBuf.Bytes()
-}
-
-func detectSysbenchCrash(result install.RunResultDetails) (string, bool) {
-	// Sysbench occasionally segfaults. When that happens, don't fail the
-	// test.
-	if result.RemoteExitStatus == roachprodErrors.SegmentationFaultExitCode {
-		return "sysbench segfaulted", true
-	} else if result.RemoteExitStatus == roachprodErrors.IllegalInstructionExitCode {
-		return "sysbench crashed with illegal instruction", true
-	} else if result.RemoteExitStatus == roachprodErrors.AssertionFailureExitCode {
-		return "sysbench crashed with an assertion failure", true
-	}
-	return "", false
-}
-
-// sysbenchToGoBench converts sysbench output into Go benchmark format.
-func sysbenchToGoBench(name string, result string) (string, error) {
-	// Extract key metrics from sysbench output using regex patterns.
-	var qps, tps string
-	var minLat, avgLat, p95Lat, maxLat string
-
-	// Parse transactions per second.
-	m := regexp.MustCompile(`transactions:\s+\d+\s+\(([\d.]+)\s+per sec`).FindStringSubmatch(result)
-	if len(m) <= 1 {
-		return "", errors.New("failed to parse transactions per second")
-	}
-	tps = m[1]
-
-	// Parse queries per second.
-	m = regexp.MustCompile(`queries:\s+\d+\s+\(([\d.]+)\s+per sec`).FindStringSubmatch(result)
-	if len(m) <= 1 {
-		return "", errors.New("failed to parse queries per second")
-	}
-	qps = m[1]
-
-	// Parse each latency metric using a loop.
-	metrics := map[string]*string{
-		"min":             &minLat,
-		"avg":             &avgLat,
-		"max":             &maxLat,
-		"95th percentile": &p95Lat,
-	}
-	for metric, ptr := range metrics {
-		pattern := fmt.Sprintf(`%s:\s+([\d.]+)`, metric)
-		m = regexp.MustCompile(pattern).FindStringSubmatch(result)
-		if len(m) <= 1 {
-			return "", errors.Newf("failed to parse %s latency", metric)
-		}
-		*ptr = m[1]
-	}
-
-	// Process the test name.
-	parts := strings.Split(name, "/")
-	if len(parts) == 0 {
-		return "", errors.New("empty test name")
-	}
-
-	// Normalize first segment (e.g. "sysbench-settings" -> "SysbenchSettings").
-	firstPart := parts[0]
-	// Split on non-alphanumeric characters.
-	words := regexp.MustCompile(`[^a-zA-Z0-9]+`).Split(firstPart, -1)
-	// Capitalize each word and join them.
-	var sb strings.Builder
-	for _, word := range words {
-		if word == "" {
-			continue
-		}
-		sb.WriteString(cases.Title(language.Und).String(strings.ToLower(word)))
-	}
-	firstPart = sb.String()
-
-	// Build the benchmark name.
-	benchName := "Benchmark" + firstPart
-
-	// Add remaining parts, using auto-assigned keys only for parts without keys.
-	nextKey := 'a'
-	for _, part := range parts[1:] {
-		if strings.Contains(part, "=") {
-			benchName += "/" + part
-		} else {
-			benchName += fmt.Sprintf("/%s=%s", string(nextKey), part)
-			nextKey++
-		}
-	}
-
-	// Return formatted benchmark string with all metrics.
-	return fmt.Sprintf("%s\t1\t%s queries/sec\t%s txns/sec\t%s ms/min\t%s ms/avg\t%s ms/p95\t%s ms/max",
-		benchName, qps, tps, minLat, avgLat, p95Lat, maxLat), nil
+	return os.WriteFile(fmt.Sprintf("%s/stats.json", perfDir), metricBytes, 0666)
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/plpgsqltree"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/plpgsqltree/utils"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqltelemetry"
@@ -41,7 +42,6 @@ import (
 
 // createViewNode represents a CREATE VIEW statement.
 type createViewNode struct {
-	zeroInputPlanNode
 	createView *tree.CreateView
 	// viewQuery contains the view definition, with all table names fully
 	// qualified.
@@ -212,29 +212,12 @@ func (n *createViewNode) startExec(params runParams) error {
 				if err != nil {
 					return err
 				}
-				// creationTime is usually initialized to a zero value and populated at
-				// read time. See the comment in desc.MaybeIncrementVersion. However,
-				// for CREATE MATERIALIZED VIEW ... AS OF SYSTEM TIME, we need to set
-				// the creation time to the specified timestamp.
+				// creationTime is initialized to a zero value and populated at read time.
+				// See the comment in desc.MaybeIncrementVersion.
+				//
+				// TODO(ajwerner): remove the timestamp from MakeViewTableDesc, it's
+				// currently relied on in import and restore code and tests.
 				var creationTime hlc.Timestamp
-				if asOf := params.p.extendedEvalCtx.AsOfSystemTime; asOf != nil && asOf.ForBackfill && n.createView.Materialized {
-					creationTime = asOf.Timestamp
-
-					var mostRecentModTime hlc.Timestamp
-					for _, mut := range backRefMutables {
-						if mut.ModificationTime.After(mostRecentModTime) {
-							mostRecentModTime = mut.ModificationTime
-						}
-					}
-
-					if creationTime.Less(mostRecentModTime) {
-						return pgerror.Newf(
-							pgcode.InvalidTableDefinition,
-							"timestamp %s is before the most recent modification time of the tables the view depends on (%s)",
-							creationTime, mostRecentModTime,
-						)
-					}
-				}
 				desc, err := makeViewTableDesc(
 					params.ctx,
 					viewName,
@@ -530,7 +513,7 @@ func replaceSeqNamesWithIDsLang(
 		}
 		stmts = plstmt.AST
 
-		v := plpgsqltree.SQLStmtVisitor{Fn: replaceSeqFunc}
+		v := utils.SQLStmtVisitor{Fn: replaceSeqFunc}
 		newStmt := plpgsqltree.Walk(&v, stmts)
 		fmtCtx.FormatNode(newStmt)
 	}
@@ -677,12 +660,12 @@ func serializeUserDefinedTypesLang(
 		}
 		stmts = plstmt.AST
 
-		v := plpgsqltree.SQLStmtVisitor{Fn: replaceFunc}
+		v := utils.SQLStmtVisitor{Fn: replaceFunc}
 		newStmt := plpgsqltree.Walk(&v, stmts)
 		// Some PLpgSQL statements (i.e., declarations), may contain type
 		// annotations containing the UDT. We need to walk the AST to replace them,
 		// too.
-		v2 := plpgsqltree.TypeRefVisitor{Fn: replaceTypeFunc}
+		v2 := utils.TypeRefVisitor{Fn: replaceTypeFunc}
 		newStmt = plpgsqltree.Walk(&v2, newStmt)
 		fmtCtx.FormatNode(newStmt)
 	}

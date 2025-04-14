@@ -174,20 +174,20 @@ func TestRaftSSTableSideloading(t *testing.T) {
 	defer tc.repl.mu.Unlock()
 
 	rsl := logstore.NewStateLoader(tc.repl.RangeID)
-	comp := tc.repl.shMu.raftTruncState.Index
-	last := tc.repl.shMu.lastIndexNotDurable
+	lo := tc.repl.shMu.state.TruncatedState.Index + 1
+	hi := tc.repl.shMu.lastIndexNotDurable + 1
 
-	tc.store.raftEntryCache.Clear(tc.repl.RangeID, last)
+	tc.store.raftEntryCache.Clear(tc.repl.RangeID, hi)
 	ents, cachedBytes, _, err := logstore.LoadEntries(
 		ctx, rsl, tc.store.TODOEngine(), tc.repl.RangeID, tc.store.raftEntryCache,
-		tc.repl.raftMu.sideloaded, comp+1, last+1, math.MaxUint64, nil /* account */)
+		tc.repl.raftMu.sideloaded, lo, hi, math.MaxUint64, nil /* account */)
 	require.NoError(t, err)
-	require.Len(t, ents, int(last-comp))
+	require.Len(t, ents, int(hi-lo))
 	require.Zero(t, cachedBytes)
 
 	// Check that the Raft entry cache was populated.
-	_, okLo := tc.store.raftEntryCache.Get(tc.repl.RangeID, comp+1)
-	_, okHi := tc.store.raftEntryCache.Get(tc.repl.RangeID, last)
+	_, okLo := tc.store.raftEntryCache.Get(tc.repl.RangeID, lo)
+	_, okHi := tc.store.raftEntryCache.Get(tc.repl.RangeID, hi-1)
 	require.True(t, okLo)
 	require.True(t, okHi)
 

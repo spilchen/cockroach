@@ -137,25 +137,21 @@ statement ok
 CREATE TABLE telemetry (
   x INT PRIMARY KEY,
   y INT,
-  z JSONB,
-  v VECTOR(3)
+  z JSONB
 )
 
 statement ok
 CREATE INVERTED INDEX ON telemetry (z);
-CREATE VECTOR INDEX ON telemetry (v);
 CREATE INDEX ON telemetry (y) USING HASH WITH (bucket_count=4)
 
 query T rowsort
 SELECT feature_name FROM crdb_internal.feature_usage
 WHERE feature_name IN (
   'sql.schema.inverted_index',
-  'sql.schema.vector_index',
   'sql.schema.hash_sharded_index'
 )
 ----
 sql.schema.inverted_index
-sql.schema.vector_index
 sql.schema.hash_sharded_index
 
 subtest create_index_concurrently
@@ -566,40 +562,5 @@ SET CLUSTER SETTING sql.defaults.disallow_full_table_scans.enabled = $disallow_f
 
 statement ok
 DROP TABLE t_disable_full_ts
-
-subtest end
-
-subtest create_index_duplicate_storage_params
-
-statement ok
-CREATE TABLE create_index_duplicate_storage_params_a (
-  a INT PRIMARY KEY,
-  b INT
-);
-
-statement error pgcode 22023 pq: parameter "fillfactor" specified more than once
-CREATE INDEX idx_a ON create_index_duplicate_storage_params_a (b) WITH (fillfactor=10, fillfactor=20);
-
-statement error pgcode 22023 pq: parameter "fillfactor" specified more than once
-CREATE INDEX IF NOT EXISTS idx_b ON create_index_duplicate_storage_params_a (b) WITH (fillfactor=10, fillfactor=20);
-
-statement error pgcode 22023 pq: parameter "bucket_count" specified more than once
-CREATE INDEX ON create_index_duplicate_storage_params_a (b) USING HASH WITH (bucket_count=10, bucket_count=12);
-
-subtest end
-
-subtest create_inverted_index_duplicate_storage_params
-
-statement ok
-CREATE TABLE create_inverted_index_duplicate_storage_params_a (
-  a INT PRIMARY KEY,
-  b JSONB
-);
-
-statement error pgcode 22023 pq: parameter "fillfactor" specified more than once
-CREATE INVERTED INDEX idx_a ON create_inverted_index_duplicate_storage_params_a (b) WITH (fillfactor=10, fillfactor=20);
-
-statement error pgcode 22023 pq: parameter "fillfactor" specified more than once
-CREATE INVERTED INDEX IF NOT EXISTS idx_b ON create_inverted_index_duplicate_storage_params_a (b) WITH (fillfactor=10, fillfactor=20);
 
 subtest end

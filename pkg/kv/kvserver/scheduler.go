@@ -17,7 +17,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/stop"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
-	"github.com/cockroachdb/crlib/crtime"
+	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 )
 
 const rangeIDChunkSize = 1000
@@ -138,7 +138,7 @@ const (
 
 type raftScheduleState struct {
 	flags raftScheduleFlags
-	begin crtime.Mono
+	begin int64 // nanoseconds
 
 	// The number of ticks queued. Usually it's 0 or 1, but may go above if the
 	// scheduling or processing is slow. It is limited by raftScheduler.maxTicks,
@@ -149,7 +149,7 @@ type raftScheduleState struct {
 	// TODO(pavelkalinnikov): add a node health metric for the ticks.
 	//
 	// INVARIANT: flags&stateRaftTick == 0 iff ticks == 0.
-	ticks int64
+	ticks int
 }
 
 var raftSchedulerBatchPool = sync.Pool{
@@ -230,7 +230,7 @@ type raftSchedulerShard struct {
 	queue      rangeIDQueue
 	state      map[roachpb.RangeID]raftScheduleState
 	numWorkers int
-	maxTicks   int64
+	maxTicks   int
 	stopped    bool
 }
 
@@ -241,7 +241,7 @@ func newRaftScheduler(
 	numWorkers int,
 	shardSize int,
 	priorityWorkers int,
-	maxTicks int64,
+	maxTicks int,
 ) *raftScheduler {
 	s := &raftScheduler{
 		ambientContext: ambient,
@@ -273,7 +273,7 @@ func newRaftScheduler(
 	return s
 }
 
-func newRaftSchedulerShard(numWorkers int, maxTicks int64) *raftSchedulerShard {
+func newRaftSchedulerShard(numWorkers, maxTicks int) *raftSchedulerShard {
 	shard := &raftSchedulerShard{
 		state:      map[roachpb.RangeID]raftScheduleState{},
 		numWorkers: numWorkers,
@@ -384,8 +384,8 @@ func (ss *raftSchedulerShard) worker(
 		ss.Unlock()
 
 		// Record the scheduling latency for the range.
-		lat := state.begin.Elapsed()
-		metrics.RaftSchedulerLatency.RecordValue(int64(lat))
+		lat := nowNanos() - state.begin
+		metrics.RaftSchedulerLatency.RecordValue(lat)
 
 		// Process requests first. This avoids a scenario where a tick and a
 		// "quiesce" message are processed in the same iteration and intervening
@@ -463,9 +463,9 @@ func (s *raftScheduler) NewEnqueueBatch() *raftSchedulerBatch {
 }
 
 func (ss *raftSchedulerShard) enqueue1Locked(
-	addFlags raftScheduleFlags, id roachpb.RangeID, now crtime.Mono,
+	addFlags raftScheduleFlags, id roachpb.RangeID, now int64,
 ) int {
-	ticks := int64((addFlags & stateRaftTick) / stateRaftTick) // 0 or 1
+	ticks := int((addFlags & stateRaftTick) / stateRaftTick) // 0 or 1
 
 	prevState := ss.state[id]
 	if prevState.flags&addFlags == addFlags && ticks == 0 {
@@ -491,7 +491,7 @@ func (ss *raftSchedulerShard) enqueue1Locked(
 }
 
 func (s *raftScheduler) enqueue1(addFlags raftScheduleFlags, id roachpb.RangeID) {
-	now := crtime.NowMono()
+	now := nowNanos()
 	hasPriority := s.priorityIDs.Contains(id)
 	shardIdx := shardIndex(id, len(s.shards), hasPriority)
 	shard := s.shards[shardIdx]
@@ -510,14 +510,14 @@ func (ss *raftSchedulerShard) enqueueN(addFlags raftScheduleFlags, ids ...roachp
 		return 0
 	}
 
-	now := crtime.NowMono()
+	now := nowNanos()
 	ss.Lock()
 	var count int
 	for i, id := range ids {
 		count += ss.enqueue1Locked(addFlags, id, now)
 		if (i+1)%enqueueChunkSize == 0 {
 			ss.Unlock()
-			now = crtime.NowMono()
+			now = nowNanos()
 			ss.Lock()
 		}
 	}
@@ -573,4 +573,7 @@ var _ rac2.Scheduler = &racV2Scheduler{}
 // ScheduleControllerEvent implements rac2.Scheduler.
 func (s *racV2Scheduler) ScheduleControllerEvent(rangeID roachpb.RangeID) {
 	(*raftScheduler)(s).EnqueueRACv2RangeController(rangeID)
+}
+func nowNanos() int64 {
+	return timeutil.Now().UnixNano()
 }

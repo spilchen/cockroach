@@ -301,19 +301,14 @@ type kafkaBuffer struct {
 	batchCfg sinkBatchConfig
 }
 
-func (b *kafkaBuffer) Append(key []byte, value []byte, attrs attributes) {
+func (b *kafkaBuffer) Append(key []byte, value []byte, _ attributes) {
 	// HACK: kafka sink v1 encodes nil keys as sarama.ByteEncoder(key) which is != nil, and unit tests rely on this.
 	// So do something equivalent.
 	if key == nil {
 		key = []byte{}
 	}
 
-	var headers []kgo.RecordHeader
-	for k, v := range attrs.headers {
-		headers = append(headers, kgo.RecordHeader{Key: k, Value: v})
-	}
-
-	b.messages = append(b.messages, &kgo.Record{Key: key, Value: value, Topic: b.topic, Headers: headers})
+	b.messages = append(b.messages, &kgo.Record{Key: key, Value: value, Topic: b.topic})
 	b.byteCount += len(value)
 }
 
@@ -365,7 +360,7 @@ func makeKafkaSinkV2(
 
 	topicNamer, err := MakeTopicNamer(
 		targets,
-		WithPrefix(kafkaTopicPrefix), WithSingleName(kafkaTopicName), WithSanitizeFn(changefeedbase.SQLNameToKafkaName))
+		WithPrefix(kafkaTopicPrefix), WithSingleName(kafkaTopicName), WithSanitizeFn(SQLNameToKafkaName))
 
 	if err != nil {
 		return nil, err

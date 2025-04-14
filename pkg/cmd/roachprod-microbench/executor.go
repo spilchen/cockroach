@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachprod-microbench/cluster"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachprod-microbench/parser"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachprod-microbench/util"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	roachprodConfig "github.com/cockroachdb/cockroach/pkg/roachprod/config"
@@ -63,6 +62,12 @@ type benchmarkKey struct {
 	key string
 }
 
+type benchmarkExtractionResult struct {
+	results [][]string
+	errors  bool
+	skipped bool
+}
+
 func newExecutor(config executorConfig) (*executor, error) {
 	// Exclude packages that should not to be probed. This is useful for excluding
 	// packages that have known issues and unable to list its benchmarks, or are
@@ -104,7 +109,7 @@ func newExecutor(config executorConfig) (*executor, error) {
 
 	roachprodConfig.Quiet = config.quiet
 	timestamp := timeutil.Now()
-	l := InitLogger(filepath.Join(config.outputDir, fmt.Sprintf("roachprod-microbench-%s.log", timestamp.Format(util.TimeFormat))))
+	l := util.InitLogger(filepath.Join(config.outputDir, fmt.Sprintf("roachprod-microbench-%s.log", timestamp.Format(util.TimeFormat))))
 
 	excludeBenchmarks := util.GetRegexExclusionPairs(config.excludeList)
 	return &executor{
@@ -125,7 +130,6 @@ func defaultExecutorConfig() executorConfig {
 		iterations:   1,
 		lenient:      true,
 		recoverable:  true,
-		affinity:     true,
 	}
 }
 
@@ -271,7 +275,7 @@ func (e *executor) executeBenchmarks() error {
 	}
 
 	// Init `roachprod` and get the number of nodes in the cluster.
-	InitRoachprod()
+	util.InitRoachprod()
 	statuses, err := roachprod.Status(context.Background(), e.log, e.cluster, "")
 	if err != nil {
 		return err
@@ -338,30 +342,26 @@ func (e *executor) executeBenchmarks() error {
 		if e.shellCommand != "" {
 			runCommand = fmt.Sprintf("%s && %s", e.shellCommand, runCommand)
 		}
+		commandGroup := make([]cluster.RemoteCommand, 0)
 		// Weave the commands between binaries and iterations.
-		for range e.iterations {
-			iterationGroup := make([]cluster.RemoteCommand, 0)
+		for i := 0; i < e.iterations; i++ {
 			for key, bin := range e.binaries {
 				shellCommand := fmt.Sprintf(`"cd %s/%s/bin && %s"`, bin, bench.pkg, runCommand)
 				command := cluster.RemoteCommand{
 					Args:     []string{"sh", "-c", shellCommand},
 					Metadata: benchmarkKey{bench, key},
 				}
-				iterationGroup = append(iterationGroup, command)
+				commandGroup = append(commandGroup, command)
 			}
-
-			if e.affinity {
-				// When affinity is enabled, each iteration runs as a group with binaries interleaved.
-				// This means all binaries for a single iteration will run together on the same node,
-				// but different iterations can run on different nodes.
-				commands = append(commands, iterationGroup)
-			} else {
-				// When affinity is disabled, each command runs individually on any available node.
-				// This has the benefit of not having stragglers, but the downside of possibly
-				// introducing noise due to different node characteristics.
-				for _, command := range iterationGroup {
-					commands = append(commands, []cluster.RemoteCommand{command})
-				}
+		}
+		if e.affinity {
+			commands = append(commands, commandGroup)
+		} else {
+			// When affinity is disabled, commands & single iterations can run on any
+			// node. This has the benefit of not having stragglers, but the downside
+			// of possibly introducing noise.
+			for _, command := range commandGroup {
+				commands = append(commands, []cluster.RemoteCommand{command})
 			}
 		}
 	}
@@ -376,16 +376,16 @@ func (e *executor) executeBenchmarks() error {
 		if !e.quiet {
 			fmt.Print(".")
 		}
-		extractResults := parser.ExtractBenchmarkResults(response.Stdout)
+		extractResults := extractBenchmarkResults(response.Stdout)
 		benchmarkResponse := response.Metadata.(benchmarkKey)
 		report := reporters[benchmarkResponse.key]
-		for _, benchmarkResult := range extractResults.Results {
+		for _, benchmarkResult := range extractResults.results {
 			if _, writeErr := report.benchmarkOutput[benchmarkResponse.pkg].WriteString(
 				fmt.Sprintf("%s\n", strings.Join(benchmarkResult, " "))); writeErr != nil {
 				e.log.Errorf("Failed to write benchmark result to file - %v", writeErr)
 			}
 		}
-		if extractResults.Errors || response.Err != nil {
+		if extractResults.errors || response.Err != nil {
 			if !e.quiet {
 				fmt.Println()
 			}
@@ -407,11 +407,11 @@ func (e *executor) executeBenchmarks() error {
 		}
 
 		// If we didn't find any results, increment the appropriate counter.
-		if len(extractResults.Results) == 0 {
+		if len(extractResults.results) == 0 {
 			switch {
-			case extractResults.Errors || response.Err != nil || response.ExitStatus != 0:
+			case extractResults.errors || response.Err != nil || response.ExitStatus != 0:
 				failedBenchmarks[benchmarkResponse.benchmark]++
-			case extractResults.Skipped:
+			case extractResults.skipped:
 				skippedBenchmarks[benchmarkResponse.benchmark]++
 			default:
 				missingBenchmarks[benchmarkResponse.benchmark]++
@@ -438,5 +438,56 @@ func (e *executor) executeBenchmarks() error {
 	}
 
 	e.log.Printf("Completed benchmarks, results located at %s", e.outputDir)
+	if errorCount != 0 {
+		return errors.Newf("Found %d errors during remote execution", errorCount)
+	}
 	return nil
+}
+
+// extractBenchmarkResults extracts the microbenchmark results generated by a
+// test binary and reports if any failures or skips were found in the output.
+// This method makes specific assumptions regarding the format of the output,
+// and attempts to ignore any spurious output that the test binary may have
+// logged. The returned list of string arrays each represent a row of metrics as
+// outputted by the test binary.
+func extractBenchmarkResults(benchmarkOutput string) benchmarkExtractionResult {
+	keywords := map[string]struct{}{
+		"ns/op":     {},
+		"B/op":      {},
+		"allocs/op": {},
+	}
+	results := make([][]string, 0)
+	buf := make([]string, 0)
+	containsErrors := false
+	skipped := false
+	var benchName string
+	for _, line := range strings.Split(benchmarkOutput, "\n") {
+		elems := strings.Fields(line)
+		for _, s := range elems {
+			if !containsErrors {
+				containsErrors = strings.Contains(s, "FAIL") || strings.Contains(s, "panic:")
+			}
+			if !skipped {
+				skipped = strings.Contains(s, "SKIP")
+			}
+			if strings.HasPrefix(s, "Benchmark") && len(s) > 9 {
+				benchName = s
+			}
+			if _, ok := keywords[s]; ok {
+				row := elems
+				if elems[0] == benchName {
+					row = elems[1:]
+				}
+
+				buf = append(buf, row...)
+				if benchName != "" {
+					buf = append([]string{benchName}, buf...)
+					results = append(results, buf)
+				}
+				buf = make([]string, 0)
+				benchName = ""
+			}
+		}
+	}
+	return benchmarkExtractionResult{results, containsErrors, skipped}
 }

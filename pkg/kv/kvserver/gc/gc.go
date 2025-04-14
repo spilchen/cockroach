@@ -222,7 +222,6 @@ type Info struct {
 	// potentially necessary intent resolutions did not fail).
 	TransactionSpanGCAborted, TransactionSpanGCCommitted int
 	TransactionSpanGCStaging, TransactionSpanGCPending   int
-	TransactionSpanGCPrepared                            int
 	// AbortSpanTotal is the total number of transactions present in the AbortSpan.
 	AbortSpanTotal int
 	// AbortSpanConsidered is the number of AbortSpan entries old enough to be
@@ -1218,8 +1217,6 @@ func processLocalKeyRange(
 		switch txn.Status {
 		case roachpb.PENDING:
 			info.TransactionSpanGCPending++
-		case roachpb.PREPARED:
-			info.TransactionSpanGCPrepared++
 		case roachpb.STAGING:
 			info.TransactionSpanGCStaging++
 		case roachpb.ABORTED:

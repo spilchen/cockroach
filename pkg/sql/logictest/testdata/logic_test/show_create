@@ -160,7 +160,6 @@ c  CREATE TABLE public.c (
 
 subtest alter_column_type_not_break_show_create
 
-onlyif config local-legacy-schema-changer local-mixed-24.3
 statement ok
 SET enable_experimental_alter_column_type_general = true;
 
@@ -180,14 +179,9 @@ CREATE TABLE public.t (
 );
 COMMENT ON COLUMN public.t.c IS 'first comment'
 
-# Skipping in legacy mode, as it does not support altering column types that
-# require a backfill. Subsequent column type alterations are also skipped for
-# the same reason.
-skipif config local-legacy-schema-changer
 statement ok
 ALTER TABLE t ALTER COLUMN c TYPE character varying;
 
-skipif config local-legacy-schema-changer
 query T
 SELECT create_statement FROM [SHOW CREATE TABLE t];
 ----
@@ -198,7 +192,6 @@ CREATE TABLE public.t (
 );
 COMMENT ON COLUMN public.t.c IS 'first comment'
 
-skipif config local-legacy-schema-changer
 query T
 SELECT create_statement FROM [SHOW CREATE TABLE t WITH REDACT];
 ----

@@ -39,8 +39,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/startup"
 	"github.com/cockroachdb/cockroach/pkg/util/stop"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
+	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
-	"github.com/cockroachdb/crlib/crtime"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
 )
@@ -123,12 +123,6 @@ var (
 		Help:        "Number of partial batches not sent asynchronously due to throttling",
 		Measurement: "Partial Batches",
 		Unit:        metric.Unit_COUNT,
-	}
-	metaDistSenderAsyncThrottledDuration = metric.Metadata{
-		Name:        "distsender.batches.async.throttled_cumulative_duration_nanos",
-		Help:        "Cumulative duration of partial batches being throttled (in nanoseconds)",
-		Measurement: "Throttled Duration",
-		Unit:        metric.Unit_NANOSECONDS,
 	}
 	metaTransportSentCount = metric.Metadata{
 		Name:        "distsender.rpc.sent",
@@ -428,7 +422,6 @@ type DistSenderMetrics struct {
 	AsyncSentCount                     *metric.Counter
 	AsyncInProgress                    *metric.Gauge
 	AsyncThrottledCount                *metric.Counter
-	AsyncThrottledDuration             *metric.Counter
 	SentCount                          *metric.Counter
 	LocalSentCount                     *metric.Counter
 	NextReplicaErrCount                *metric.Counter
@@ -477,7 +470,6 @@ func MakeDistSenderMetrics(locality roachpb.Locality) DistSenderMetrics {
 		AsyncSentCount:                     metric.NewCounter(metaDistSenderAsyncSentCount),
 		AsyncInProgress:                    metric.NewGauge(metaDistSenderAsyncInProgress),
 		AsyncThrottledCount:                metric.NewCounter(metaDistSenderAsyncThrottledCount),
-		AsyncThrottledDuration:             metric.NewCounter(metaDistSenderAsyncThrottledDuration),
 		SentCount:                          metric.NewCounter(metaTransportSentCount),
 		LocalSentCount:                     metric.NewCounter(metaTransportLocalSentCount),
 		ReplicaAddressedBatchRequestBytes:  metric.NewCounter(metaDistSenderReplicaAddressedBatchRequestBytes),
@@ -1088,7 +1080,7 @@ func (ds *DistSender) initAndVerifyBatch(ctx context.Context, ba *kvpb.BatchRequ
 				foundReverse = true
 
 			case *kvpb.QueryIntentRequest, *kvpb.EndTxnRequest,
-				*kvpb.GetRequest, *kvpb.ResolveIntentRequest, *kvpb.DeleteRequest, *kvpb.PutRequest:
+				*kvpb.GetRequest, *kvpb.ResolveIntentRequest, *kvpb.DeleteRequest:
 				// Accepted point requests that can be in batches with limit.
 
 			default:
@@ -1200,7 +1192,7 @@ func (ds *DistSender) Send(
 	}
 
 	ctx = ds.AnnotateCtx(ctx)
-	ctx, sp := tracing.ChildSpan(ctx, "dist sender send")
+	ctx, sp := tracing.EnsureChildSpan(ctx, ds.AmbientContext.Tracer, "dist sender send")
 	defer sp.Finish()
 
 	// Send proxy requests directly through the transport. Any errors are
@@ -1376,7 +1368,7 @@ func (ds *DistSender) sendProxyRequest(
 	// never evaluated locally.
 	sendCtx, cbToken, cbErr := ds.circuitBreakers.
 		ForReplica(&ba.ProxyRangeInfo.Desc, &ba.ProxyRangeInfo.Lease.Replica).
-		Track(ctx, ba, withCommit, crtime.NowMono())
+		Track(ctx, ba, withCommit, timeutil.Now().UnixNano())
 	if cbErr != nil {
 		ds.metrics.ProxyForwardErrCount.Inc(1)
 		// Circuit breaker is tripped. Return immediately.
@@ -1391,7 +1383,7 @@ func (ds *DistSender) sendProxyRequest(
 
 	// If the request failed because the circuit breaker tripped, change our
 	// error to the circuit breaker's error.
-	if cancelErr := cbToken.Done(br, err, crtime.NowMono()); cancelErr != nil {
+	if cancelErr := cbToken.Done(br, err, timeutil.Now().UnixNano()); cancelErr != nil {
 		log.VEventf(ctx, 2, "failing proxy request after cb cancellation %s", err)
 		br, err = nil, cancelErr
 	}
@@ -1941,29 +1933,16 @@ func (ds *DistSender) divideAndSendBatchToRanges(
 		}
 
 		lastRange := !ri.NeedAnother(rs)
-		var asyncSent, asyncThrottled bool
 		// Send the next partial batch to the first range in the "rs" span.
 		// If we can reserve one of the limited goroutines available for parallel
 		// batch RPCs, send asynchronously.
-		if canParallelize && !lastRange && !ds.disableParallelBatches {
-			if ds.sendPartialBatchAsync(ctx, curRangeBatch, curRangeRS, isReverse, withCommit, batchIdx, ri.Token(), responseCh, positions) {
-				asyncSent = true
-			} else {
-				asyncThrottled = true
-			}
-		}
-		if !asyncSent {
-			resp := func() response {
-				if asyncThrottled {
-					tStart := crtime.NowMono()
-					defer func() {
-						ds.metrics.AsyncThrottledDuration.Inc(int64(tStart.Elapsed()))
-					}()
-				}
-				return ds.sendPartialBatch(
-					ctx, curRangeBatch, curRangeRS, isReverse, withCommit, batchIdx, ri.Token(),
-				)
-			}()
+		if canParallelize && !lastRange && !ds.disableParallelBatches &&
+			ds.sendPartialBatchAsync(ctx, curRangeBatch, curRangeRS, isReverse, withCommit, batchIdx, ri.Token(), responseCh, positions) {
+			// Sent the batch asynchronously.
+		} else {
+			resp := ds.sendPartialBatch(
+				ctx, curRangeBatch, curRangeRS, isReverse, withCommit, batchIdx, ri.Token(),
+			)
 			resp.positions = positions
 			responseCh <- resp
 			if resp.pErr != nil {
@@ -2152,8 +2131,7 @@ func (ds *DistSender) sendPartialBatch(
 	// Start a retry loop for sending the batch to the range. Each iteration of
 	// this loop uses a new descriptor. Attempts to send to multiple replicas in
 	// this descriptor are done at a lower level.
-	tBegin := crtime.NowMono() // for slow log message
-	var attempts int64
+	tBegin, attempts := timeutil.Now(), int64(0) // for slow log message
 	// prevTok maintains the EvictionToken used on the previous iteration.
 	var prevTok rangecache.EvictionToken
 	for r := retry.StartWithCtx(ctx, ds.rpcRetryOptions); r.Next(); {
@@ -2210,7 +2188,7 @@ func (ds *DistSender) sendPartialBatch(
 		prevTok = routingTok
 		reply, err = ds.sendToReplicas(ctx, ba, routingTok, withCommit)
 
-		if dur := tBegin.Elapsed(); dur > slowDistSenderRangeThreshold && tBegin != 0 {
+		if dur := timeutil.Since(tBegin); dur > slowDistSenderRangeThreshold && !tBegin.IsZero() {
 			{
 				var s redact.StringBuilder
 				slowRangeRPCWarningStr(&s, ba, dur, attempts, routingTok.Desc(), err, reply)
@@ -2220,16 +2198,14 @@ func (ds *DistSender) sendPartialBatch(
 			// RPC is not retried any more.
 			if err != nil || reply.Error != nil {
 				ds.metrics.SlowRPCs.Inc(1)
-				// This defer is intended to run after the loop; this code runs at most once per loop.
-				//nolint:deferloop
-				defer func(tBegin crtime.Mono, attempts int64) {
+				defer func(tBegin time.Time, attempts int64) {
 					ds.metrics.SlowRPCs.Dec(1)
 					var s redact.StringBuilder
-					slowRangeRPCReturnWarningStr(&s, tBegin.Elapsed(), attempts)
+					slowRangeRPCReturnWarningStr(&s, timeutil.Since(tBegin), attempts)
 					log.Warningf(ctx, "slow RPC response: %v", &s)
 				}(tBegin, attempts)
 			}
-			tBegin = 0 // prevent reentering branch for this RPC
+			tBegin = time.Time{} // prevent reentering branch for this RPC
 		}
 
 		if err != nil {
@@ -2747,16 +2723,17 @@ func (ds *DistSender) sendToReplicas(
 			ds.metrics.ProxySentCount.Inc(1)
 		}
 
-		tBegin := crtime.NowMono() // for slow log message
-		sendCtx, cbToken, cbErr := ds.circuitBreakers.ForReplica(desc, &curReplica).Track(ctx, ba, withCommit, tBegin)
+		tBegin := timeutil.Now() // for slow log message
+		sendCtx, cbToken, cbErr := ds.circuitBreakers.ForReplica(desc, &curReplica).
+			Track(ctx, ba, withCommit, tBegin.UnixNano())
 		if cbErr != nil {
 			// Circuit breaker is tripped. err will be handled below.
 			err = cbErr
 			transport.SkipReplica()
 		} else {
 			br, err = transport.SendNext(sendCtx, requestToSend)
-			tEnd := crtime.NowMono()
-			if cancelErr := cbToken.Done(br, err, tEnd); cancelErr != nil {
+			tEnd := timeutil.Now()
+			if cancelErr := cbToken.Done(br, err, tEnd.UnixNano()); cancelErr != nil {
 				// The request was cancelled by the circuit breaker tripping. If this is
 				// detected by request evaluation (as opposed to the transport send), it
 				// will return the context error in br.Error instead of err, which won't
@@ -3147,7 +3124,15 @@ func (ds *DistSender) getLocalityComparison(
 		log.VEventf(ctx, 5, "failed to perform look up for node descriptor %v", err)
 		return roachpb.LocalityComparisonType_UNDEFINED
 	}
-	return gatewayNodeDesc.Locality.Compare(destinationNodeDesc.Locality)
+
+	comparisonResult, regionValid, zoneValid := gatewayNodeDesc.Locality.CompareWithLocality(destinationNodeDesc.Locality)
+	if !regionValid {
+		log.VInfof(ctx, 5, "unable to determine if the given nodes are cross region")
+	}
+	if !zoneValid {
+		log.VInfof(ctx, 5, "unable to determine if the given nodes are cross zone")
+	}
+	return comparisonResult
 }
 
 func (ds *DistSender) maybeIncrementErrCounters(br *kvpb.BatchResponse, err error) {

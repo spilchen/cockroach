@@ -2268,14 +2268,12 @@ func (c *cliState) doRunShell(state cliStateEnum, cmdIn, cmdOut, cmdErr *os.File
 		}
 		switch state {
 		case cliStart:
-			//nolint:deferloop
 			defer func() {
 				if err := c.closeOutputFile(); err != nil {
 					fmt.Fprintf(cmdErr, "warning: closing output file: %v\n", err)
 				}
 			}()
 			cleanupFn, err := c.configurePreShellDefaults(cmdIn, cmdOut, cmdErr)
-			//nolint:deferloop
 			defer cleanupFn()
 			if err != nil {
 				return err

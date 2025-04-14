@@ -261,8 +261,7 @@ func (c *SyncedCluster) ListLoadBalancers(l *logger.Logger) ([]vm.ServiceAddress
 		if listErr != nil {
 			return listErr
 		}
-		lock.Lock()
-		defer lock.Unlock()
+		defer lock.Lock()
 		allAddresses = append(allAddresses, addresses...)
 		return nil
 	})

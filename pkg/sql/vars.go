@@ -17,7 +17,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/build"
 	"github.com/cockroachdb/cockroach/pkg/kv"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/kvcoord"
 	"github.com/cockroachdb/cockroach/pkg/security"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/server/telemetry"
@@ -28,6 +27,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/colfetcher"
 	"github.com/cockroachdb/cockroach/pkg/sql/delegate"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
+	"github.com/cockroachdb/cockroach/pkg/sql/gpq"
 	"github.com/cockroachdb/cockroach/pkg/sql/lex"
 	"github.com/cockroachdb/cockroach/pkg/sql/paramparse"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
@@ -634,115 +634,6 @@ var varGen = map[string]sessionVar{
 	},
 
 	// CockroachDB extension.
-	`distribute_group_by_row_count_threshold`: {
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return strconv.FormatUint(evalCtx.SessionData().DistributeGroupByRowCountThreshold, 10), nil
-		},
-		GetStringVal: makeIntGetStringValFn(`distribute_group_by_row_count_threshold`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			i, err := strconv.ParseInt(s, 10, 64)
-			if err != nil {
-				return err
-			}
-			if i < 0 {
-				return pgerror.Newf(pgcode.InvalidParameterValue,
-					"cannot set distribute_group_by_row_count_threshold to a negative value: %d", i)
-			}
-			m.SetDistributeGroupByRowCountThreshold(uint64(i))
-			return nil
-		},
-		GlobalDefault: func(sv *settings.Values) string {
-			return strconv.FormatUint(1000, 10)
-		},
-	},
-
-	// CockroachDB extension.
-	`distribute_sort_row_count_threshold`: {
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return strconv.FormatUint(evalCtx.SessionData().DistributeSortRowCountThreshold, 10), nil
-		},
-		GetStringVal: makeIntGetStringValFn(`distribute_sort_row_count_threshold`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			i, err := strconv.ParseInt(s, 10, 64)
-			if err != nil {
-				return err
-			}
-			if i < 0 {
-				return pgerror.Newf(pgcode.InvalidParameterValue,
-					"cannot set distribute_sort_row_count_threshold to a negative value: %d", i)
-			}
-			m.SetDistributeSortRowCountThreshold(uint64(i))
-			return nil
-		},
-		GlobalDefault: func(sv *settings.Values) string {
-			return strconv.FormatUint(1000, 10)
-		},
-	},
-
-	// CockroachDB extension.
-	`distribute_scan_row_count_threshold`: {
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return strconv.FormatUint(evalCtx.SessionData().DistributeScanRowCountThreshold, 10), nil
-		},
-		GetStringVal: makeIntGetStringValFn(`distribute_scan_row_count_threshold`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			i, err := strconv.ParseInt(s, 10, 64)
-			if err != nil {
-				return err
-			}
-			if i < 0 {
-				return pgerror.Newf(pgcode.InvalidParameterValue,
-					"cannot set distribute_scan_row_count_threshold to a negative value: %d", i)
-			}
-			m.SetDistributeScanRowCountThreshold(uint64(i))
-			return nil
-		},
-		GlobalDefault: func(sv *settings.Values) string {
-			return strconv.FormatUint(10000, 10)
-		},
-	},
-
-	// CockroachDB extension.
-	`always_distribute_full_scans`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`always_distribute_full_scans`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar("always_distribute_full_scans", s)
-			if err != nil {
-				return err
-			}
-			m.SetAlwaysDistributeFullScans(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().AlwaysDistributeFullScans), nil
-		},
-		GlobalDefault: globalFalse,
-	},
-
-	// CockroachDB extension.
-	`distribute_join_row_count_threshold`: {
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return strconv.FormatUint(evalCtx.SessionData().DistributeJoinRowCountThreshold, 10), nil
-		},
-		GetStringVal: makeIntGetStringValFn(`distribute_join_row_count_threshold`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			i, err := strconv.ParseInt(s, 10, 64)
-			if err != nil {
-				return err
-			}
-			if i < 0 {
-				return pgerror.Newf(pgcode.InvalidParameterValue,
-					"cannot set distribute_join_row_count_threshold to a negative value: %d", i)
-			}
-			m.SetDistributeJoinRowCountThreshold(uint64(i))
-			return nil
-		},
-		GlobalDefault: func(sv *settings.Values) string {
-			return strconv.FormatUint(1000, 10)
-		},
-	},
-
-	// CockroachDB extension.
 	`disable_vec_union_eager_cancellation`: {
 		GetStringVal: makePostgresBoolGetStringValFn(`disable_vec_union_eager_cancellation`),
 		Set: func(_ context.Context, m sessionDataMutator, s string) error {
@@ -947,7 +838,7 @@ var varGen = map[string]sessionVar{
 		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
 			return formatBoolAsPostgresSetting(evalCtx.SessionData().OptimizerUseMergedPartialStatistics), nil
 		},
-		GlobalDefault: globalTrue,
+		GlobalDefault: globalFalse,
 	},
 
 	// CockroachDB extension.
@@ -1289,10 +1180,6 @@ var varGen = map[string]sessionVar{
 	// See https://www.postgresql.org/docs/10/static/runtime-config-preset.html#GUC-MAX-INDEX-KEYS
 	`max_index_keys`: makeReadOnlyVar("32"),
 
-	// Supported for PG compatibility only. MaxInt32 indicates no limit.
-	// See https://www.postgresql.org/docs/10/runtime-config-resource.html#GUC-MAX-PREPARED-TRANSACTIONS
-	`max_prepared_transactions`: makeReadOnlyVar(strconv.Itoa(math.MaxInt32)),
-
 	// CockroachDB extension.
 	`node_id`: {
 		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
@@ -1583,7 +1470,7 @@ var varGen = map[string]sessionVar{
 
 	// CockroachDB extension.
 	`crdb_version`: makeReadOnlyVarWithFn(func() string {
-		return build.GetInfo().Short().StripMarkers()
+		return build.GetInfo().Short()
 	}),
 
 	// CockroachDB extension
@@ -1968,23 +1855,6 @@ var varGen = map[string]sessionVar{
 		GlobalDefault: func(sv *settings.Values) string {
 			return formatBoolAsPostgresSetting(disallowFullTableScans.Get(sv))
 		},
-	},
-
-	// CockroachDB extension.
-	`avoid_full_table_scans_in_mutations`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`avoid_full_table_scans_in_mutations`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar(`avoid_full_table_scans_in_mutations`, s)
-			if err != nil {
-				return err
-			}
-			m.SetAvoidFullTableScansInMutations(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().AvoidFullTableScansInMutations), nil
-		},
-		GlobalDefault: globalTrue,
 	},
 
 	// CockroachDB extension.
@@ -3590,6 +3460,12 @@ var varGen = map[string]sessionVar{
 					sessiondatapb.PlanCacheModeAuto.String(),
 				)
 			}
+			if mode == sessiondatapb.PlanCacheModeForceGeneric ||
+				mode == sessiondatapb.PlanCacheModeAuto {
+				if err := gpq.CheckClusterSupportsGenericQueryPlans(m.settings); err != nil {
+					return err
+				}
+			}
 			m.SetPlanCacheMode(mode)
 			return nil
 		},
@@ -3597,7 +3473,7 @@ var varGen = map[string]sessionVar{
 			return evalCtx.SessionData().PlanCacheMode.String(), nil
 		},
 		GlobalDefault: func(sv *settings.Values) string {
-			return planCacheClusterMode.String(sv)
+			return sessiondatapb.PlanCacheModeForceCustom.String()
 		},
 	},
 
@@ -3705,25 +3581,7 @@ var varGen = map[string]sessionVar{
 		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
 			return formatBoolAsPostgresSetting(evalCtx.SessionData().LegacyVarcharTyping), nil
 		},
-		GlobalDefault: globalFalse,
-	},
-
-	// CockroachDB extension.
-	`catalog_digest_staleness_check_enabled`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`catalog_digest_staleness_check_enabled`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar("catalog_digest_staleness_check_enabled", s)
-			if err != nil {
-				return err
-			}
-			m.SetCatalogDigestStalenessCheckEnabled(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().CatalogDigestStalenessCheckEnabled), nil
-		},
 		GlobalDefault: globalTrue,
-		Hidden:        true,
 	},
 
 	// CockroachDB extension.
@@ -3743,7 +3601,6 @@ var varGen = map[string]sessionVar{
 		GlobalDefault: globalFalse,
 	},
 
-	// CockroachDB extension.
 	`optimizer_min_row_count`: {
 		GetStringVal: makeFloatGetStringValFn(`optimizer_min_row_count`),
 		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
@@ -3757,30 +3614,14 @@ var varGen = map[string]sessionVar{
 			if err != nil {
 				return err
 			}
+			// Note that we permit fractions above 1.0 to allow for giving
+			// head-of-the-line batch more memory that is available - this will
+			// put the budget in debt.
 			if f < 0 {
 				return pgerror.New(pgcode.InvalidParameterValue, "optimizer_min_row_count must be non-negative")
 			}
 			m.SetOptimizerMinRowCount(f)
 			return nil
-		},
-	},
-
-	// CockroachDB extension.
-	`kv_transaction_buffered_writes_enabled`: {
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().BufferedWritesEnabled), nil
-		},
-		GetStringVal: makePostgresBoolGetStringValFn("kv_transaction_buffered_writes_enabled"),
-		Set: func(ctx context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar(`kv_transaction_buffered_writes_enabled`, s)
-			if err != nil {
-				return err
-			}
-			m.SetBufferedWritesEnabled(b)
-			return nil
-		},
-		GlobalDefault: func(sv *settings.Values) string {
-			return formatBoolAsPostgresSetting(kvcoord.BufferedWritesEnabled.Get(sv))
 		},
 	},
 
@@ -3791,7 +3632,7 @@ var varGen = map[string]sessionVar{
 			return formatFloatAsPostgresSetting(evalCtx.SessionData().OptimizerCheckInputMinRowCount), nil
 		},
 		GlobalDefault: func(sv *settings.Values) string {
-			return "1"
+			return "0"
 		},
 		Set: func(ctx context.Context, m sessionDataMutator, s string) error {
 			f, err := strconv.ParseFloat(s, 64)
@@ -3804,142 +3645,6 @@ var varGen = map[string]sessionVar{
 			m.SetOptimizerCheckInputMinRowCount(f)
 			return nil
 		},
-	},
-
-	// CockroachDB extension.
-	`optimizer_plan_lookup_joins_with_reverse_scans`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`optimizer_plan_lookup_joins_with_reverse_scans`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar("optimizer_plan_lookup_joins_with_reverse_scans", s)
-			if err != nil {
-				return err
-			}
-			m.SetOptimizerPlanLookupJoinsWithReverseScans(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().OptimizerPlanLookupJoinsWithReverseScans), nil
-		},
-		GlobalDefault: globalTrue,
-	},
-
-	// CockroachDB extension.
-	`register_latch_wait_contention_events`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`register_latch_wait_contention_events`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar("register_latch_wait_contention_events", s)
-			if err != nil {
-				return err
-			}
-			m.SetRegisterLatchWaitContentionEvents(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().RegisterLatchWaitContentionEvents), nil
-		},
-		GlobalDefault: globalFalse,
-	},
-
-	// CockroachDB extension.
-	`use_cputs_on_non_unique_indexes`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`use_cputs_on_non_unique_indexes`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar("use_cputs_on_non_unique_indexes", s)
-			if err != nil {
-				return err
-			}
-			m.SetUseCPutsOnNonUniqueIndexes(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().UseCPutsOnNonUniqueIndexes), nil
-		},
-		GlobalDefault: globalFalse,
-	},
-
-	// CockroachDB extension.
-	`buffered_writes_use_locking_on_non_unique_indexes`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`buffered_writes_use_locking_on_non_unique_indexes`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar("buffered_writes_use_locking_on_non_unique_indexes", s)
-			if err != nil {
-				return err
-			}
-			m.SetBufferedWritesUseLockingOnNonUniqueIndexes(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().BufferedWritesUseLockingOnNonUniqueIndexes), nil
-		},
-		GlobalDefault: globalFalse,
-	},
-
-	// CockroachDB extension.
-	`optimizer_use_lock_elision_multiple_families`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`optimizer_use_lock_elision_multiple_families`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar("optimizer_use_lock_elision_multiple_families", s)
-			if err != nil {
-				return err
-			}
-			m.SetOptimizerUseLockElisionMultipleFamilies(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().OptimizerUseLockElisionMultipleFamilies), nil
-		},
-		GlobalDefault: globalFalse,
-	},
-
-	// CockroachDB extension.
-	`optimizer_enable_lock_elision`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`optimizer_enable_lock_elision`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar("optimizer_enable_lock_elision", s)
-			if err != nil {
-				return err
-			}
-			m.SetOptimizerEnableLockElision(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().OptimizerEnableLockElision), nil
-		},
-		GlobalDefault: globalTrue,
-	},
-
-	// CockroachDB extension.
-	`optimizer_use_delete_range_fast_path`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`optimizer_use_delete_range_fast_path`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar("optimizer_use_delete_range_fast_path", s)
-			if err != nil {
-				return err
-			}
-			m.SetOptimizerUseDeleteRangeFastPath(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().OptimizerUseDeleteRangeFastPath), nil
-		},
-		GlobalDefault: globalTrue,
-	},
-
-	// CockroachDB extension.
-	`allow_create_trigger_function_with_argv_references`: {
-		GetStringVal: makePostgresBoolGetStringValFn(`allow_create_trigger_function_with_argv_references`),
-		Set: func(_ context.Context, m sessionDataMutator, s string) error {
-			b, err := paramparse.ParseBoolVar("allow_create_trigger_function_with_argv_references", s)
-			if err != nil {
-				return err
-			}
-			m.SetAllowCreateTriggerFunctionWithArgvReferences(b)
-			return nil
-		},
-		Get: func(evalCtx *extendedEvalContext, _ *kv.Txn) (string, error) {
-			return formatBoolAsPostgresSetting(evalCtx.SessionData().AllowCreateTriggerFunctionWithArgvReferences), nil
-		},
-		GlobalDefault: globalFalse,
 	},
 }
 

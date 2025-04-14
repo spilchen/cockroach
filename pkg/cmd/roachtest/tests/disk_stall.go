@@ -44,12 +44,14 @@ func registerDiskStalledWALFailover(r registry.Registry) {
 		EncryptionSupport: registry.EncryptionMetamorphic,
 		Leases:            registry.MetamorphicLeases,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
-			runDiskStalledWALFailover(ctx, t, c)
+			runDiskStalledWALFailover(ctx, t, c, "among-stores")
 		},
 	})
 }
 
-func runDiskStalledWALFailover(ctx context.Context, t test.Test, c cluster.Cluster) {
+func runDiskStalledWALFailover(
+	ctx context.Context, t test.Test, c cluster.Cluster, failoverFlag string,
+) {
 	startSettings := install.MakeClusterSettings()
 	// Set a high value for the max sync durations to avoid the disk
 	// stall detector fataling the node.
@@ -66,8 +68,12 @@ func runDiskStalledWALFailover(ctx context.Context, t test.Test, c cluster.Clust
 
 	t.Status("starting cluster")
 	startOpts := option.DefaultStartOpts()
-	startOpts.RoachprodOpts.WALFailover = "among-stores"
-	startOpts.RoachprodOpts.StoreCount = 2
+	if failoverFlag == "among-stores" {
+		startOpts.RoachprodOpts.StoreCount = 2
+	}
+	startOpts.RoachprodOpts.ExtraArgs = []string{
+		"--wal-failover=" + failoverFlag,
+	}
 	c.Start(ctx, t.L(), startOpts, startSettings, c.CRDBNodes())
 
 	// Open a SQL connection to n1, the node that will be stalled.
@@ -113,10 +119,8 @@ func runDiskStalledWALFailover(ctx context.Context, t test.Test, c cluster.Clust
 				continue
 			}
 			func() {
-				t.Status("Stalling disk on n1")
 				stopStall := time.After(30 * time.Second)
 				s.Stall(ctx, c.Node(1))
-				t.Status("Stalled disk on n1")
 				// NB: We use a background context in the defer'ed unstall command,
 				// otherwise on test failure our Unstall calls will be ignored. Leaving
 				// the disk stalled will prevent artifact collection, making debugging
@@ -124,12 +128,9 @@ func runDiskStalledWALFailover(ctx context.Context, t test.Test, c cluster.Clust
 				defer func() {
 					ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 					defer cancel()
-					t.Status("Unstalling disk on n1")
 					s.Unstall(ctx, c.Node(1))
-					t.Status("Unstalled disk on n1")
 				}()
 
-				t.Status("waiting for 30s to elapse before unstalling")
 				select {
 				case <-ctx.Done():
 					t.Fatalf("context done while stall induced: %s", ctx.Err())

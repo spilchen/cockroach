@@ -31,7 +31,7 @@ func registerDeclarativeSchemaChangerJobCompatibilityInMixedVersion(r registry.R
 		Owner:            registry.OwnerSQLFoundations,
 		Cluster:          r.MakeClusterSpec(4),
 		CompatibleClouds: registry.AllExceptAWS,
-		Suites:           registry.Suites(registry.MixedVersion, registry.Nightly),
+		Suites:           registry.Suites(registry.Nightly),
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			runDeclarativeSchemaChangerJobCompatibilityInMixedVersion(ctx, t, c)
 		},
@@ -86,7 +86,7 @@ func executeSupportedDDLs(
 	// here because these connnections are managed by the mixedversion
 	// framework, which already closes them at the end of the test.
 	testUtils, err := newCommonTestUtils(
-		ctx, t, c, connectFunc, helper.DefaultService().Descriptor.Nodes,
+		ctx, t, c, connectFunc, helper.DefaultService().Descriptor.Nodes, false, false,
 	)
 	if err != nil {
 		return err

@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
+	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/constraint"
@@ -159,30 +160,6 @@ var RejectLeaseOnLeaderUnknown = settings.RegisterBoolSetting(
 	"reject lease requests on a replica that does not know the raft leader",
 	false,
 )
-
-// OverrideDefaultLeaseType overrides the default lease type for the cluster
-// settings, regardless of any metamorphic constants.
-func OverrideDefaultLeaseType(ctx context.Context, sv *settings.Values, typ roachpb.LeaseType) {
-	switch typ {
-	case roachpb.LeaseExpiration:
-		ExpirationLeasesOnly.Override(ctx, sv, true)
-	case roachpb.LeaseEpoch:
-		ExpirationLeasesOnly.Override(ctx, sv, false)
-		RaftLeaderFortificationFractionEnabled.Override(ctx, sv, 0.0)
-	case roachpb.LeaseLeader:
-		ExpirationLeasesOnly.Override(ctx, sv, false)
-		RaftLeaderFortificationFractionEnabled.Override(ctx, sv, 1.0)
-	default:
-		log.Fatalf(ctx, "unexpected lease type: %v", typ)
-	}
-}
-
-// OverrideLeaderLeaseMetamorphism overrides the default lease type to be
-// epoch based leases, regardless of whether leader leases were metamorphically
-// enabled or not.
-func OverrideLeaderLeaseMetamorphism(ctx context.Context, sv *settings.Values) {
-	RaftLeaderFortificationFractionEnabled.Override(ctx, sv, 0.0)
-}
 
 // leaseRequestHandle is a handle to an asynchronous lease request.
 type leaseRequestHandle struct {
@@ -377,13 +354,12 @@ func (p *pendingLeaseRequest) InitOrJoinRequest(
 		Now:                   status.Now,
 		MinLeaseProposedTS:    p.repl.mu.minLeaseProposedTS,
 		RaftStatus:            raftStatus,
-		RaftCompacted:         p.repl.raftCompactedIndexRLocked(),
+		RaftFirstIndex:        p.repl.raftFirstIndexRLocked(),
 		PrevLease:             status.Lease,
 		PrevLeaseNodeLiveness: status.Liveness,
 		PrevLeaseExpired:      status.IsExpired(),
 		NextLeaseHolder:       nextLeaseHolder,
 		BypassSafetyChecks:    bypassSafetyChecks,
-		DesiredLeaseType:      p.repl.desiredLeaseTypeRLocked(),
 	}
 	out, err := leases.VerifyAndBuild(ctx, st, nl, in)
 	if err != nil {
@@ -757,11 +733,15 @@ func (r *Replica) leaseStatusForRequestRLocked(
 		MinProposedTs:      r.mu.minLeaseProposedTS,
 		MinValidObservedTs: r.mu.minValidObservedTimestamp,
 		RequestTs:          reqTS,
-		Lease:              r.shMu.state.Lease,
+		Lease:              *r.shMu.state.Lease,
 	}
-
+	// TODO(nvanbenschoten): evaluate whether this is too expensive to compute for
+	// every lease status request. We may need to cache this result. If, at that
+	// time, we determine that it is sufficiently cheap, we should either compute
+	// it unconditionally, regardless of the lease type or let leases.Status
+	// decide when to compute it. See #125255.
 	if in.Lease.Type() == roachpb.LeaseLeader {
-		in.RaftStatus = r.raftBasicStatusRLocked()
+		in.RaftStatus = r.raftLeadSupportStatusRLocked()
 	}
 	return leases.Status(ctx, r.store.cfg.NodeLiveness, in)
 }
@@ -794,9 +774,8 @@ func (r *Replica) leaseSettings(ctx context.Context) leases.Settings {
 		DisableAboveRaftLeaseTransferSafetyChecks: r.store.cfg.TestingKnobs.DisableAboveRaftLeaseTransferSafetyChecks,
 		AllowLeaseProposalWhenNotLeader:           r.store.cfg.TestingKnobs.AllowLeaseRequestProposalsWhenNotLeader,
 		// TODO(arul): remove this field entirely.
-		ExpToEpochEquiv: true,
-		// TODO(radu): remove this field entirely.
-		MinExpirationSupported: true,
+		ExpToEpochEquiv:        true,
+		MinExpirationSupported: r.store.ClusterSettings().Version.IsActive(ctx, clusterversion.V24_2_LeaseMinTimestamp),
 		RangeLeaseDuration:     r.store.cfg.RangeLeaseDuration,
 	}
 }
@@ -823,11 +802,15 @@ func (r *Replica) requiresExpirationLeaseRLocked() bool {
 
 // shouldUseExpirationLeaseRLocked returns true if this range should be using an
 // expiration-based lease.
-//
-// We use an expiration-based lease if the range requires one or if the
-// kv.expiration_leases_only.enabled setting is enabled and the number of ranges
-// (replicas) per node is fewer than kv.expiration_leases.max_replicas_per_node.
 func (r *Replica) shouldUseExpirationLeaseRLocked() bool {
+	return r.desiredLeaseTypeRLocked() == roachpb.LeaseExpiration
+}
+
+// desiredLeaseTypeRLocked returns the desired lease type for this replica.
+func (r *Replica) desiredLeaseTypeRLocked() roachpb.LeaseType {
+	// Use an expiration-based lease if the range requires one or if the
+	// kv.expiration_leases_only.enabled setting is enabled and the number of ranges
+	// (replicas) per node is fewer than kv.expiration_leases.max_replicas_per_node.
 	expirationLeaseRequired := r.requiresExpirationLeaseRLocked()
 	expirationLeaseOnly := func() bool {
 		settingEnabled := ExpirationLeasesOnly.Get(&r.ClusterSettings().SV) && !DisableExpirationLeasesOnly
@@ -839,14 +822,6 @@ func (r *Replica) shouldUseExpirationLeaseRLocked() bool {
 		return settingEnabled
 	}()
 	if expirationLeaseRequired || expirationLeaseOnly {
-		return true
-	}
-	return false
-}
-
-// desiredLeaseTypeRLocked returns the desired lease type for this replica.
-func (r *Replica) desiredLeaseTypeRLocked() roachpb.LeaseType {
-	if r.shouldUseExpirationLeaseRLocked() {
 		return roachpb.LeaseExpiration
 	}
 
@@ -1446,7 +1421,6 @@ func (r *Replica) redirectOnOrAcquireLeaseForRequest(
 					log.Warningf(ctx, "have been waiting %s attempting to acquire lease (%d attempts)",
 						base.SlowRequestThreshold, attempt)
 					r.store.metrics.SlowLeaseRequests.Inc(1)
-					//nolint:deferloop
 					defer func(attempt int) {
 						r.store.metrics.SlowLeaseRequests.Dec(1)
 						log.Infof(ctx, "slow lease acquisition finished after %s with error %v after %d attempts", timeutil.Since(tBegin), pErr, attempt)

@@ -245,28 +245,7 @@ var retiredSettings = map[InternalKey]struct{}{
 	"bulkio.backup.split_keys_on_timestamps":           {},
 	"sql.create_tenant.default_template":               {},
 	"kvadmission.low_pri_read_elastic_control.enabled": {},
-
-	// removed as of 25.1
-	"sql.auth.resolve_membership_single_scan.enabled":            {},
-	"storage.single_delete.crash_on_invariant_violation.enabled": {},
-	"storage.single_delete.crash_on_ineffectual.enabled":         {},
-	"bulkio.backup.elide_common_prefix.enabled":                  {},
-	"kv.bulkio.write_metadata_sst.enabled":                       {},
-	"jobs.execution_errors.max_entries":                          {},
-	"jobs.execution_errors.max_entry_size":                       {},
-	"sql.metrics.statement_details.plan_collection.enabled":      {},
-	"sql.metrics.statement_details.plan_collection.period":       {},
-
-	// removed as of 25.2
-	"kv.snapshot_receiver.excise.enabled":                    {},
-	"kv.mvcc_gc.queue_kv_admission_control.enabled":          {},
-	"sql.catalog.experimental_use_session_based_leasing":     {},
-	"bulkio.backup.merge_file_buffer_size":                   {},
-	"changefeed.new_webhook_sink_enabled":                    {},
-	"changefeed.new_webhook_sink.enabled":                    {},
-	"changefeed.new_pubsub_sink_enabled":                     {},
-	"changefeed.new_pubsub_sink.enabled":                     {},
-	"logical_replication.consumer.use_implicit_txns.enabled": {},
+	"sql.auth.resolve_membership_single_scan.enabled":  {},
 }
 
 // grandfatheredDefaultSettings is the list of "grandfathered" existing sql.defaults

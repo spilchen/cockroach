@@ -465,7 +465,7 @@ skipif config multiregion-9node-3region-3azs-vec-off
 query I retry
 SELECT DISTINCT range_id FROM [SHOW RANGES FROM TABLE messages_rbr]
 ----
-80
+75
 
 # Update does not fail when accessing all rows in messages_rbr because lookup
 # join does not error out the lookup table in phase 1.
@@ -502,7 +502,7 @@ DELETE FROM messages_rbr WHERE account_id NOT IN (SELECT account_id FROM message
 
 # Delete accessing all regions should fail.
 retry
-statement error pq: Query has no home region\. Try adding a filter on messages_rbr\.crdb_region and/or on key column \(messages_rbr\.message\)\. For more information, see https://www.cockroachlabs.com/docs/stable/cost-based-optimizer.html#control-whether-queries-are-limited-to-a-single-region
+statement error pq: Query has no home region\. Try adding a filter on messages_rbr\.crdb_region and/or on key column \(messages_rbr\.account_id\)\. For more information, see https://www.cockroachlabs.com/docs/stable/cost-based-optimizer.html#control-whether-queries-are-limited-to-a-single-region
 DELETE FROM messages_rbr WHERE message = 'Hello World!'
 
 # Insert should fail accessing all rows in messages_rbr.
@@ -1079,7 +1079,7 @@ project
       │    ├── key columns: [26 22] = [13 9]
       │    ├── lookup columns are key
       │    ├── immutable
-      │    ├── stats: [rows=3333.33]
+      │    ├── stats: [rows=3333.333]
       │    ├── cost: 4309.11778
       │    ├── fd: ()-->(13), (9)-->(11)
       │    ├── limit hint: 1.00
@@ -1092,7 +1092,7 @@ project
       │    │    ├── prefix key columns: [21] = [26]
       │    │    ├── inverted-expr
       │    │    │    └── t1.j:24 @> t2.j:3
-      │    │    ├── stats: [rows=3333.33, distinct(21)=1, null(21)=0, distinct(22)=964.524, null(22)=0, distinct(26)=1, null(26)=0]
+      │    │    ├── stats: [rows=3333.333, distinct(21)=1, null(21)=0, distinct(22)=964.524, null(22)=0, distinct(26)=1, null(26)=0]
       │    │    ├── cost: 3837.19889
       │    │    ├── fd: ()-->(26)
       │    │    ├── limit hint: 100.00

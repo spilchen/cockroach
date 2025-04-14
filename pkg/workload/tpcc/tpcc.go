@@ -9,7 +9,6 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"regexp"
 	"strconv"
@@ -22,7 +21,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/parser/statements"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
-	"github.com/cockroachdb/cockroach/pkg/util/quotapool"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/workload"
@@ -31,7 +29,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/jackc/pgx/v5"
 	"github.com/spf13/pflag"
-	randold "golang.org/x/exp/rand"
+	"golang.org/x/exp/rand"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -55,11 +53,10 @@ type tpcc struct {
 
 	warehouses       int
 	activeWarehouses int
-	nowTime          time.Time
+	nowString        []byte
 	numConns         int
 	idleConns        int
 	txnRetries       bool
-	repairOrderIds   bool
 
 	// txnPreambleFile queries that will be executed before each operation.
 	txnPreambleFile       string
@@ -81,7 +78,6 @@ type tpcc struct {
 	onTxnStartFns []func(ctx context.Context, tx pgx.Tx) error
 
 	workers                int
-	activeWorkers          int
 	fks                    bool
 	separateColumnFamilies bool
 	// deprecatedFKIndexes adds in foreign key indexes that are no longer needed
@@ -101,7 +97,6 @@ type tpcc struct {
 	scatter bool
 
 	partitions         int
-	ignorePartitions   bool
 	clientPartitions   int
 	affinityPartitions []int
 	wPart              *partitioner
@@ -135,8 +130,6 @@ type tpcc struct {
 	// context group for any background reset table operation to avoid goroutine leaks during long duration workloads
 	resetTableGrp      ctxgroup.Group
 	resetTableCancelFn context.CancelFunc
-
-	asOfSystemTime string
 }
 
 type waitSetter struct {
@@ -247,13 +240,11 @@ var tpccMeta = workload.Meta{
 		g.flags.Meta = map[string]workload.FlagMeta{
 			`mix`:                      {RuntimeOnly: true},
 			`partitions`:               {RuntimeOnly: true},
-			`ignore-partitions`:        {RuntimeOnly: true},
 			`client-partitions`:        {RuntimeOnly: true},
 			`partition-affinity`:       {RuntimeOnly: true},
 			`partition-strategy`:       {RuntimeOnly: true},
 			`zones`:                    {RuntimeOnly: true},
 			`active-warehouses`:        {RuntimeOnly: true},
-			`active-workers`:           {RuntimeOnly: true},
 			`scatter`:                  {RuntimeOnly: true},
 			`split`:                    {RuntimeOnly: true},
 			`wait`:                     {RuntimeOnly: true},
@@ -261,7 +252,6 @@ var tpccMeta = workload.Meta{
 			`conns`:                    {RuntimeOnly: true},
 			`idle-conns`:               {RuntimeOnly: true},
 			`txn-retries`:              {RuntimeOnly: true},
-			`repair-order-ids`:         {RuntimeOnly: true},
 			`expensive-checks`:         {RuntimeOnly: true, CheckConsistencyOnly: true},
 			`local-warehouses`:         {RuntimeOnly: true},
 			`regions`:                  {RuntimeOnly: true},
@@ -270,8 +260,7 @@ var tpccMeta = workload.Meta{
 			`deprecated-fk-indexes`:    {RuntimeOnly: true},
 			`query-trace-file`:         {RuntimeOnly: true},
 			`fake-time`:                {RuntimeOnly: true},
-			`txn-preamble-file`:        {RuntimeOnly: true},
-			`aost`:                     {RuntimeOnly: true, CheckConsistencyOnly: true},
+			"txn-preamble-file":        {RuntimeOnly: true},
 		}
 
 		g.flags.IntVar(&g.warehouses, `warehouses`, 1, `Number of warehouses for loading`)
@@ -292,9 +281,7 @@ var tpccMeta = workload.Meta{
 		))
 		g.flags.IntVar(&g.idleConns, `idle-conns`, 0, `Number of idle connections. Defaults to 0`)
 		g.flags.BoolVar(&g.txnRetries, `txn-retries`, true, `Run transactions in a retry loop`)
-		g.flags.BoolVar(&g.repairOrderIds, `repair-order-ids`, false, `Attempt to repair next order id field of district rows automatically in reaction to unique violation during new-order txns (useful when running LDR on overlapping warehouses)`)
 		g.flags.IntVar(&g.partitions, `partitions`, 1, `Partition tables`)
-		g.flags.BoolVar(&g.ignorePartitions, `ignore-partitions`, false, `Ignore partitions during load generation`)
 		g.flags.IntVar(&g.clientPartitions, `client-partitions`, 0, `Make client behave as if the tables are partitioned, but does not actually partition underlying data. Requires --partition-affinity.`)
 		g.flags.IntSliceVar(&g.affinityPartitions, `partition-affinity`, nil, `Run load generator against specific partition (requires partitions). `+
 			`Note that if one value is provided, the assumption is that all urls are associated with that partition. In all other cases the assumption `+
@@ -304,7 +291,6 @@ var tpccMeta = workload.Meta{
 		g.flags.StringSliceVar(&g.multiRegionCfg.regions, "regions", []string{}, "Regions to use for multi-region partitioning. The first region is the PRIMARY REGION. Does not work with --zones.")
 		g.flags.Var(&g.multiRegionCfg.survivalGoal, "survival-goal", "Survival goal to use for multi-region setups. Allowed values: [zone, region].")
 		g.flags.IntVar(&g.activeWarehouses, `active-warehouses`, 0, `Run the load generator against a specific number of warehouses. Defaults to --warehouses'`)
-		g.flags.IntVar(&g.activeWorkers, `active-workers`, 0, `Number of workers that can execute at any given time. Defaults to --workers'`)
 		g.flags.BoolVar(&g.scatter, `scatter`, false, `Scatter ranges`)
 		g.flags.BoolVar(&g.split, `split`, false, `Split tables`)
 		g.flags.BoolVar(&g.expensiveChecks, `expensive-checks`, false, `Run expensive checks`)
@@ -314,19 +300,11 @@ var tpccMeta = workload.Meta{
 		g.flags.StringVar(&g.queryTraceFile, `query-trace-file`, ``, `File to write the query traces to. Defaults to no output`)
 		// Support executing a query file before each transaction.
 		g.flags.StringVar(&g.txnPreambleFile, "txn-preamble-file", "", "queries that will be injected before each txn")
-		g.flags.StringVar(&g.asOfSystemTime, "aost", "",
-			"This is an optional parameter to specify AOST; used exclusively in conjunction with the TPC-C consistency "+
-				"check. Example values are (\"'-1m'\", \"'-1h'\")")
-
 		RandomSeed.AddFlag(&g.flags)
 		g.connFlags = workload.NewConnFlags(&g.flags)
 		// Hardcode this since it doesn't seem like anyone will want to change
 		// it and it's really noisy in the generated fixture paths.
-		var err error
-		g.nowTime, err = time.Parse(`2006-01-02 15:04:05`, `2006-01-02 15:04:05`)
-		if err != nil {
-			panic(err) // unreachable.
-		}
+		g.nowString = []byte(`2006-01-02 15:04:05`)
 		return g
 	},
 }
@@ -431,12 +409,6 @@ func (w *tpcc) Hooks() workload.Hooks {
 				w.workers = w.activeWarehouses * NumWorkersPerWarehouse
 			}
 
-			if w.activeWorkers > w.workers {
-				return errors.Errorf(`--active-workers needs to be less than or equal to workers (%d)`, w.workers)
-			} else if w.activeWorkers == 0 {
-				w.activeWorkers = w.workers
-			}
-
 			if w.numConns == 0 {
 				// If we're not waiting, open up a connection for each worker. If we are
 				// waiting, we only use up to a set number of connections per warehouse.
@@ -445,25 +417,20 @@ func (w *tpcc) Hooks() workload.Hooks {
 				if w.waitFraction == 0 {
 					w.numConns = w.workers
 				} else {
-					partitionFactor := 1
-					countAffinity := len(w.affinityPartitions)
-					if countAffinity > 0 && w.partitions > 0 {
-						partitionFactor = w.partitions / countAffinity
-					}
-
-					w.numConns = (w.activeWarehouses * numConnsPerWarehouse)
-					w.numConns = w.numConns / partitionFactor
+					w.numConns = w.activeWarehouses * numConnsPerWarehouse
 				}
 			}
 
-			if w.waitFraction > 0 && w.activeWorkers != w.activeWarehouses*NumWorkersPerWarehouse && len(w.affinityPartitions) == 0 {
-				return errors.Errorf(`--wait > 0 and --warehouses=%d and affinity_partitions=0 requires --active-workers=%d`,
+			if w.waitFraction > 0 && w.workers != w.activeWarehouses*NumWorkersPerWarehouse {
+				return errors.Errorf(`--wait > 0 and --warehouses=%d requires --workers=%d`,
 					w.activeWarehouses, w.warehouses*NumWorkersPerWarehouse)
 			}
 
 			if w.queryTraceFile != `` && w.workers != 1 {
 				return errors.Errorf(`--query-trace-file must be used with exactly one worker`)
 			}
+
+			w.auditor = newAuditor(w.activeWarehouses)
 
 			// Create a partitioner to help us partition the warehouses. The base-case is
 			// where w.warehouses == w.activeWarehouses and w.partitions == 1.
@@ -486,8 +453,6 @@ func (w *tpcc) Hooks() workload.Hooks {
 					return errors.Wrap(err, "error creating multi-region partitioner")
 				}
 			}
-
-			w.auditor = newAuditor(w.activeWarehouses, w.wPart, w.affinityPartitions)
 			return initializeMix(w)
 		},
 		PreCreate: func(db *gosql.DB) error {
@@ -605,12 +570,6 @@ func (w *tpcc) Hooks() workload.Hooks {
 			const totalHeader = "\n_elapsed_______tpmC____efc__avg(ms)__p50(ms)__p90(ms)__p95(ms)__p99(ms)_pMax(ms)"
 			fmt.Println(totalHeader)
 
-			partitionFactor := 1
-			countAffinity := len(w.affinityPartitions)
-			if countAffinity > 0 && w.wPart.parts > 0 {
-				partitionFactor = w.wPart.parts / countAffinity
-			}
-
 			const newOrderName = `newOrder`
 			w.reg.Tick(func(t histogram.Tick) {
 				if newOrderName == t.Name {
@@ -618,7 +577,7 @@ func (w *tpcc) Hooks() workload.Hooks {
 					fmt.Printf("%7.1fs %10.1f %5.1f%% %8.1f %8.1f %8.1f %8.1f %8.1f %8.1f\n",
 						startElapsed.Seconds(),
 						tpmC,
-						100*tpmC/(SpecWarehouseFactor*float64(w.activeWarehouses/partitionFactor)),
+						100*tpmC/(SpecWarehouseFactor*float64(w.activeWarehouses)),
 						time.Duration(t.Cumulative.Mean()).Seconds()*1000,
 						time.Duration(t.Cumulative.ValueAtQuantile(50)).Seconds()*1000,
 						time.Duration(t.Cumulative.ValueAtQuantile(90)).Seconds()*1000,
@@ -645,7 +604,7 @@ func (w *tpcc) Hooks() workload.Hooks {
 				}
 
 				start := timeutil.Now()
-				err := check.Fn(db, w.asOfSystemTime /* asOfSystemTime */)
+				err := check.Fn(db, "" /* asOfSystemTime */)
 				log.Infof(ctx, `check %s took %s`, check.Name, timeutil.Since(start))
 				if err != nil {
 					return errors.Wrapf(err, `check failed: %s`, check.Name)
@@ -659,33 +618,21 @@ func (w *tpcc) Hooks() workload.Hooks {
 // Tables implements the Generator interface.
 func (w *tpcc) Tables() []workload.Table {
 	seed := RandomSeed.Seed()
-	aCharsInit := workloadimpl.PrecomputedRandInit(rand.NewPCG(seed, 0), precomputedLength, aCharsAlphabet)
-	lettersInit := workloadimpl.PrecomputedRandInit(rand.NewPCG(seed, 0), precomputedLength, lettersAlphabet)
-	numbersInit := workloadimpl.PrecomputedRandInit(rand.NewPCG(seed, 0), precomputedLength, numbersAlphabet)
-	aCharsInitOld := workloadimpl.PrecomputedRandInit(randold.New(randold.NewSource(seed)), precomputedLength, aCharsAlphabet)
-	lettersInitOld := workloadimpl.PrecomputedRandInit(randold.New(randold.NewSource(seed)), precomputedLength, lettersAlphabet)
-	numbersInitOld := workloadimpl.PrecomputedRandInit(randold.New(randold.NewSource(seed)), precomputedLength, numbersAlphabet)
+	aCharsInit := workloadimpl.PrecomputedRandInit(rand.New(rand.NewSource(seed)), precomputedLength, aCharsAlphabet)
+	lettersInit := workloadimpl.PrecomputedRandInit(rand.New(rand.NewSource(seed)), precomputedLength, lettersAlphabet)
+	numbersInit := workloadimpl.PrecomputedRandInit(rand.New(rand.NewSource(seed)), precomputedLength, numbersAlphabet)
 	if w.localsPool == nil {
 		w.localsPool = &sync.Pool{
 			New: func() interface{} {
 				return &generateLocals{
 					rng: tpccRand{
-						Rand: rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
+						Rand: rand.New(rand.NewSource(uint64(timeutil.Now().UnixNano()))),
 						// Intentionally wait until here to initialize the precomputed rands
 						// so a caller of Tables that only wants schema doesn't compute
 						// them.
 						aChars:  aCharsInit(),
 						letters: lettersInit(),
 						numbers: numbersInit(),
-					},
-					rngOld: tpccRandOld{
-						Rand: randold.New(randold.NewSource(uint64(timeutil.Now().UnixNano()))),
-						// Intentionally wait until here to initialize the precomputed rands
-						// so a caller of Tables that only wants schema doesn't compute
-						// them.
-						aChars:  aCharsInitOld(),
-						letters: lettersInitOld(),
-						numbers: numbersInitOld(),
 					},
 				}
 			},
@@ -916,7 +863,6 @@ func (w *tpcc) Ops(
 	// Limit the number of connections per pool (otherwise preparing statements at
 	// startup can be slow).
 	cfg.MaxConnsPerPool = w.connFlags.Concurrency
-	fmt.Printf("Max Total connections %d Max connections per pool %d \n", cfg.MaxTotalConnections, cfg.MaxConnsPerPool)
 	fmt.Printf("Initializing %d connections...\n", w.numConns)
 
 	// If queries were specified before each operation, then lets
@@ -995,15 +941,9 @@ func (w *tpcc) Ops(
 		// URLs are mapped to partitions in a round-robin fashion.
 		// Imagine there are 5 partitions and 15 urls, this code assumes that urls
 		// 0, 5, and 10 correspond to the 0th partition.
-		if len(w.affinityPartitions) == 0 {
-			for i, db := range dbs {
-				p := i % w.partitions
-				partitionDBs[p] = append(partitionDBs[p], db)
-			}
-		} else {
-			for i, p := range w.affinityPartitions {
-				partitionDBs[p] = append(partitionDBs[p], dbs[i])
-			}
+		for i, db := range dbs {
+			p := i % w.partitions
+			partitionDBs[p] = append(partitionDBs[p], db)
 		}
 		for i := range partitionDBs {
 			// Possible if we have more partitions than DB connections.
@@ -1044,32 +984,16 @@ func (w *tpcc) Ops(
 		// If nothing is mine, then everything is mine.
 		return len(w.affinityPartitions) == 0
 	}
-
-	workersSem := quotapool.NewIntPool("workers", uint64(w.activeWorkers))
-
 	// Limit the amount of workers we initialize in parallel, to avoid running out
 	// of memory (#36897).
 	sem := make(chan struct{}, 100)
-	elemIndex := -1
-	totalElemsLen := len(w.wPart.totalElems)
-	// Function to get the next warehouse and partition
-	getNextWarehouseAndPartition := func() (int, int) {
-		for {
-			elemIndex++
-			warehouse := w.wPart.totalElems[elemIndex%totalElemsLen]
-			part := w.wPart.partElemsMap[warehouse]
-			if isMyPart(part) {
-				return warehouse, part
-			}
-		}
-	}
-
 	for workerIdx := 0; workerIdx < w.workers; workerIdx++ {
 		workerIdx := workerIdx
-		var warehouse, p int
-
+		var warehouse int
+		var p int
 		if len(w.multiRegionCfg.regions) == 0 {
-			warehouse, p = getNextWarehouseAndPartition()
+			warehouse = w.wPart.totalElems[workerIdx%len(w.wPart.totalElems)]
+			p = w.wPart.partElemsMap[warehouse]
 		} else {
 			// For multi-region workloads, use the multi-region partitioning.
 			warehouse = w.wMRPart.totalElems[workerIdx%len(w.wMRPart.totalElems)]
@@ -1088,7 +1012,7 @@ func (w *tpcc) Ops(
 		idx := len(ql.WorkerFns) - 1
 		sem <- struct{}{}
 		group.Go(func() error {
-			worker, err := newWorker(ctx, w, db, reg.GetHandle(), w.txCounters, warehouse, workersSem)
+			worker, err := newWorker(ctx, w, db, reg.GetHandle(), w.txCounters, warehouse)
 			if err == nil {
 				ql.WorkerFns[idx] = worker.run
 			}
@@ -1177,12 +1101,6 @@ func (w *tpcc) partitionAndScatter(urls []string) error {
 
 func (w *tpcc) partitionAndScatterWithDB(db *gosql.DB) error {
 	if w.partitions > 1 {
-		// Ignore checking if data is actually partitioned.
-		// Useful incase data is not partitioned, but in load
-		// generation we want to use parition affinity.
-		if w.ignorePartitions {
-			return nil
-		}
 		// Repartitioning can take upwards of 10 minutes, so determine if
 		// the dataset is already partitioned before launching the operation
 		// again.

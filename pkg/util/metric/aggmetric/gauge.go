@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 
 	"github.com/cockroachdb/cockroach/pkg/util/metric"
-	"github.com/cockroachdb/errors"
 	"github.com/gogo/protobuf/proto"
+	"github.com/google/btree"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 )
 
@@ -31,7 +31,7 @@ var _ metric.PrometheusExportable = (*AggGauge)(nil)
 // NewGauge constructs a new AggGauge.
 func NewGauge(metadata metric.Metadata, childLabels ...string) *AggGauge {
 	g := &AggGauge{g: *metric.NewGauge(metadata)}
-	g.initWithBTreeStorageType(childLabels)
+	g.init(childLabels)
 	return g
 }
 
@@ -46,19 +46,20 @@ func NewFunctionalGauge(
 		values := make([]int64, 0)
 		g.childSet.mu.Lock()
 		defer g.childSet.mu.Unlock()
-		g.childSet.mu.children.Do(func(e interface{}) {
-			cg := g.childSet.mu.children.GetChildMetric(e).(*Gauge)
+		g.childSet.mu.tree.Ascend(func(item btree.Item) (wantMore bool) {
+			cg := item.(*Gauge)
 			values = append(values, cg.Value())
+			return true
 		})
 		return f(values)
 	}
 	g.g = *metric.NewFunctionalGauge(metadata, gaugeFn)
-	g.initWithBTreeStorageType(childLabels)
+	g.init(childLabels)
 	return g
 }
 
 // GetName is part of the metric.Iterable interface.
-func (g *AggGauge) GetName(useStaticLabels bool) string { return g.g.GetName(useStaticLabels) }
+func (g *AggGauge) GetName() string { return g.g.GetName() }
 
 // GetHelp is part of the metric.Iterable interface.
 func (g *AggGauge) GetHelp() string { return g.g.GetHelp() }
@@ -81,8 +82,8 @@ func (g *AggGauge) GetType() *io_prometheus_client.MetricType {
 }
 
 // GetLabels is part of the metric.PrometheusExportable interface.
-func (g *AggGauge) GetLabels(useStaticLabels bool) []*io_prometheus_client.LabelPair {
-	return g.g.GetLabels(useStaticLabels)
+func (g *AggGauge) GetLabels() []*io_prometheus_client.LabelPair {
+	return g.g.GetLabels()
 }
 
 // ToPrometheusMetric is part of the metric.PrometheusExportable interface.
@@ -106,6 +107,24 @@ func (g *AggGauge) AddChild(labelVals ...string) *Gauge {
 	return child
 }
 
+// GetChild gets a child for this Aggregate. If it does not exist,
+// it returns nil.
+func (g *AggGauge) GetChild(labelVals ...string) *Gauge {
+	key := &Gauge{labelValuesSlice: labelValuesSlice(labelVals)}
+	child := g.get(key)
+	if child == nil {
+		return nil
+	}
+	return child.(*Gauge)
+}
+
+// RemoveChild removes a Gauge from this AggGauge. This method panics if a Gauge
+// does not exist for this set of labelVals.
+func (g *AggGauge) RemoveChild(labelVals ...string) {
+	key := &Gauge{labelValuesSlice: labelValuesSlice(labelVals)}
+	g.remove(key)
+}
+
 // AddFunctionalChild adds a Gauge to this AggGauge where the value is
 // determined when asked for. This method panics if a Gauge already exists for
 // this set of labelVals.
@@ -117,66 +136,6 @@ func (g *AggGauge) AddFunctionalChild(fn func() int64, labelVals ...string) *Gau
 	}
 	g.add(child)
 	return child
-}
-
-// Inc increments the Gauge value by i for the given label values. If a
-// Gauge with the given label values doesn't exist yet, it creates a new
-// Gauge and increments it. Panics if the number of label values doesn't
-// match the number of labels defined for this Gauge.
-func (g *AggGauge) Inc(i int64, labelVals ...string) {
-	child := g.getOrCreateChild(labelVals...)
-	child.Inc(i)
-}
-
-// Dec decrements the Gauge value by i for the given label values. If a
-// Gauge with the given label values doesn't exist yet, it creates a new
-// Gauge and decrements it. Panics if the number of label values doesn't
-// match the number of labels defined for this Gauge.
-func (g *AggGauge) Dec(i int64, labelVals ...string) {
-	child := g.getOrCreateChild(labelVals...)
-	child.Dec(i)
-}
-
-// Update updates the Gauge value by val for the given label values. If a
-// Gauge with the given label values doesn't exist yet, it creates a new
-// Gauge and updates it. Panics if the number of label values doesn't
-// match the number of labels defined for this Gauge.
-func (g *AggGauge) Update(val int64, labelVals ...string) {
-	child := g.getOrCreateChild(labelVals...)
-	child.Update(val)
-}
-
-// UpdateFn updates the Gauge value by val for the given label values. If a
-// Gauge with the given label values doesn't exist yet, it creates a new
-// Gauge and updates it. Panics if the number of label values doesn't
-// match the number of labels defined for this Gauge.
-func (g *AggGauge) UpdateFn(f func() int64, labelVals ...string) {
-	child := g.getOrCreateChild(labelVals...)
-	child.UpdateFn(f)
-}
-
-func (g *AggGauge) getOrCreateChild(labelVals ...string) *Gauge {
-	if len(g.labels) != len(labelVals) {
-		panic(errors.AssertionFailedf(
-			"cannot increment child with %d label values %v to a metric with %d labels %v",
-			len(labelVals), labelVals, len(g.labels), g.labels))
-	}
-
-	// If the child already exists then return it.
-	if child, ok := g.get(labelVals...); ok {
-		return child.(*Gauge)
-	}
-
-	// Otherwise, create a new child then return it.
-	child := g.AddChild(labelVals...)
-	return child
-}
-
-// RemoveChild removes a Gauge from this AggGauge. This method panics if a Gauge
-// does not exist for this set of labelVals.
-func (g *AggGauge) RemoveChild(labelVals ...string) {
-	key := &Gauge{labelValuesSlice: labelValuesSlice(labelVals)}
-	g.remove(key)
 }
 
 // Gauge is a child of a AggGauge. When it is incremented or decremented, so
@@ -255,12 +214,12 @@ var _ metric.PrometheusExportable = (*AggGaugeFloat64)(nil)
 // NewGaugeFloat64 constructs a new AggGaugeFloat64.
 func NewGaugeFloat64(metadata metric.Metadata, childLabels ...string) *AggGaugeFloat64 {
 	g := &AggGaugeFloat64{g: *metric.NewGaugeFloat64(metadata)}
-	g.initWithBTreeStorageType(childLabels)
+	g.init(childLabels)
 	return g
 }
 
 // GetName is part of the metric.Iterable interface.
-func (g *AggGaugeFloat64) GetName(useStaticLabels bool) string { return g.g.GetName(useStaticLabels) }
+func (g *AggGaugeFloat64) GetName() string { return g.g.GetName() }
 
 // GetHelp is part of the metric.Iterable interface.
 func (g *AggGaugeFloat64) GetHelp() string { return g.g.GetHelp() }
@@ -283,8 +242,8 @@ func (g *AggGaugeFloat64) GetType() *io_prometheus_client.MetricType {
 }
 
 // GetLabels is part of the metric.PrometheusExportable interface.
-func (g *AggGaugeFloat64) GetLabels(useStaticLabels bool) []*io_prometheus_client.LabelPair {
-	return g.g.GetLabels(useStaticLabels)
+func (g *AggGaugeFloat64) GetLabels() []*io_prometheus_client.LabelPair {
+	return g.g.GetLabels()
 }
 
 // ToPrometheusMetric is part of the metric.PrometheusExportable interface.
@@ -305,32 +264,6 @@ func (g *AggGaugeFloat64) AddChild(labelVals ...string) *GaugeFloat64 {
 		labelValuesSlice: labelValuesSlice(labelVals),
 	}
 	g.add(child)
-	return child
-}
-
-// Update updates the Gauge value by val for the given label values. If a
-// Gauge with the given label values doesn't exist yet, it creates a new
-// Gauge and updates it. Panics if the number of label values doesn't
-// match the number of labels defined for this Gauge.
-func (g *AggGaugeFloat64) Update(val float64, labelVals ...string) {
-	child := g.GetOrCreateChild(labelVals...)
-	child.Update(val)
-}
-
-func (g *AggGaugeFloat64) GetOrCreateChild(labelVals ...string) *GaugeFloat64 {
-	if len(g.labels) != len(labelVals) {
-		panic(errors.AssertionFailedf(
-			"cannot increment child with %d label values %v to a metric with %d labels %v",
-			len(labelVals), labelVals, len(g.labels), g.labels))
-	}
-
-	// If the child already exists then return it.
-	if child, ok := g.get(labelVals...); ok {
-		return child.(*GaugeFloat64)
-	}
-
-	// Otherwise, create a new child then return it.
-	child := g.AddChild(labelVals...)
 	return child
 }
 

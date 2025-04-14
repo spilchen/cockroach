@@ -102,7 +102,6 @@ upsert descriptor #104
   +      - crdb_internal_column_3_name_placeholder
   +      - p
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -134,7 +133,6 @@ upsert descriptor #104
   +      - p
   +      unique: true
   +      useDeletePreservingEncoding: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: DELETE_ONLY
@@ -163,7 +161,6 @@ upsert descriptor #104
   +      - j
   +      - p
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -194,7 +191,7 @@ upsert descriptor #104
   -    - k
   +    - crdb_internal_column_3_name_placeholder
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 101
@@ -303,7 +300,6 @@ upsert descriptor #104
   +      - crdb_internal_column_3_name_placeholder
   +      - p
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -335,7 +331,6 @@ upsert descriptor #104
   +      - p
   +      unique: true
   +      useDeletePreservingEncoding: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: DELETE_ONLY
@@ -364,7 +359,6 @@ upsert descriptor #104
   +      - j
   +      - p
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -395,7 +389,7 @@ upsert descriptor #104
   -    - k
   +    - crdb_internal_column_3_name_placeholder
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 101
@@ -540,7 +534,6 @@ upsert descriptor #104
          - p
          unique: true
   +      useDeletePreservingEncoding: true
-         vecConfig: {}
          version: 4
        mutationId: 1
   -    state: WRITE_ONLY
@@ -572,7 +565,6 @@ upsert descriptor #104
   +      - j
   +      - p
   +      unique: true
-  +      vecConfig: {}
   +      version: 4
   +    mutationId: 1
   +    state: BACKFILLING
@@ -614,7 +606,6 @@ upsert descriptor #104
   -      - p
          unique: true
   -      useDeletePreservingEncoding: true
-         vecConfig: {}
          version: 4
        mutationId: 1
   -    state: DELETE_ONLY
@@ -642,7 +633,6 @@ upsert descriptor #104
          - p
          unique: true
   +      useDeletePreservingEncoding: true
-         vecConfig: {}
          version: 4
        mutationId: 1
   -    state: BACKFILLING
@@ -688,7 +678,7 @@ upsert descriptor #104
        - crdb_internal_column_3_name_placeholder
   +    - p
        unique: true
-       vecConfig: {}
+       version: 4
   ...
        time: {}
      unexposedParentSchemaId: 101
@@ -835,7 +825,6 @@ upsert descriptor #104
   -      - p
   -      unique: true
   -      useDeletePreservingEncoding: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: DELETE_ONLY
@@ -878,7 +867,6 @@ upsert descriptor #104
   -      - p
   -      unique: true
   -      useDeletePreservingEncoding: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
        state: DELETE_ONLY
@@ -947,7 +935,6 @@ upsert descriptor #104
   -      - j
   -      - p
   -      unique: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: WRITE_ONLY
@@ -984,7 +971,6 @@ upsert descriptor #104
          - crdb_internal_column_3_name_placeholder
   +      - p
          unique: true
-         vecConfig: {}
          version: 4
        mutationId: 1
   -    state: DELETE_ONLY
@@ -1128,7 +1114,6 @@ upsert descriptor #104
   -      - crdb_internal_column_3_name_placeholder
   -      - p
   -      unique: true
-  -      vecConfig: {}
   -      version: 4
   -    mutationId: 1
   -    state: DELETE_ONLY

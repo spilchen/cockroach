@@ -487,7 +487,7 @@ func newCacheAndMetrics(
 ) (*clientcert.ClientCertExpirationCache, *aggmetric.AggGauge, *aggmetric.AggGauge) {
 	st := &cluster.Settings{}
 	parentMon := mon.NewUnlimitedMonitor(ctx, mon.Options{
-		Name:     mon.MakeName("test"),
+		Name:     "test",
 		Settings: st,
 	})
 

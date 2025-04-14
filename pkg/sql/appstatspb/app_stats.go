@@ -188,7 +188,7 @@ func (s *StatementStatistics) Add(other *StatementStatistics) {
 	s.PlanGists = util.CombineUnique(s.PlanGists, other.PlanGists)
 	s.Indexes = util.CombineUnique(s.Indexes, other.Indexes)
 	s.ExecStats.Add(other.ExecStats)
-	s.LatencyInfo.MergeMaxMin(other.LatencyInfo)
+	s.LatencyInfo.Add(other.LatencyInfo)
 
 	if s.SensitiveInfo.MostRecentPlanTimestamp.Before(other.SensitiveInfo.MostRecentPlanTimestamp) {
 		s.SensitiveInfo = other.SensitiveInfo
@@ -270,8 +270,15 @@ func (s *ExecStats) Add(other ExecStats) {
 	s.Count += other.Count
 }
 
-// MergeMaxMin combines the max and min only into this LatencyInfo.
-func (s *LatencyInfo) MergeMaxMin(other LatencyInfo) {
+// Add combines other into this LatencyInfo.
+func (s *LatencyInfo) Add(other LatencyInfo) {
+	// Use the latest non-zero value.
+	if other.P50 != 0 {
+		s.P50 = other.P50
+		s.P90 = other.P90
+		s.P99 = other.P99
+	}
+
 	if s.Min == 0 || other.Min < s.Min {
 		s.Min = other.Min
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessioninit"
@@ -531,10 +532,12 @@ func RoleExists(ctx context.Context, txn isql.Txn, role username.SQLUsername) (b
 	return row != nil, nil
 }
 
+var roleMembersTableName = tree.MakeTableNameWithSchema("system", catconstants.PublicSchemaName, "role_members")
+
 // BumpRoleMembershipTableVersion increases the table version for the
 // role membership table.
 func (p *planner) BumpRoleMembershipTableVersion(ctx context.Context) error {
-	tableDesc, err := p.Descriptors().MutableByID(p.Txn()).Table(ctx, keys.RoleMembersTableID)
+	_, tableDesc, err := p.ResolveMutableTableDescriptor(ctx, &roleMembersTableName, true, tree.ResolveAnyTableKind)
 	if err != nil {
 		return err
 	}
@@ -547,7 +550,7 @@ func (p *planner) BumpRoleMembershipTableVersion(ctx context.Context) error {
 // bumpUsersTableVersion increases the table version for the
 // users table.
 func (p *planner) bumpUsersTableVersion(ctx context.Context) error {
-	tableDesc, err := p.Descriptors().MutableByID(p.Txn()).Table(ctx, keys.UsersTableID)
+	_, tableDesc, err := p.ResolveMutableTableDescriptor(ctx, sessioninit.UsersTableName, true, tree.ResolveAnyTableKind)
 	if err != nil {
 		return err
 	}
@@ -560,7 +563,7 @@ func (p *planner) bumpUsersTableVersion(ctx context.Context) error {
 // bumpRoleOptionsTableVersion increases the table version for the
 // role_options table.
 func (p *planner) bumpRoleOptionsTableVersion(ctx context.Context) error {
-	tableDesc, err := p.Descriptors().MutableByID(p.Txn()).Table(ctx, keys.RoleOptionsTableID)
+	_, tableDesc, err := p.ResolveMutableTableDescriptor(ctx, sessioninit.RoleOptionsTableName, true, tree.ResolveAnyTableKind)
 	if err != nil {
 		return err
 	}
@@ -573,7 +576,7 @@ func (p *planner) bumpRoleOptionsTableVersion(ctx context.Context) error {
 // bumpDatabaseRoleSettingsTableVersion increases the table version for the
 // database_role_settings table.
 func (p *planner) bumpDatabaseRoleSettingsTableVersion(ctx context.Context) error {
-	tableDesc, err := p.Descriptors().MutableByID(p.Txn()).Table(ctx, keys.DatabaseRoleSettingsTableID)
+	_, tableDesc, err := p.ResolveMutableTableDescriptor(ctx, sessioninit.DatabaseRoleSettingsTableName, true, tree.ResolveAnyTableKind)
 	if err != nil {
 		return err
 	}

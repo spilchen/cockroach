@@ -15,13 +15,16 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV1"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestflags"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/operations"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/roachprod"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
@@ -31,9 +34,19 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/stop"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v2"
+)
+
+type testResult int
+
+const (
+	// NB: These are in a particular order corresponding to the order we
+	// want these tests to appear in the generated Markdown report.
+	testResultFailure testResult = iota
+	testResultSuccess
+	testResultSkip
 )
 
 type ddEventType int
@@ -44,6 +57,12 @@ const (
 	eventOpFinishedCleanup
 	eventOpError
 )
+
+type testReportForGitHub struct {
+	name     string
+	duration time.Duration
+	status   testResult
+}
 
 // runTests is the main function for the run and bench commands.
 // Assumes initRunFlagsBinariesAndLibraries was called.
@@ -191,20 +210,12 @@ func runTests(register func(registry.Registry), filter *registry.TestFilter) err
 		// Collect the runner logs.
 		fmt.Printf("##teamcity[publishArtifacts '%s' => '%s']\n", filepath.Join(literalArtifactsDir, runnerLogsDir), runnerLogsDir)
 	}
-	runner.writeTestReports(ctx, l, artifactsDir)
+
+	if summaryErr := maybeDumpSummaryMarkdown(runner); summaryErr != nil {
+		shout(ctx, l, os.Stdout, "failed to write to GITHUB_STEP_SUMMARY file (%+v)", summaryErr)
+	}
 
 	return err
-}
-
-func skipDetails(spec *registry.TestSpec) string {
-	if spec.Skip == "" {
-		return ""
-	}
-	details := spec.Skip
-	if spec.SkipDetails != "" {
-		details += " (" + spec.SkipDetails + ")"
-	}
-	return details
 }
 
 // getUser takes the value passed on the command line and comes up with the
@@ -276,12 +287,6 @@ func initRunFlagsBinariesAndLibraries(cmd *cobra.Command) error {
 
 	if roachtestflags.SelectProbability > 0 && roachtestflags.SelectProbability < 1 {
 		fmt.Printf("Matching tests will be selected with probability %.2f\n", roachtestflags.SelectProbability)
-	}
-
-	for override := range roachtestflags.VersionsBinaryOverride {
-		if _, err := version.Parse(override); err != nil {
-			return errors.Wrapf(err, "binary version override %s is not a valid version", override)
-		}
 	}
 	return nil
 }
@@ -376,6 +381,85 @@ func redirectCRDBLogger(ctx context.Context, path string) *logger.Logger {
 	}
 	shout(ctx, l, os.Stdout, "fallback runner logs in: %s", path)
 	return l
+}
+
+func maybeDumpSummaryMarkdown(r *testRunner) error {
+	if !roachtestflags.GitHubActions {
+		return nil
+	}
+	summaryPath := os.Getenv("GITHUB_STEP_SUMMARY")
+	if summaryPath == "" {
+		return nil
+	}
+	summaryFile, err := os.OpenFile(summaryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+
+	_, err = summaryFile.WriteString(`| TestName | Status | Duration |
+| --- | --- | --- |
+`)
+	if err != nil {
+		return err
+	}
+
+	var allTests []testReportForGitHub
+	for test := range r.status.pass {
+		allTests = append(allTests, testReportForGitHub{
+			name:     test.Name(),
+			duration: test.duration(),
+			status:   testResultSuccess,
+		})
+	}
+
+	for test := range r.status.fail {
+		allTests = append(allTests, testReportForGitHub{
+			name:     test.Name(),
+			duration: test.duration(),
+			status:   testResultFailure,
+		})
+	}
+
+	for test := range r.status.skip {
+		allTests = append(allTests, testReportForGitHub{
+			name:     test.Name(),
+			duration: test.duration(),
+			status:   testResultSkip,
+		})
+	}
+
+	// Sort the test results: first fails, then successes, then skips, and
+	// within each category sort by test duration in descending order.
+	// Ties are very unlikely to happen but we break them by test name.
+	slices.SortFunc(allTests, func(a, b testReportForGitHub) int {
+		if a.status < b.status {
+			return -1
+		} else if a.status > b.status {
+			return 1
+		} else if a.duration > b.duration {
+			return -1
+		} else if a.duration < b.duration {
+			return 1
+		}
+		return strings.Compare(a.name, b.name)
+	})
+
+	for _, test := range allTests {
+		var statusString string
+		if test.status == testResultFailure {
+			statusString = "❌ FAILED"
+		} else if test.status == testResultSuccess {
+			statusString = "✅ SUCCESS"
+		} else {
+			statusString = "🟨 SKIPPED"
+		}
+		_, err := fmt.Fprintf(summaryFile, "| `%s` | %s | `%s` |\n", test.name, statusString, test.duration.String())
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // maybeEmitDatadogEvent sends an event to Datadog if the passed in ctx has the
@@ -498,4 +582,154 @@ func getDatadogTags() []string {
 	}
 
 	return strings.Split(rawTags, ",")
+}
+
+// runOperation sequentially runs one operation matched by the passed-in filter.
+func runOperation(register func(registry.Registry), filter string, clusterName string) error {
+	//lint:ignore SA1019 deprecated
+	rand.Seed(roachtestflags.GlobalSeed)
+	r := makeTestRegistry()
+	// NB: root logger with no path always tees to Stdout.
+	l, err := logger.RootLogger("", logger.NoTee)
+	if err != nil {
+		return err
+	}
+	// Install goroutine leak checker and run it at the end of the entire operation
+	// run. This is good hygiene for operations, as operations can one day be
+	// called from roachtests as well.
+	defer leaktest.AfterTest(l)()
+
+	register(&r)
+	ctx := context.Background()
+	ctx = newDatadogContext(ctx)
+
+	datadogEventsClient := datadogV1.NewEventsApi(datadog.NewAPIClient(datadog.NewConfiguration()))
+	datadogTags := getDatadogTags()
+
+	// TODO(bilal): This is excessive for just getting the number of nodes in the
+	// cluster. We should expose a roachprod.Nodes method or so.
+	nodes, err := roachprod.PgURL(ctx, l, clusterName, roachtestflags.CertsDir, roachprod.PGURLOptions{})
+	if err != nil {
+		return errors.Wrap(err, "roachtest: run-operation: error when getting number of nodes")
+	}
+
+	config := struct {
+		ClusterSettings install.ClusterSettings
+		StartOpts       option.StartOpts
+		ClusterSpec     spec.ClusterSpec
+	}{
+		ClusterSettings: install.MakeClusterSettings(),
+		StartOpts:       option.NewStartOpts(option.NoBackupSchedule),
+		ClusterSpec:     spec.ClusterSpec{NodeCount: len(nodes)},
+	}
+	if roachtestflags.ConfigPath != "" {
+		configFileData, err := os.ReadFile(roachtestflags.ConfigPath)
+		if err != nil {
+			return errors.Wrap(err, "failed to read config")
+		}
+		if err = yaml.UnmarshalStrict(configFileData, &config); err != nil {
+			return errors.Wrapf(err, "failed to unmarshal config: %s", roachtestflags.ConfigPath)
+		}
+	}
+
+	cSpec := spec.ClusterSpec{NodeCount: len(nodes)}
+	op := &operationImpl{
+		clusterSettings: config.ClusterSettings,
+		startOpts:       config.StartOpts,
+		l:               l,
+	}
+	c := &dynamicClusterImpl{
+		&clusterImpl{
+			name:       clusterName,
+			cloud:      roachtestflags.Cloud,
+			spec:       cSpec,
+			f:          op,
+			l:          l,
+			expiration: cSpec.Expiration(),
+			destroyState: destroyState{
+				owned: false,
+			},
+			localCertsDir: roachtestflags.CertsDir,
+		},
+	}
+
+	specs, err := opsToRun(r, filter)
+	if err != nil {
+		return err
+	}
+	var opSpec *registry.OperationSpec
+	if len(specs) > 1 {
+		opSpec = &specs[rand.Intn(len(specs))]
+		l.Printf("more than one operation found for filter %s, randomly selected %s to run", filter, opSpec.Name)
+	} else if len(specs) == 1 {
+		opSpec = &specs[0]
+	} else {
+		return errors.Errorf("no operations found for filter %s", filter)
+	}
+	op.spec = opSpec
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// Cancel this context if we get an interrupt.
+	CtrlC(ctx, l, cancel, nil /* registry */)
+
+	op.mu.cancel = cancel
+	op.Status(fmt.Sprintf("checking if operation %s dependencies are met", opSpec.Name))
+
+	if roachtestflags.SkipDependencyCheck {
+		op.Status("skipping dependency check")
+	} else if ok, err := operations.CheckDependencies(ctx, c, l, opSpec); !ok || err != nil {
+		if err != nil {
+			op.Fatalf("error checking dependencies: %s", err)
+		}
+		op.Status("operation dependencies not met. Use --skip-dependency-check to skip this check.")
+		return nil
+	}
+
+	// operationRunID is used for datadog event aggregation and logging.
+	operationRunID := rand.Uint64()
+	maybeEmitDatadogEvent(ctx, datadogEventsClient, opSpec, clusterName, eventOpStarted, operationRunID, datadogTags)
+	op.Status(fmt.Sprintf("running operation %s with run id %d", opSpec.Name, operationRunID))
+	var cleanup registry.OperationCleanup
+	func() {
+		ctx, cancel := context.WithTimeout(ctx, opSpec.Timeout)
+		defer cancel()
+
+		cleanup = opSpec.Run(ctx, op, c)
+	}()
+	if op.Failed() {
+		op.Status("operation failed")
+		maybeEmitDatadogEvent(ctx, datadogEventsClient, opSpec, clusterName, eventOpError, operationRunID, datadogTags)
+		return op.mu.failures[0]
+	}
+
+	maybeEmitDatadogEvent(ctx, datadogEventsClient, opSpec, clusterName, eventOpRan, operationRunID, datadogTags)
+	if cleanup == nil {
+		op.Status("operation ran successfully")
+		return nil
+	}
+
+	op.Status(fmt.Sprintf("operation ran successfully; waiting %s before cleanup", roachtestflags.WaitBeforeCleanup))
+	select {
+	// Don't exit if the context is done due to a Ctrl-C, instead still run the
+	// cleanup code.
+	case <-ctx.Done():
+	case <-time.After(roachtestflags.WaitBeforeCleanup):
+	}
+	op.Status("running cleanup")
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), opSpec.Timeout)
+		defer cancel()
+
+		cleanup.Cleanup(ctx, op, c)
+	}()
+
+	if op.Failed() {
+		op.Status("operation cleanup failed")
+		maybeEmitDatadogEvent(ctx, datadogEventsClient, opSpec, clusterName, eventOpError, operationRunID, datadogTags)
+		return op.mu.failures[0]
+	}
+	maybeEmitDatadogEvent(ctx, datadogEventsClient, opSpec, clusterName, eventOpFinishedCleanup, operationRunID, datadogTags)
+
+	return nil
 }

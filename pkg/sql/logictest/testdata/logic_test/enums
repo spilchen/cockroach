@@ -633,7 +633,6 @@ DROP TABLE enum_checks;
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE enum_checks (x greeting);
 INSERT INTO enum_checks VALUES ('hi'), ('howdy');
 ALTER TABLE enum_checks ADD CHECK (x > 'hello')
@@ -646,7 +645,6 @@ ROLLBACK
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE enum_checks (x greeting);
 INSERT INTO enum_checks VALUES ('hi'), ('howdy');
 
@@ -735,7 +733,6 @@ DROP TABLE sc
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE sc (x greeting NOT NULL, y int NOT NULL);
 INSERT INTO sc VALUES ('hello', 0), ('howdy', 1), ('hi', 2);
 CREATE INDEX i1 ON sc (x);
@@ -766,7 +763,6 @@ COMMIT
 # the same transaction.
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TYPE in_txn AS ENUM ('in', 'txn');
 CREATE TABLE tbl_in_txn (x in_txn);
 INSERT INTO tbl_in_txn VALUES ('txn');
@@ -797,7 +793,6 @@ DROP TABLE enum_pk
 # Repeat the above tests, but in a transaction.
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE enum_not_pk (x INT PRIMARY KEY, y greeting NOT NULL);
 INSERT INTO enum_not_pk VALUES (1, 'howdy');
 ALTER TABLE enum_not_pk ALTER PRIMARY KEY USING COLUMNS (y);
@@ -805,7 +800,6 @@ ROLLBACK
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE enum_pk (x GREETING PRIMARY KEY, y INT NOT NULL);
 INSERT INTO enum_pk VALUES ('howdy', 1);
 ALTER TABLE enum_pk ALTER PRIMARY KEY USING COLUMNS (y);
@@ -828,7 +822,6 @@ DROP TABLE enum_ctas
 # Test basic CTAS in a transaction.
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE enum_ctas AS TABLE enum_ctas_base
 
 query TTT
@@ -854,7 +847,6 @@ DROP TABLE enum_ctas;
 # Test CTAS with a SELECT query in a transaction.
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE enum_ctas AS (SELECT x, enum_first(y), z, enum_range(x) FROM enum_ctas_base)
 
 query TTTT
@@ -880,7 +872,6 @@ DROP TABLE enum_ctas;
 # Test CTAS from a VALUES clause in a transaction.
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE enum_ctas AS VALUES ('howdy'::greeting, 'cockroach'::dbs)
 
 query TT
@@ -939,7 +930,6 @@ DROP TABLE column_add
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE column_add (x greeting);
 INSERT INTO column_add VALUES ('hello');
 ALTER TABLE column_add ADD COLUMN y INT DEFAULT 1;
@@ -959,7 +949,6 @@ COMMIT
 # same transaction.
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TYPE in_txn AS ENUM ('in', 'txn');
 CREATE TABLE tbl_in_txn (x INT);
 INSERT INTO tbl_in_txn VALUES (1);
@@ -990,11 +979,7 @@ DROP TABLE enum_referenced, enum_origin;
 
 # Try the above, but in a transaction.
 statement ok
-SET autocommit_before_ddl = false
-
-statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE enum_origin (x greeting PRIMARY KEY);
 CREATE TABLE enum_referenced (x greeting PRIMARY KEY);
 INSERT INTO enum_origin VALUES ('hello');
@@ -1006,9 +991,6 @@ INSERT INTO enum_origin VALUES ('howdy')
 
 statement ok
 ROLLBACK
-
-statement ok
-RESET autocommit_before_ddl
 
 # Try adding a foreign key that fails validation when building.
 # Foreign keys added in the same transaction as a new table are not validated,
@@ -1023,31 +1005,13 @@ statement error pq: foreign key violation: "enum_origin" row x='hello' has no ma
 ALTER TABLE enum_origin ADD FOREIGN KEY (x) REFERENCES enum_referenced (x)
 
 # Tests for ALTER COLUMN SET DATA TYPE.
-onlyif config local-legacy-schema-changer local-mixed-24.3
 statement ok
 SET enable_experimental_alter_column_type_general = true;
 
 statement ok
-CREATE TABLE enum_data_type (x STRING, y INT);
+CREATE TABLE enum_data_type (x STRING);
 INSERT INTO enum_data_type VALUES ('hello'), ('howdy');
 
-# The legacy schema changed doesn't hydrate the type name in the message.
-skipif config local-legacy-schema-changer
-statement error pq: column "y" cannot be cast automatically to type public.greeting\nHINT: You might need to specify "USING y::public.greeting".
-ALTER TABLE enum_data_type ALTER COLUMN y SET DATA TYPE greeting;
-
-# This and all subsequent attempts to alter a column type that require a backfill
-# are skipped in the legacy schema changer, as it does not support such operations.
-skipif config local-legacy-schema-changer
-statement error pq: invalid cast: int -> greeting
-ALTER TABLE enum_data_type ALTER COLUMN y SET DATA TYPE greeting USING y::greeting;
-
-# The legacy schema changed doesn't hydrate the type name in the message.
-skipif config local-legacy-schema-changer
-statement error pq: column "x" cannot be cast automatically to type public.greeting\nHINT: You might need to specify "USING x::public.greeting".
-ALTER TABLE enum_data_type ALTER COLUMN x SET DATA TYPE greeting;
-
-skipif config local-legacy-schema-changer
 statement ok
 ALTER TABLE enum_data_type ALTER COLUMN x SET DATA TYPE greeting USING x::greeting;
 
@@ -1055,7 +1019,7 @@ statement ok
 INSERT INTO enum_data_type VALUES ('hi')
 
 query T rowsort
-SELECT x FROM enum_data_type
+SELECT * FROM enum_data_type
 ----
 hello
 howdy
@@ -1079,7 +1043,6 @@ statement ok
 ALTER TABLE enum_data_type ALTER COLUMN x SET DATA TYPE greeting
 
 # Now, set it to string.
-skipif config local-legacy-schema-changer
 statement ok
 ALTER TABLE enum_data_type ALTER COLUMN x SET DATA TYPE STRING
 
@@ -1103,12 +1066,10 @@ statement ok
 CREATE TABLE enum_data_type (x greeting);
 INSERT INTO enum_data_type VALUES ('hello'), ('hi')
 
-skipif config local-legacy-schema-changer
 statement ok
 ALTER TABLE enum_data_type ALTER COLUMN x SET DATA TYPE dbs USING
   (CASE WHEN x = 'hello' THEN 'cockroach' ELSE 'postgres' END)
 
-skipif config local-legacy-schema-changer
 query T rowsort
 SELECT * FROM enum_data_type
 ----
@@ -1129,22 +1090,18 @@ statement ok
 CREATE TABLE enum_data_type (x STRING);
 INSERT INTO enum_data_type VALUES ('notagreeting')
 
-skipif config local-legacy-schema-changer
-statement error pq: .*invalid input value for enum greeting: "notagreeting"
+statement error pq: invalid input value for enum greeting: "notagreeting"
 ALTER TABLE enum_data_type ALTER COLUMN x SET DATA TYPE greeting USING x::greeting
 
-skipif config local-legacy-schema-changer
 statement ok
 ALTER TABLE enum_data_type
   ALTER COLUMN x SET DATA TYPE greeting USING (CASE WHEN x = 'notagreeting' THEN 'hello' ELSE 'hi' END)
 
-skipif config local-legacy-schema-changer
 query T
 SELECT * FROM enum_data_type
 ----
 hello
 
-skipif config local-legacy-schema-changer
 query T
 SELECT to_json('hello'::greeting)
 ----
@@ -1165,7 +1122,6 @@ howdy
 # plans to remote nodes.
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TYPE local_type AS ENUM ('local');
 CREATE TABLE local_table (x INT);
 INSERT INTO local_table VALUES (1), (2)
@@ -1180,7 +1136,6 @@ ROLLBACK
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 ALTER TYPE greeting RENAME TO greeting_local;
 CREATE TABLE local_table (x INT);
 INSERT INTO local_table VALUES (1), (2)
@@ -1198,7 +1153,6 @@ ROLLBACK
 # or created a type.
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TYPE local_type AS ENUM ('local');
 CREATE TABLE local_table (x local_type);
 INSERT INTO local_table VALUES ('local')
@@ -1281,7 +1235,6 @@ CREATE TABLE table_with_not_null_enum (i INT PRIMARY KEY, v enum_with_vals NOT N
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 
 statement ok
 ALTER TABLE table_with_not_null_enum DROP COLUMN v;
@@ -1300,7 +1253,6 @@ CREATE TABLE table_with_not_null_enum_no_vals (i INT PRIMARY KEY, v enum_with_no
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 
 statement ok
 ALTER TABLE table_with_not_null_enum_no_vals DROP COLUMN v;
@@ -1775,7 +1727,6 @@ INSERT INTO tab2 VALUES ('hello')
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 
 statement ok
 ALTER TABLE tab2 ADD COLUMN j INT

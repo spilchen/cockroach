@@ -5,6 +5,7 @@
 
 // {{/*
 //go:build execgen_template
+// +build execgen_template
 
 //
 // This file is the execgen template for substring.eg.go. It's formatted in a
@@ -68,7 +69,7 @@ func newSubstringOperator(
 		}
 		// {{end}}
 	}
-	colexecerror.InternalError(errors.AssertionFailedf("unsupported substring argument types: %s %s", startType, lengthType))
+	colexecerror.InternalError(errors.Errorf("unsupported substring argument types: %s %s", startType, lengthType))
 	// This code is unreachable, but the compiler cannot infer that.
 	return nil
 }

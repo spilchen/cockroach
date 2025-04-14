@@ -17,8 +17,8 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/build"
+	"github.com/cockroachdb/cockroach/pkg/util/version"
 	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/version"
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
 )
@@ -66,7 +66,7 @@ func (p *poster) getProbableMilestone(ctx *postCtx) *int {
 		ctx.Printf("unable to parse version from binary version to determine milestone: %s", err)
 		return nil
 	}
-	vstring := v.Format("%X.%Y")
+	vstring := fmt.Sprintf("%d.%d", v.Major(), v.Minor())
 
 	milestones, _, err := p.listMilestones(ctx, p.Org, p.Repo, &github.MilestoneListOptions{
 		State: "open",
@@ -273,18 +273,16 @@ func (p *poster) templateData(
 		artifactsURL = p.teamcityArtifactsURL(req.Artifacts).String()
 	}
 	return TemplateData{
-		PostRequest:        req,
-		PackageNameShort:   strings.TrimPrefix(req.PackageName, CockroachPkgPrefix),
-		Parameters:         p.parameters(req.ExtraParams),
-		CondensedMessage:   CondensedMessage(req.Message),
-		Commit:             p.SHA,
-		CommitURL:          fmt.Sprintf("https://github.com/%s/%s/commits/%s", p.Org, p.Repo, p.SHA),
-		Branch:             p.Branch,
-		ArtifactsURL:       artifactsURL,
-		URL:                p.buildURL().String(),
-		SideEyeSnapshotURL: req.SideEyeSnapshotURL,
-		SideEyeSnapshotMsg: req.SideEyeSnapshotMsg,
-		RelatedIssues:      relatedIssues,
+		PostRequest:      req,
+		Parameters:       p.parameters(req.ExtraParams),
+		CondensedMessage: CondensedMessage(req.Message),
+		Branch:           p.Branch,
+		Commit:           p.SHA,
+		ArtifactsURL:     artifactsURL,
+		URL:              p.buildURL().String(),
+		RelatedIssues:    relatedIssues,
+		PackageNameShort: strings.TrimPrefix(req.PackageName, CockroachPkgPrefix),
+		CommitURL:        fmt.Sprintf("https://github.com/%s/%s/commits/%s", p.Org, p.Repo, p.SHA),
 	}
 }
 

@@ -78,9 +78,9 @@ func (r *Registry) GetLabels() []*prometheusgo.LabelPair {
 func (r *Registry) AddMetric(metric Iterable) {
 	r.Lock()
 	defer r.Unlock()
-	r.tracked[metric.GetName(false /* useStaticLabels */)] = metric
+	r.tracked[metric.GetName()] = metric
 	if log.V(2) {
-		log.Infof(context.TODO(), "added metric: %s (%T)", metric.GetName(false /* useStaticLabels */), metric)
+		log.Infof(context.TODO(), "added metric: %s (%T)", metric.GetName(), metric)
 	}
 }
 
@@ -103,9 +103,9 @@ func (r *Registry) Contains(name string) bool {
 func (r *Registry) RemoveMetric(metric Iterable) {
 	r.Lock()
 	defer r.Unlock()
-	delete(r.tracked, metric.GetName(false /* useStaticLabels */))
+	delete(r.tracked, metric.GetName())
 	if log.V(2) {
-		log.Infof(context.TODO(), "removed metric: %s (%T)", metric.GetName(false /* useStaticLabels */), metric)
+		log.Infof(context.TODO(), "removed metric: %s (%T)", metric.GetName(), metric)
 	}
 }
 
@@ -184,7 +184,7 @@ func (r *Registry) WriteMetricsMetadata(dest map[string]Metadata) {
 	r.Lock()
 	defer r.Unlock()
 	for _, v := range r.tracked {
-		dest[v.GetName(false /* useStaticLabels */)] = v.GetMetadata()
+		dest[v.GetName()] = v.GetMetadata()
 	}
 }
 
@@ -194,7 +194,7 @@ func (r *Registry) Each(f func(name string, val interface{})) {
 	defer r.Unlock()
 	for _, metric := range r.tracked {
 		metric.Inspect(func(v interface{}) {
-			f(metric.GetName(false /* useStaticLabels */), v)
+			f(metric.GetName(), v)
 		})
 	}
 }
@@ -220,7 +220,7 @@ func (r *Registry) MarshalJSON() ([]byte, error) {
 	m := make(map[string]interface{})
 	for _, metric := range r.tracked {
 		metric.Inspect(func(v interface{}) {
-			m[metric.GetName(false /* useStaticLabels */)] = v
+			m[metric.GetName()] = v
 		})
 	}
 	return json.Marshal(m)

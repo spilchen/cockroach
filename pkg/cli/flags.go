@@ -27,7 +27,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/security"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/server/telemetry"
-	"github.com/cockroachdb/cockroach/pkg/storage/storagepb"
 	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/util/log/logflags"
 	"github.com/cockroachdb/cockroach/pkg/util/netutil/addr"
@@ -62,7 +61,6 @@ var storeSpecs base.StoreSpecList
 var goMemLimit int64
 var tenantIDFile string
 var localityFile string
-var encryptionSpecs storagepb.EncryptionSpecList
 
 // initPreFlagsDefaults initializes the values of the global variables
 // defined above.
@@ -294,10 +292,6 @@ func (f *keyTypeFilter) Set(v string) error {
 
 const backgroundEnvVar = "COCKROACH_BACKGROUND_RESTART"
 
-// This value is never read. It is used to hold the storage engine which is now
-// a hidden option.
-var deprecatedStorageEngine string
-
 func init() {
 	initCLIDefaults()
 
@@ -320,7 +314,7 @@ func init() {
 
 	// Add store flag handling for the pebble debug command as it needs store
 	// flags configured.
-	AddPersistentPreRunE(debugPebbleCmd, func(cmd *cobra.Command, _ []string) error {
+	AddPersistentPreRunE(DebugPebbleCmd, func(cmd *cobra.Command, _ []string) error {
 		return extraStoreFlagInit(cmd)
 	})
 
@@ -426,13 +420,6 @@ func init() {
 		// attributes too? Would this be useful for e.g. SQL query
 		// planning?
 		cliflagcfg.StringFlag(f, &serverCfg.Attrs, cliflags.Attrs)
-
-		cliflagcfg.VarFlag(cmd.Flags(), &encryptionSpecs, cliflags.EnterpriseEncryption)
-
-		// Add a new pre-run command to match encryption specs to store specs.
-		AddPersistentPreRunE(cmd, func(cmd *cobra.Command, _ []string) error {
-			return populateStoreSpecsEncryption()
-		})
 	}
 
 	// Flags common to the start commands, the connect command, and the node join
@@ -520,17 +507,10 @@ func init() {
 		cliflagcfg.StringFlag(f, &localityFile, cliflags.LocalityFile)
 
 		cliflagcfg.VarFlag(f, &storeSpecs, cliflags.Store)
-
-		// deprecatedStorageEngine is only kept for backwards compatibility.
-		cliflagcfg.StringFlag(f, &deprecatedStorageEngine, cliflags.StorageEngine)
-		_ = pf.MarkHidden(cliflags.StorageEngine.Name)
-
-		cliflagcfg.VarFlag(f, &serverCfg.StorageConfig.WALFailover, cliflags.WALFailover)
-		// TODO(storage): Consider combining the uri and cache manual settings.
-		// Alternatively remove the ability to configure shared storage without
-		// passing a bootstrap configuration file.
-		cliflagcfg.StringFlag(f, &serverCfg.StorageConfig.SharedStorage.URI, cliflags.SharedStorage)
-		cliflagcfg.VarFlag(f, &serverCfg.StorageConfig.SharedStorage.Cache, cliflags.SecondaryCache)
+		cliflagcfg.VarFlag(f, &serverCfg.StorageEngine, cliflags.StorageEngine)
+		cliflagcfg.VarFlag(f, &serverCfg.WALFailover, cliflags.WALFailover)
+		cliflagcfg.StringFlag(f, &serverCfg.SharedStorage, cliflags.SharedStorage)
+		cliflagcfg.VarFlag(f, &serverCfg.SecondaryCache, cliflags.SecondaryCache)
 		cliflagcfg.VarFlag(f, &serverCfg.MaxOffset, cliflags.MaxOffset)
 		cliflagcfg.BoolFlag(f, &serverCfg.DisableMaxOffsetCheck, cliflags.DisableMaxOffsetCheck)
 		cliflagcfg.StringFlag(f, &serverCfg.ClockDevicePath, cliflags.ClockDevice)
@@ -667,7 +647,7 @@ func init() {
 		if cmd == createClientCertCmd {
 			cliflagcfg.VarFlag(f, &tenantIDSetter{tenantIDs: &certCtx.tenantScope}, cliflags.TenantScope)
 			cliflagcfg.VarFlag(f, &tenantNameSetter{tenantNames: &certCtx.tenantNameScope}, cliflags.TenantScopeByNames)
-			_ = f.MarkDeprecated(cliflags.TenantScope.Name, fmt.Sprintf("use %s instead", cliflags.TenantScopeByNames.Name))
+			_ = f.MarkHidden(cliflags.TenantScopeByNames.Name)
 
 			// PKCS8 key format is only available for the client cert command.
 			cliflagcfg.BoolFlag(f, &certCtx.generatePKCS8Key, cliflags.GeneratePKCS8Key)
@@ -984,11 +964,12 @@ func init() {
 		f := debugRangeDataCmd.Flags()
 		cliflagcfg.BoolFlag(f, &debugCtx.replicated, cliflags.Replicated)
 		cliflagcfg.IntFlag(f, &debugCtx.maxResults, cliflags.Limit)
-		cliflagcfg.StringFlag(f, &serverCfg.StorageConfig.SharedStorage.URI, cliflags.SharedStorage)
+		cliflagcfg.StringFlag(f, &serverCfg.SharedStorage, cliflags.SharedStorage)
 	}
 	{
 		f := debugGossipValuesCmd.Flags()
 		cliflagcfg.StringFlag(f, &debugCtx.inputFile, cliflags.GossipInputFile)
+		cliflagcfg.BoolFlag(f, &debugCtx.printSystemConfig, cliflags.PrintSystemConfig)
 	}
 	{
 		f := debugBallastCmd.Flags()
@@ -996,7 +977,7 @@ func init() {
 	}
 	{
 		// TODO(ayang): clean up so dir isn't passed to both pebble and --store
-		f := debugPebbleCmd.PersistentFlags()
+		f := DebugPebbleCmd.PersistentFlags()
 		cliflagcfg.VarFlag(f, &storeSpecs, cliflags.Store)
 	}
 	{
@@ -1395,19 +1376,19 @@ func extraStoreFlagInit(cmd *cobra.Command) error {
 		serverCfg.Stores.Specs[i] = ss
 	}
 
-	if serverCfg.StorageConfig.WALFailover.Path.IsSet() {
-		absPath, err := base.GetAbsoluteFSPath("wal-failover.path", serverCfg.StorageConfig.WALFailover.Path.Path)
+	if serverCfg.WALFailover.Path.IsSet() {
+		absPath, err := base.GetAbsoluteFSPath("wal-failover.path", serverCfg.WALFailover.Path.Path)
 		if err != nil {
 			return err
 		}
-		serverCfg.StorageConfig.WALFailover.Path.Path = absPath
+		serverCfg.WALFailover.Path.Path = absPath
 	}
-	if serverCfg.StorageConfig.WALFailover.PrevPath.IsSet() {
-		absPath, err := base.GetAbsoluteFSPath("wal-failover.prev_path", serverCfg.StorageConfig.WALFailover.PrevPath.Path)
+	if serverCfg.WALFailover.PrevPath.IsSet() {
+		absPath, err := base.GetAbsoluteFSPath("wal-failover.prev_path", serverCfg.WALFailover.PrevPath.Path)
 		if err != nil {
 			return err
 		}
-		serverCfg.StorageConfig.WALFailover.PrevPath.Path = absPath
+		serverCfg.WALFailover.PrevPath.Path = absPath
 	}
 
 	// Configure the external I/O directory.
@@ -1490,22 +1471,11 @@ func mtStartSQLFlagsInit(cmd *cobra.Command) error {
 		if spec.BallastSize == nil {
 			// Only override if there was no ballast size specified to start
 			// with.
-			zero := storagepb.SizeSpec{Capacity: 0, Percent: 0}
+			zero := base.SizeSpec{InBytes: 0, Percent: 0}
 			spec.BallastSize = &zero
 		}
 	}
 	return nil
-}
-
-// populateStoreSpecsEncryption is a PreRun hook that matches store encryption
-// specs with the parsed stores and populates some fields in the StoreSpec and
-// WAL failover config.
-func populateStoreSpecsEncryption() error {
-	return base.PopulateWithEncryptionOpts(
-		GetServerCfgStores(),
-		GetWALFailoverConfig(),
-		encryptionSpecs,
-	)
 }
 
 // RegisterFlags exists so that other packages can register flags using the

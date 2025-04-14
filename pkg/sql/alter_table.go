@@ -33,7 +33,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/semenumpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/volatility"
@@ -50,7 +49,6 @@ import (
 )
 
 type alterTableNode struct {
-	zeroInputPlanNode
 	n         *tree.AlterTable
 	prefix    catalog.ResolvedObjectPrefix
 	tableDesc *tabledesc.Mutable
@@ -275,7 +273,7 @@ func (n *alterTableNode) startExec(params runParams) error {
 					n.tableDesc,
 					tableName,
 					columns,
-					idxtype.FORWARD,
+					false, /* isInverted */
 					false, /* isNewTable */
 					params.p.SemaCtx(),
 					params.ExecCfg().Settings.Version.ActiveVersion(params.ctx),
@@ -848,9 +846,6 @@ func (n *alterTableNode) startExec(params runParams) error {
 				return err
 			}
 			descriptorChanged = true
-		case *tree.AlterTableSetRLSMode:
-			return pgerror.New(pgcode.FeatureNotSupported,
-				"ALTER TABLE ... ROW LEVEL SECURITY is only implemented in the declarative schema changer")
 		default:
 			return errors.AssertionFailedf("unsupported alter command: %T", cmd)
 		}
@@ -1941,15 +1936,12 @@ func dropColumnImpl(
 		return nil, err
 	}
 
-	// We cannot remove this column if there are computed columns, TTL expiration
-	// expression, or policy expressions that use it.
+	// We cannot remove this column if there are computed columns or a TTL
+	// expiration expression that use it.
 	if err := schemaexpr.ValidateColumnHasNoDependents(tableDesc, colToDrop); err != nil {
 		return nil, err
 	}
 	if err := schemaexpr.ValidateTTLExpression(tableDesc, rowLevelTTL, colToDrop, tn, "drop"); err != nil {
-		return nil, err
-	}
-	if err := schemaexpr.ValidatePolicyExpressionsDoNotDependOnColumn(tableDesc, colToDrop, "column", "drop"); err != nil {
 		return nil, err
 	}
 
@@ -2129,7 +2121,7 @@ func handleTTLStorageParamChange(
 			if err != nil {
 				return false, err
 			}
-			if err := s.SetScheduleAndNextRun(after.DeletionCronOrDefault()); err != nil {
+			if err := s.SetSchedule(after.DeletionCronOrDefault()); err != nil {
 				return false, err
 			}
 			if err := schedules.Update(params.ctx, s); err != nil {

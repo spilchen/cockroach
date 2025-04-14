@@ -14,7 +14,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/storage"
 	"github.com/cockroachdb/cockroach/pkg/storage/fs"
-	"github.com/cockroachdb/cockroach/pkg/storage/storagepb"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/stretchr/testify/require"
@@ -36,7 +35,7 @@ func TestStickyVFS(t *testing.T) {
 		InMemory:    true,
 		StickyVFSID: "engine1",
 		Attributes:  attrs,
-		Size:        storagepb.SizeSpec{Capacity: storeSize},
+		Size:        base.SizeSpec{InBytes: storeSize},
 	}
 	fs1 := registry.Get(spec1.StickyVFSID)
 	env, err := fs.InitEnvFromStoreSpec(ctx, spec1, fs.ReadWrite, registry, nil /* statsCollector */)

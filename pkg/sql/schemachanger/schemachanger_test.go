@@ -67,9 +67,9 @@ func TestSchemaChangerJobRunningStatus(t *testing.T) {
 				require.NoError(t, err)
 				switch stageIdx {
 				case 0:
-					runningStatus0.Store(job.Progress().StatusMessage)
+					runningStatus0.Store(job.Progress().RunningStatus)
 				case 1:
-					runningStatus1.Store(job.Progress().StatusMessage)
+					runningStatus1.Store(job.Progress().RunningStatus)
 				}
 				return nil
 			},
@@ -129,6 +129,11 @@ func TestSchemaChangerJobErrorDetails(t *testing.T) {
 	tdb.ExpectErr(t, `boom`, `ALTER TABLE db.t ADD COLUMN b INT NOT NULL DEFAULT (123)`)
 	jobID := jobspb.JobID(atomic.LoadInt64(&jobIDValue))
 
+	// Check that the error is featured in the jobs table.
+	results := tdb.QueryStr(t, `SELECT execution_errors FROM crdb_internal.jobs WHERE job_id = $1`, jobID)
+	require.Len(t, results, 1)
+	require.Regexp(t, `^\{\"reverting execution from .* on 1 failed: boom\"\}$`, results[0][0])
+
 	// Check that the error details are also featured in the jobs table.
 	checkErrWithDetails := func(ee *errorspb.EncodedError) {
 		require.NotNil(t, ee)
@@ -141,7 +146,7 @@ func TestSchemaChangerJobErrorDetails(t *testing.T) {
 		require.Regexp(t, "^stages graphviz: https.*", ed[1])
 		require.Regexp(t, "^dependencies graphviz: https.*", ed[2])
 	}
-	results := tdb.QueryStr(t, `SELECT encode(payload, 'hex') FROM crdb_internal.system_jobs WHERE id = $1`, jobID)
+	results = tdb.QueryStr(t, `SELECT encode(payload, 'hex') FROM crdb_internal.system_jobs WHERE id = $1`, jobID)
 	require.Len(t, results, 1)
 	b, err := hex.DecodeString(results[0][0])
 	require.NoError(t, err)
@@ -149,6 +154,8 @@ func TestSchemaChangerJobErrorDetails(t *testing.T) {
 	err = protoutil.Unmarshal(b, &p)
 	require.NoError(t, err)
 	checkErrWithDetails(p.FinalResumeError)
+	require.LessOrEqual(t, 1, len(p.RetriableExecutionFailureLog))
+	checkErrWithDetails(p.RetriableExecutionFailureLog[0].Error)
 
 	// Check that the error is featured in the event log.
 	const eventLogCountQuery = `SELECT count(*) FROM system.eventlog WHERE "eventType" = $1`
@@ -376,7 +383,7 @@ CREATE SEQUENCE db.sq1;
 SELECT job_id FROM [SHOW JOBS]
 WHERE 
 	job_type = 'SCHEMA CHANGE' AND 
-	status = $1`, jobs.StateRunning)
+	status = $1`, jobs.StatusRunning)
 			if err != nil {
 				t.Fatalf("unexpected error querying rows %s", err)
 			}
@@ -1050,11 +1057,6 @@ CREATE TABLE t2(n int);
 			defer s.Stopper().Stop(ctx)
 
 			runner := sqlutils.MakeSQLRunner(sqlDB)
-
-			// Ensure we don't commit any DDLs in a transaction.
-			runner.Exec(t, `SET CLUSTER SETTING sql.defaults.autocommit_before_ddl.enabled = 'false'`)
-			runner.Exec(t, "SET autocommit_before_ddl = false")
-
 			firstConn, err := sqlDB.Conn(ctx)
 			require.NoError(t, err)
 			defer func() {

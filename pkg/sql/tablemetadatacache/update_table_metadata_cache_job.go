@@ -68,6 +68,16 @@ func (j *tableMetadataUpdateJobResumer) Resume(ctx context.Context, execCtxI int
 			updateJobBatchSizeSetting.Get(&execCtx.ExecCfg().Settings.SV),
 			testKnobs)
 	}
+	// We must reset the job's num runs to 0 so that it doesn't get
+	// delayed by the job system's exponential backoff strategy.
+	if err := j.job.NoTxn().Update(ctx, func(txn isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+		if md.RunStats != nil && md.RunStats.NumRuns > 0 {
+			ju.UpdateRunStats(0, md.RunStats.LastRun)
+		}
+		return nil
+	}); err != nil {
+		log.Errorf(ctx, "%s", err.Error())
+	}
 
 	// Channel used to signal the job should run.
 	signalCh := execCtx.ExecCfg().SQLStatusServer.GetUpdateTableMetadataCacheSignal()
@@ -140,7 +150,7 @@ func (j *tableMetadataUpdateJobResumer) markAsRunning(ctx context.Context) {
 		progress := md.Progress
 		details := progress.Details.(*jobspb.Progress_TableMetadataCache).TableMetadataCache
 		now := timeutil.Now()
-		progress.StatusMessage = fmt.Sprintf("Job started at %s", now)
+		progress.RunningStatus = fmt.Sprintf("Job started at %s", now)
 		details.LastStartTime = &now
 		details.Status = jobspb.UpdateTableMetadataCacheProgress_RUNNING
 		progress.Progress = &jobspb.Progress_FractionCompleted{
@@ -160,7 +170,7 @@ func (j *tableMetadataUpdateJobResumer) markAsCompleted(ctx context.Context) {
 		progress := md.Progress
 		details := progress.Details.(*jobspb.Progress_TableMetadataCache).TableMetadataCache
 		now := timeutil.Now()
-		progress.StatusMessage = fmt.Sprintf("Job completed at %s", now)
+		progress.RunningStatus = fmt.Sprintf("Job completed at %s", now)
 		details.LastCompletedTime = &now
 		details.Status = jobspb.UpdateTableMetadataCacheProgress_NOT_RUNNING
 		progress.Progress = &jobspb.Progress_FractionCompleted{

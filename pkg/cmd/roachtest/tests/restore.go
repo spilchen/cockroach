@@ -8,11 +8,11 @@ package tests
 import (
 	"bytes"
 	"context"
-	gosql "database/sql"
+	"encoding/json"
 	"fmt"
-	"io"
 	"math/rand"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -44,19 +44,6 @@ import (
 // will restore.
 const defaultRestoreUptoIncremental = 12
 
-var restoreAggregateFunction = func(test string, histogram *roachtestutil.HistogramMetric) (roachtestutil.AggregatedPerfMetrics, error) {
-	metricValue := histogram.Summaries[0].HighestTrackableValue / 1e9
-
-	return roachtestutil.AggregatedPerfMetrics{
-		{
-			Name:           fmt.Sprintf("%s_max", test),
-			Value:          metricValue,
-			Unit:           "MB/s/node",
-			IsHigherBetter: false,
-		},
-	}, nil
-}
-
 func registerRestoreNodeShutdown(r registry.Registry) {
 	sp := restoreSpecs{
 		hardware: makeHardwareSpecs(hardwareSpecs{}),
@@ -77,7 +64,7 @@ func registerRestoreNodeShutdown(r registry.Registry) {
 	r.Add(registry.TestSpec{
 		Name:                      "restore/nodeShutdown/worker",
 		Owner:                     registry.OwnerDisasterRecovery,
-		Cluster:                   sp.hardware.makeClusterSpecs(r),
+		Cluster:                   sp.hardware.makeClusterSpecs(r, sp.backup.cloud),
 		CompatibleClouds:          sp.backup.CompatibleClouds(),
 		Suites:                    registry.Suites(registry.Nightly),
 		TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
@@ -101,7 +88,7 @@ func registerRestoreNodeShutdown(r registry.Registry) {
 	r.Add(registry.TestSpec{
 		Name:                      "restore/nodeShutdown/coordinator",
 		Owner:                     registry.OwnerDisasterRecovery,
-		Cluster:                   sp.hardware.makeClusterSpecs(r),
+		Cluster:                   sp.hardware.makeClusterSpecs(r, sp.backup.cloud),
 		CompatibleClouds:          sp.backup.CompatibleClouds(),
 		Suites:                    registry.Suites(registry.Nightly),
 		TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
@@ -144,12 +131,11 @@ func registerRestore(r registry.Registry) {
 		Name:                      withPauseSpecs.testName,
 		Owner:                     registry.OwnerDisasterRecovery,
 		Benchmark:                 true,
-		Cluster:                   withPauseSpecs.hardware.makeClusterSpecs(r),
+		Cluster:                   withPauseSpecs.hardware.makeClusterSpecs(r, withPauseSpecs.backup.cloud),
 		Timeout:                   withPauseSpecs.timeout,
 		CompatibleClouds:          withPauseSpecs.backup.CompatibleClouds(),
 		Suites:                    registry.Suites(registry.Nightly),
 		TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
-		PostProcessPerfMetrics:    restoreAggregateFunction,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 
 			rd := makeRestoreDriver(t, c, withPauseSpecs)
@@ -164,10 +150,10 @@ func registerRestore(r registry.Registry) {
 			jobIDCh := make(chan jobspb.JobID)
 			jobCompleteCh := make(chan struct{}, 1)
 
-			pauseAtProgress := []float64{0.2, 0.45, 0.7}
+			pauseAtProgress := []float32{0.2, 0.45, 0.7}
 			for i := range pauseAtProgress {
 				// Add up to 10% to the pause point.
-				pauseAtProgress[i] = pauseAtProgress[i] + float64(rand.Intn(10))/100
+				pauseAtProgress[i] = pauseAtProgress[i] + float32(rand.Intn(10))/100
 			}
 			pauseIndex := 0
 			// Spin up go routine which pauses and resumes the Restore job three times.
@@ -194,11 +180,11 @@ func registerRestore(r registry.Registry) {
 					case <-jobCompleteCh:
 						return nil
 					case <-jobProgressTick.C:
-						var fraction gosql.NullFloat64
+						var fraction float32
 						sql.QueryRow(t, `SELECT fraction_completed FROM [SHOW JOB $1]`,
 							jobID).Scan(&fraction)
-						t.L().Printf("RESTORE Progress %.2f", fraction.Float64)
-						if !fraction.Valid || fraction.Float64 < pauseAtProgress[pauseIndex] {
+						t.L().Printf("RESTORE Progress %.2f", fraction)
+						if fraction < pauseAtProgress[pauseIndex] {
 							continue
 						}
 						t.L().Printf("pausing RESTORE job since progress is greater than %.2f", pauseAtProgress[pauseIndex])
@@ -214,7 +200,7 @@ func registerRestore(r registry.Registry) {
 							}
 						}
 						require.NoError(t, err)
-						testutils.SucceedsWithin(t, func() error {
+						testutils.SucceedsSoon(t, func() error {
 							var status string
 							sql.QueryRow(t, `SELECT status FROM [SHOW JOB $1]`, jobID).Scan(&status)
 							if status != "paused" {
@@ -223,7 +209,7 @@ func registerRestore(r registry.Registry) {
 							t.L().Printf("paused RESTORE job")
 							pauseIndex++
 							return nil
-						}, 2*time.Minute)
+						})
 
 						t.L().Printf("resuming RESTORE job")
 						sql.Exec(t, `RESUME JOB $1`, jobID)
@@ -264,9 +250,9 @@ func registerRestore(r registry.Registry) {
 						var status string
 						err := conn.QueryRow(`SELECT status FROM [SHOW JOBS] WHERE job_type = 'RESTORE'`).Scan(&status)
 						require.NoError(t, err)
-						if status == string(jobs.StateSucceeded) {
+						if status == string(jobs.StatusSucceeded) {
 							isJobComplete = true
-						} else if status == string(jobs.StateFailed) || status == string(jobs.StateCanceled) {
+						} else if status == string(jobs.StatusFailed) || status == string(jobs.StatusCanceled) {
 							t.Fatalf("job unexpectedly found in %s state", status)
 						}
 					}
@@ -438,7 +424,7 @@ func registerRestore(r registry.Registry) {
 			Name:      sp.testName,
 			Owner:     registry.OwnerDisasterRecovery,
 			Benchmark: true,
-			Cluster:   sp.hardware.makeClusterSpecs(r),
+			Cluster:   sp.hardware.makeClusterSpecs(r, sp.backup.cloud),
 			Timeout:   sp.timeout,
 			// These tests measure performance. To ensure consistent perf,
 			// disable metamorphic encryption.
@@ -447,7 +433,6 @@ func registerRestore(r registry.Registry) {
 			Suites:                    sp.suites,
 			TestSelectionOptOutSuites: sp.suites,
 			Skip:                      sp.skip,
-			PostProcessPerfMetrics:    restoreAggregateFunction,
 			Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 
 				rd := makeRestoreDriver(t, c, sp)
@@ -529,7 +514,9 @@ type hardwareSpecs struct {
 	zones []string
 }
 
-func (hw hardwareSpecs) makeClusterSpecs(r registry.Registry) spec.ClusterSpec {
+func (hw hardwareSpecs) makeClusterSpecs(
+	r registry.Registry, backupCloud spec.Cloud,
+) spec.ClusterSpec {
 	clusterOpts := make([]spec.Option, 0)
 	clusterOpts = append(clusterOpts, spec.CPU(hw.cpus))
 	if hw.volumeSize != 0 {
@@ -541,11 +528,6 @@ func (hw hardwareSpecs) makeClusterSpecs(r registry.Registry) spec.ClusterSpec {
 	addWorkloadNode := 0
 	if hw.workloadNode {
 		addWorkloadNode++
-		clusterOpts = append(clusterOpts, spec.WorkloadNodeCount(1))
-		// If the workload node has 32 cpus, we need to specify it.
-		if hw.workloadNode && hw.cpus != 0 {
-			clusterOpts = append(clusterOpts, spec.WorkloadNodeCPU(min(16, hw.cpus)))
-		}
 	}
 	if len(hw.zones) > 0 {
 		// Each test is set up to run on one specific cloud, so it's ok that the
@@ -1142,28 +1124,30 @@ func exportToRoachperf(
 	ctx context.Context, t test.Test, c cluster.Cluster, testName string, metric int64,
 ) {
 
-	exporter := roachtestutil.CreateWorkloadHistogramExporter(t, c)
-
 	// The easiest way to record a precise metric for roachperf is to caste it as a duration,
 	// in seconds in the histogram's upper bound.
-	reg := histogram.NewRegistryWithExporter(time.Duration(metric)*time.Second, histogram.MockWorkloadName, exporter)
-
+	reg := histogram.NewRegistry(
+		time.Duration(metric)*time.Second,
+		histogram.MockWorkloadName,
+	)
 	bytesBuf := bytes.NewBuffer([]byte{})
-	writer := io.Writer(bytesBuf)
+	jsonEnc := json.NewEncoder(bytesBuf)
 
-	exporter.Init(&writer)
-	defer roachtestutil.CloseExporter(ctx, exporter, t, c, bytesBuf, c.Node(1), "")
-	var err error
 	// Ensure the histogram contains the name of the roachtest
 	reg.GetHandle().Get(testName)
 
 	// Serialize the histogram into the buffer
 	reg.Tick(func(tick histogram.Tick) {
-		err = tick.Exporter.SnapshotAndWrite(tick.Hist, tick.Now, tick.Elapsed, &tick.Name)
+		_ = jsonEnc.Encode(tick.Snapshot())
 	})
-
-	if err != nil {
-		return
+	// Upload the perf artifacts to any one of the nodes so that the test
+	// runner copies it into an appropriate directory path.
+	dest := filepath.Join(t.PerfArtifactsDir(), "stats.json")
+	if err := c.RunE(ctx, option.WithNodes(c.Node(1)), "mkdir -p "+filepath.Dir(dest)); err != nil {
+		t.L().ErrorfCtx(ctx, "failed to create perf dir: %+v", err)
+	}
+	if err := c.PutString(ctx, bytesBuf.String(), dest, 0755, c.Node(1)); err != nil {
+		t.L().ErrorfCtx(ctx, "failed to upload perf artifacts to node: %s", err.Error())
 	}
 }
 

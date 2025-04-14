@@ -33,21 +33,11 @@ func CPU(n int) Option {
 	}
 }
 
-// WorkloadNodeCount indicates the count of last nodes in cluster to be treated
-// as workload node. Defaults to a VM with 4 CPUs if not specified by
-// WorkloadNodeCPUs.
-func WorkloadNodeCount(n int) Option {
-	return func(spec *ClusterSpec) {
-		spec.WorkloadNodeCount = n
-		spec.WorkloadNode = true
-	}
-}
-
-// TODO(GouravKumar): remove use of WorkloadNode, use WorkloadNodeCount instead
+// WorkloadNode indicates that the last node is a workload node.
+// Defaults to a VM with 4 CPUs if not specified by WorkloadNodeCPUs.
 func WorkloadNode() Option {
 	return func(spec *ClusterSpec) {
 		spec.WorkloadNode = true
-		spec.WorkloadNodeCount = 1
 	}
 }
 

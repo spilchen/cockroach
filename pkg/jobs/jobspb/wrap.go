@@ -46,8 +46,6 @@ var (
 	_ Details = LogicalReplicationDetails{}
 	_ Details = UpdateTableMetadataCacheDetails{}
 	_ Details = StandbyReadTSPollerDetails{}
-	_ Details = SqlActivityFlushDetails{}
-	_ Details = HotRangesLoggerDetails{}
 )
 
 // ProgressDetails is a marker interface for job progress details proto structs.
@@ -78,8 +76,6 @@ var (
 	_ ProgressDetails = LogicalReplicationProgress{}
 	_ ProgressDetails = UpdateTableMetadataCacheProgress{}
 	_ ProgressDetails = StandbyReadTSPollerProgress{}
-	_ ProgressDetails = SqlActivityFlushProgress{}
-	_ ProgressDetails = HotRangesLoggerProgress{}
 )
 
 // Type returns the payload's job type and panics if the type is invalid.
@@ -113,7 +109,6 @@ const (
 	ReplicationPendingFailover ReplicationStatus = 3
 	ReplicationFailingOver     ReplicationStatus = 4
 	ReplicationError           ReplicationStatus = 5
-	InitialScan                ReplicationStatus = 7
 )
 
 // String implements fmt.Stringer.
@@ -133,8 +128,6 @@ func (rs ReplicationStatus) String() string {
 		return "replication error"
 	case CreatingInitialSplits:
 		return "creating initial splits"
-	case InitialScan:
-		return "running initial scan"
 	default:
 		return fmt.Sprintf("unimplemented-%d", int(rs))
 	}
@@ -176,7 +169,6 @@ var AutomaticJobTypes = [...]Type{
 	TypeAutoUpdateSQLActivity,
 	TypeMVCCStatisticsUpdate,
 	TypeUpdateTableMetadataCache,
-	TypeSQLActivityFlush,
 }
 
 // DetailsType returns the type for a payload detail.
@@ -244,10 +236,6 @@ func DetailsType(d isPayload_Details) (Type, error) {
 		return TypeUpdateTableMetadataCache, nil
 	case *Payload_StandbyReadTsPollerDetails:
 		return TypeStandbyReadTSPoller, nil
-	case *Payload_SqlActivityFlushDetails:
-		return TypeSQLActivityFlush, nil
-	case *Payload_HotRangesLoggerDetails:
-		return TypeHotRangesLogger, nil
 	default:
 		return TypeUnspecified, errors.Newf("Payload.Type called on a payload with an unknown details type: %T", d)
 	}
@@ -301,8 +289,6 @@ var JobDetailsForEveryJobType = map[Type]Details{
 	TypeLogicalReplication:           LogicalReplicationDetails{},
 	TypeUpdateTableMetadataCache:     UpdateTableMetadataCacheDetails{},
 	TypeStandbyReadTSPoller:          StandbyReadTSPollerDetails{},
-	TypeSQLActivityFlush:             SqlActivityFlushDetails{},
-	TypeHotRangesLogger:              HotRangesLoggerDetails{},
 }
 
 // WrapProgressDetails wraps a ProgressDetails object in the protobuf wrapper
@@ -370,8 +356,6 @@ func WrapProgressDetails(details ProgressDetails) interface {
 		return &Progress_TableMetadataCache{TableMetadataCache: &d}
 	case StandbyReadTSPollerProgress:
 		return &Progress_StandbyReadTsPoller{StandbyReadTsPoller: &d}
-	case SqlActivityFlushProgress:
-		return &Progress_SqlActivityFlush{SqlActivityFlush: &d}
 	default:
 		panic(errors.AssertionFailedf("WrapProgressDetails: unknown progress type %T", d))
 	}
@@ -437,10 +421,6 @@ func (p *Payload) UnwrapDetails() Details {
 		return *d.UpdateTableMetadataCacheDetails
 	case *Payload_StandbyReadTsPollerDetails:
 		return *d.StandbyReadTsPollerDetails
-	case *Payload_SqlActivityFlushDetails:
-		return *d.SqlActivityFlushDetails
-	case *Payload_HotRangesLoggerDetails:
-		return *d.HotRangesLoggerDetails
 	default:
 		return nil
 	}
@@ -506,10 +486,6 @@ func (p *Progress) UnwrapDetails() ProgressDetails {
 		return *d.TableMetadataCache
 	case *Progress_StandbyReadTsPoller:
 		return *d.StandbyReadTsPoller
-	case *Progress_SqlActivityFlush:
-		return *d.SqlActivityFlush
-	case *Progress_HotRangesLogger:
-		return *d.HotRangesLogger
 	default:
 		return nil
 	}
@@ -599,10 +575,6 @@ func WrapPayloadDetails(details Details) interface {
 		return &Payload_UpdateTableMetadataCacheDetails{UpdateTableMetadataCacheDetails: &d}
 	case StandbyReadTSPollerDetails:
 		return &Payload_StandbyReadTsPollerDetails{StandbyReadTsPollerDetails: &d}
-	case SqlActivityFlushDetails:
-		return &Payload_SqlActivityFlushDetails{SqlActivityFlushDetails: &d}
-	case HotRangesLoggerDetails:
-		return &Payload_HotRangesLoggerDetails{HotRangesLoggerDetails: &d}
 	default:
 		panic(errors.AssertionFailedf("jobs.WrapPayloadDetails: unknown details type %T", d))
 	}
@@ -638,7 +610,7 @@ const (
 func (Type) SafeValue() {}
 
 // NumJobTypes is the number of jobs types.
-const NumJobTypes = 33
+const NumJobTypes = 31
 
 // ChangefeedDetailsMarshaler allows for dependency injection of
 // cloud.SanitizeExternalStorageURI to avoid the dependency from this

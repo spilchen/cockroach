@@ -36,8 +36,6 @@ import (
 // to search all tables in current db and in schemas in the search path till
 // we first find a table with an index of name `idx`).
 func DropIndex(b BuildCtx, n *tree.DropIndex) {
-	failIfSafeUpdates(b, n)
-
 	if n.Concurrently {
 		b.EvalCtx().ClientNoticeSender.BufferClientNotice(b,
 			pgnotice.Newf("CONCURRENTLY is not required as all indexes are dropped concurrently"))
@@ -90,12 +88,15 @@ func maybeDropIndex(
 				"use DROP CONSTRAINT ... PRIMARY KEY followed by ADD CONSTRAINT ... PRIMARY KEY in a transaction",
 		))
 	}
+	// TODO (Xiang): Check if requires CCL binary for eventual zone config removal.
 	_, _, sie := scpb.FindSecondaryIndex(toBeDroppedIndexElms)
 	if sie == nil {
 		panic(errors.AssertionFailedf("programming error: cannot find secondary index element."))
 	}
-	panicIfRegionChangeUnderwayOnRBRTable(b, "DROP INDEX", sie.TableID)
-	checkTableSchemaChangePrerequisites(b, b.QueryByID(sie.TableID), n)
+	// We don't support handling zone config related properties for tables, so
+	// throw an unsupported error.
+	fallBackIfSubZoneConfigExists(b, nil, sie.TableID)
+	panicIfSchemaChangeIsDisallowed(b.QueryByID(sie.TableID), n)
 	// Cannot drop the index if not CASCADE and a unique constraint depends on it.
 	if n.DropBehavior != tree.DropCascade && sie.IsUnique && !sie.IsCreatedExplicitly {
 		panic(errors.WithHint(

@@ -68,7 +68,8 @@ func registerCDCMixedVersions(r registry.Registry) {
 		Cluster:          r.MakeClusterSpec(5, spec.WorkloadNode(), spec.GCEZones(teamcityAgentZone), spec.Arch(vm.ArchAMD64)),
 		Timeout:          3 * time.Hour,
 		CompatibleClouds: registry.OnlyGCE,
-		Suites:           registry.Suites(registry.MixedVersion, registry.Nightly),
+		Suites:           registry.Suites(registry.Nightly),
+		RequiresLicense:  true,
 		Randomized:       true,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			runCDCMixedVersions(ctx, t, c)
@@ -301,7 +302,7 @@ func (cmvt *cdcMixedVersionTester) validate(
 
 		partitionStr := strconv.Itoa(int(m.Partition))
 		if len(m.Key) > 0 {
-			if err := cmvt.validator.NoteRow(partitionStr, string(m.Key), string(m.Value), updated, m.Topic); err != nil {
+			if err := cmvt.validator.NoteRow(partitionStr, string(m.Key), string(m.Value), updated); err != nil {
 				return err
 			}
 		} else {

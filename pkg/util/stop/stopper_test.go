@@ -224,13 +224,12 @@ func (tc *testCloser) Close() {
 func TestStopperClosers(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	s := stop.NewStopper()
-	x := 1
-	s.AddCloser(stop.CloserFn(func() { x++ }))
-	s.AddCloser(stop.CloserFn(func() { x *= 10 }))
+	var tc1, tc2 testCloser
+	s.AddCloser(&tc1)
+	s.AddCloser(&tc2)
 	s.Stop(context.Background())
-	// Both closers should run in LIFO order, so we should get 11 (and not 20).
-	if expected := 11; x != expected {
-		t.Errorf("expected %d, got %d", expected, x)
+	if !bool(tc1) || !bool(tc2) {
+		t.Errorf("expected true & true; got %t & %t", tc1, tc2)
 	}
 }
 
@@ -705,27 +704,19 @@ func TestStopperRunAsyncTaskTracing(t *testing.T) {
 				event: async 2`))
 }
 
-// Test that RunAsyncTask creates root spans only if the caller has a
+// Test that RunAsyncTask creates root spans when the caller doesn't have a
 // span.
 func TestStopperRunAsyncTaskCreatesRootSpans(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-
-	testutils.RunTrueAndFalse(t, "hasSpan", func(t *testing.T, hasSpan bool) {
-		tr := tracing.NewTracer()
-		ctx := context.Background()
-		s := stop.NewStopper(stop.WithTracer(tr))
-		defer s.Stop(ctx)
-		c := make(chan *tracing.Span)
-		if hasSpan {
-			var sp *tracing.Span
-			ctx, sp = tr.StartSpanCtx(ctx, "root", tracing.WithForceRealSpan())
-			defer sp.Finish()
-		}
-		require.NoError(t, s.RunAsyncTask(ctx, "test",
-			func(ctx context.Context) {
-				c <- tracing.SpanFromContext(ctx)
-			},
-		))
-		require.Equal(t, hasSpan, <-c != nil)
-	})
+	tr := tracing.NewTracer()
+	ctx := context.Background()
+	s := stop.NewStopper(stop.WithTracer(tr))
+	defer s.Stop(ctx)
+	c := make(chan *tracing.Span)
+	require.NoError(t, s.RunAsyncTask(ctx, "test",
+		func(ctx context.Context) {
+			c <- tracing.SpanFromContext(ctx)
+		},
+	))
+	require.NotNil(t, <-c)
 }

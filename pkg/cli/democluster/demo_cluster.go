@@ -924,8 +924,7 @@ func (demoCtx *Context) testServerArgsForTransientCluster(
 		EnableDemoLoginEndpoint: true,
 		// Demo clusters by default will create their own tenants, so we
 		// don't need to create them here.
-		DefaultTestTenant: base.TestControlsTenantsExplicitly,
-		DefaultTenantName: roachpb.TenantName(demoTenantName),
+		DefaultTestTenant: base.TODOTestTenantDisabled,
 
 		Knobs: base.TestingKnobs{
 			Server: &server.TestingKnobs{

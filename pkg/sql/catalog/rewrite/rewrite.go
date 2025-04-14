@@ -27,6 +27,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/screl"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/plpgsqltree"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/plpgsqltree/utils"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -256,7 +257,9 @@ func TableDescs(
 		// rewriteCol is a closure that performs the ID rewrite logic on a column.
 		rewriteCol := func(col *descpb.ColumnDescriptor) error {
 			// Rewrite the types.T's IDs present in the column.
-			RewriteIDsInTypesT(col.Type, descriptorRewrites)
+			if err := RewriteIDsInTypesT(col.Type, descriptorRewrites); err != nil {
+				return err
+			}
 			var newUsedSeqRefs []descpb.ID
 			for _, seqID := range col.UsesSequenceIds {
 				if rewrite, ok := descriptorRewrites[seqID]; ok {
@@ -621,7 +624,7 @@ func rewriteSequencesInFunction(
 		if err != nil {
 			return "", err
 		}
-		v := plpgsqltree.SQLStmtVisitor{Fn: replaceSeqFunc}
+		v := utils.SQLStmtVisitor{Fn: replaceSeqFunc}
 		newStmt := plpgsqltree.Walk(&v, stmt.AST)
 		fmtCtx.FormatNode(newStmt)
 
@@ -633,9 +636,9 @@ func rewriteSequencesInFunction(
 
 // RewriteIDsInTypesT rewrites all ID's in the input types.T using the input
 // ID rewrite mapping.
-func RewriteIDsInTypesT(typ *types.T, descriptorRewrites jobspb.DescRewriteMap) {
+func RewriteIDsInTypesT(typ *types.T, descriptorRewrites jobspb.DescRewriteMap) error {
 	if !typ.UserDefined() {
-		return
+		return nil
 	}
 	tid := typedesc.GetUserDefinedTypeDescID(typ)
 	// Collect potential new OID values.
@@ -652,8 +655,12 @@ func RewriteIDsInTypesT(typ *types.T, descriptorRewrites jobspb.DescRewriteMap) 
 	types.RemapUserDefinedTypeOIDs(typ, newOID, newArrayOID)
 	// If the type is an array, then we need to rewrite the element type as well.
 	if typ.Family() == types.ArrayFamily {
-		RewriteIDsInTypesT(typ.ArrayContents(), descriptorRewrites)
+		if err := RewriteIDsInTypesT(typ.ArrayContents(), descriptorRewrites); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // rewriteRoutineBody rewrites a set of SQL or PL/pgSQL statements.
@@ -741,7 +748,9 @@ func TypeDescs(types []*typedesc.Mutable, descriptorRewrites jobspb.DescRewriteM
 			}
 		case descpb.TypeDescriptor_ALIAS:
 			// We need to rewrite any ID's present in the aliased types.T.
-			RewriteIDsInTypesT(typ.Alias, descriptorRewrites)
+			if err := RewriteIDsInTypesT(typ.Alias, descriptorRewrites); err != nil {
+				return err
+			}
 		default:
 			return errors.AssertionFailedf("unknown type kind %s", t.String())
 		}
@@ -779,11 +788,17 @@ func SchemaDescs(schemas []*schemadesc.Mutable, descriptorRewrites jobspb.DescRe
 				}
 				sig.ID = fnDesc.ID
 				for _, typ := range sig.ArgTypes {
-					RewriteIDsInTypesT(typ, descriptorRewrites)
+					if err := RewriteIDsInTypesT(typ, descriptorRewrites); err != nil {
+						return err
+					}
 				}
-				RewriteIDsInTypesT(sig.ReturnType, descriptorRewrites)
+				if err := RewriteIDsInTypesT(sig.ReturnType, descriptorRewrites); err != nil {
+					return err
+				}
 				for _, typ := range sig.OutParamTypes {
-					RewriteIDsInTypesT(typ, descriptorRewrites)
+					if err := RewriteIDsInTypesT(typ, descriptorRewrites); err != nil {
+						return err
+					}
 				}
 				newSigs = append(newSigs, *sig)
 			}
@@ -918,8 +933,7 @@ func rewriteSchemaChangerState(
 			return err
 		}
 		if err := screl.WalkTypes(t.Element(), func(t *types.T) error {
-			RewriteIDsInTypesT(t, descriptorRewrites)
-			return nil
+			return RewriteIDsInTypesT(t, descriptorRewrites)
 		}); err != nil {
 			return errors.Wrap(err, "rewriting user-defined type references")
 		}
@@ -1131,9 +1145,13 @@ func FunctionDescs(
 
 		// Rewrite type IDs.
 		for _, param := range fnDesc.Params {
-			RewriteIDsInTypesT(param.Type, descriptorRewrites)
+			if err := RewriteIDsInTypesT(param.Type, descriptorRewrites); err != nil {
+				return err
+			}
 		}
-		RewriteIDsInTypesT(fnDesc.ReturnType.Type, descriptorRewrites)
+		if err := RewriteIDsInTypesT(fnDesc.ReturnType.Type, descriptorRewrites); err != nil {
+			return err
+		}
 
 		// Rewrite Dependency IDs.
 		for i, depID := range fnDesc.DependsOn {

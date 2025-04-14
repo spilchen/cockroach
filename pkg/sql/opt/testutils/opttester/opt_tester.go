@@ -57,6 +57,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/volatility"
+	"github.com/cockroachdb/cockroach/pkg/sql/sessiondatapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/stats"
 	"github.com/cockroachdb/cockroach/pkg/testutils/datapathutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/floatcmp"
@@ -165,6 +166,9 @@ type Flags struct {
 	// DisableCheckExpr indicates that a test should skip the assertions in
 	// memo/check_expr.go.
 	DisableCheckExpr bool
+
+	// Generic enables optimizations for generic query plans.
+	Generic bool
 
 	// ExploreTraceRule restricts the ExploreTrace output to only show the effects
 	// of a specific rule.
@@ -479,6 +483,11 @@ func New(catalog cat.Catalog, sqlStr string) *OptTester {
 //     norm disable=(NegateOr,NegateAnd)
 //
 //   - disable-check-expr: skips the assertions in memo/check_expr.go.
+//
+//   - generic: enables optimizations for generic query plans.
+//     NOTE: This flag sets the plan_cache_mode session setting to "auto", which
+//     cannot be done via the "set" flag because it requires a CCL license,
+//     which optimizer tests are not set up to utilize.
 //
 //   - rule: used with exploretrace; the value is the name of a rule. When
 //     specified, the exploretrace output is filtered to only show expression
@@ -892,17 +901,12 @@ func (ot *OptTester) runCommandInternal(tb testing.TB, d *datadriven.TestData) s
 	}
 }
 
-// GetMemo returns the memo for the current command, if any.
-func (ot *OptTester) GetMemo() *memo.Memo {
-	if ot.f == nil {
-		return nil
-	}
-	return ot.f.Memo()
-}
-
 // FormatExpr is a convenience wrapper for memo.FormatExpr.
 func (ot *OptTester) FormatExpr(e opt.Expr) string {
-	mem := ot.f.Memo()
+	var mem *memo.Memo
+	if rel, ok := e.(memo.RelExpr); ok {
+		mem = rel.Memo()
+	}
 	return memo.FormatExpr(
 		ot.ctx, e, ot.Flags.ExprFormat, false /* redactableValues */, mem, ot.catalog,
 	)
@@ -935,19 +939,18 @@ func (ot *OptTester) checkExpectedRules(tb testing.TB, d *datadriven.TestData) {
 }
 
 func (ot *OptTester) postProcess(tb testing.TB, d *datadriven.TestData, e opt.Expr) {
-	mem := ot.f.Memo()
-	ot.fillInLazyProps(mem, e)
+	ot.fillInLazyProps(e)
 
 	if rel, ok := e.(memo.RelExpr); ok {
 		for _, cols := range ot.Flags.ColStats {
-			memo.RequestColStat(ot.ctx, &ot.evalCtx, mem, rel, cols)
+			memo.RequestColStat(ot.ctx, &ot.evalCtx, rel, cols)
 		}
 	}
 	ot.checkExpectedRules(tb, d)
 }
 
 // Fills in lazily-derived properties (for display).
-func (ot *OptTester) fillInLazyProps(mem *memo.Memo, e opt.Expr) {
+func (ot *OptTester) fillInLazyProps(e opt.Expr) {
 	if rel, ok := e.(memo.RelExpr); ok {
 		// These properties are derived from the normalized expression.
 		rel = rel.FirstExpr()
@@ -956,14 +959,14 @@ func (ot *OptTester) fillInLazyProps(mem *memo.Memo, e opt.Expr) {
 		ot.f.CustomFuncs().DerivePruneCols(rel, intsets.Fast{} /* disabledRules */)
 
 		// Derive columns that are candidates for null rejection.
-		norm.DeriveRejectNullCols(mem, rel, intsets.Fast{} /* disabledRules */)
+		norm.DeriveRejectNullCols(rel, intsets.Fast{} /* disabledRules */)
 
 		// Make sure the interesting orderings are calculated.
-		ordering.DeriveInterestingOrderings(mem, rel)
+		ordering.DeriveInterestingOrderings(rel)
 	}
 
 	for i, n := 0, e.ChildCount(); i < n; i++ {
-		ot.fillInLazyProps(mem, e.Child(i))
+		ot.fillInLazyProps(e.Child(i))
 	}
 }
 
@@ -1046,6 +1049,9 @@ func (f *Flags) Set(arg datadriven.CmdArg) error {
 
 	case "disable-check-expr":
 		f.DisableCheckExpr = true
+
+	case "generic":
+		f.evalCtx.SessionData().PlanCacheMode = sessiondatapb.PlanCacheModeAuto
 
 	case "rule":
 		if len(arg.Vals) != 1 {
@@ -1351,7 +1357,7 @@ func (ot *OptTester) AssignPlaceholders(
 	o.NotifyOnMatchedRule(maybeDisableRule)
 
 	o.Factory().FoldingControl().AllowStableFolds()
-	if err = o.Factory().AssignPlaceholders(prepMemo); err != nil {
+	if err := o.Factory().AssignPlaceholders(prepMemo); err != nil {
 		return nil, err
 	}
 	return o.Optimize()
@@ -1369,11 +1375,7 @@ func (ot *OptTester) PlaceholderFastPath() (_ opt.Expr, ok bool, _ error) {
 	if err != nil {
 		return nil, false, err
 	}
-	ok, err = o.TryPlaceholderFastPath()
-	if err != nil {
-		return nil, false, err
-	}
-	return ot.f.Memo().RootExpr(), ok, nil
+	return o.TryPlaceholderFastPath()
 }
 
 // Memo returns a string that shows the memo data structure that is constructed
@@ -2153,8 +2155,7 @@ func (ot *OptTester) createTableAs(name tree.TableName, rel memo.RelExpr) (*test
 
 	relProps := rel.Relational()
 	outputCols := relProps.OutputCols
-	mem := ot.f.Memo()
-	colNameGen := memo.NewColumnNameGenerator(mem, rel)
+	colNameGen := memo.NewColumnNameGenerator(rel)
 
 	// Create each of the columns and their estimated stats for the test catalog
 	// table.
@@ -2162,7 +2163,7 @@ func (ot *OptTester) createTableAs(name tree.TableName, rel memo.RelExpr) (*test
 	jsonStats := make([]stats.JSONStatistic, outputCols.Len())
 	i := 0
 	for col, ok := outputCols.Next(0); ok; col, ok = outputCols.Next(col + 1) {
-		colMeta := mem.Metadata().ColumnMeta(col)
+		colMeta := rel.Memo().Metadata().ColumnMeta(col)
 		colName := colNameGen.GenerateName(col)
 
 		columns[i].Init(
@@ -2182,7 +2183,7 @@ func (ot *OptTester) createTableAs(name tree.TableName, rel memo.RelExpr) (*test
 
 		// Make sure we have estimated stats for this column.
 		colSet := opt.MakeColSet(col)
-		memo.RequestColStat(ot.ctx, &ot.evalCtx, mem, rel, colSet)
+		memo.RequestColStat(ot.ctx, &ot.evalCtx, rel, colSet)
 		stat, ok := relProps.Statistics().ColStats.Lookup(colSet)
 		if !ok {
 			return nil, fmt.Errorf("could not find statistic for column %s", colName)
@@ -2281,7 +2282,7 @@ func (ot *OptTester) IndexCandidates() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	indexCandidates := indexrec.FindIndexCandidateSet(expr, ot.f.Memo().Metadata())
+	indexCandidates := indexrec.FindIndexCandidateSet(expr, expr.(memo.RelExpr).Memo().Metadata())
 
 	// Build a formatted string to output from the map of indexCandidates.
 	tablesOutput := make([]string, 0, len(indexCandidates))
@@ -2323,7 +2324,7 @@ func (ot *OptTester) IndexRecommendations() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	md := ot.f.Memo().Metadata()
+	md := normExpr.(memo.RelExpr).Memo().Metadata()
 	indexCandidates := indexrec.FindIndexCandidateSet(normExpr, md)
 	_, hypTables := indexrec.BuildOptAndHypTableMaps(ot.catalog, indexCandidates)
 
@@ -2331,7 +2332,7 @@ func (ot *OptTester) IndexRecommendations() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	md = ot.f.Memo().Metadata()
+	md = optExpr.(memo.RelExpr).Memo().Metadata()
 	recs, err := indexrec.FindRecs(ot.ctx, optExpr, md)
 	if err != nil {
 		return "", err

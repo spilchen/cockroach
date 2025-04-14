@@ -27,8 +27,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/parser"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/randgen"
+	"github.com/cockroachdb/cockroach/pkg/sql/schemachange"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util"
@@ -986,20 +986,13 @@ func (og *operationGenerator) createIndex(ctx context.Context, tx pgx.Tx) (*opSt
 		}
 	}
 
-	// TODO(andyk): Do we need to include vector indexes?
-	indexType := idxtype.FORWARD
-	if og.randIntn(10) == 0 {
-		// 10% INVERTED
-		indexType = idxtype.INVERTED
-	}
-
 	def := &tree.CreateIndex{
 		Name:         tree.Name(indexName),
 		Table:        *tableName,
-		Unique:       og.randIntn(4) == 0, // 25% UNIQUE
-		Type:         indexType,
-		IfNotExists:  og.randIntn(2) == 0, // 50% IF NOT EXISTS
-		Invisibility: invisibility,        // 5% NOT VISIBLE
+		Unique:       og.randIntn(4) == 0,  // 25% UNIQUE
+		Inverted:     og.randIntn(10) == 0, // 10% INVERTED
+		IfNotExists:  og.randIntn(2) == 0,  // 50% IF NOT EXISTS
+		Invisibility: invisibility,         // 5% NOT VISIBLE
 	}
 
 	regionColumn := tree.Name("")
@@ -1031,7 +1024,7 @@ func (og *operationGenerator) createIndex(ctx context.Context, tx pgx.Tx) (*opSt
 		if columnNames[i].name == regionColumn && i != 0 {
 			duplicateRegionColumn = true
 		}
-		if def.Type == idxtype.INVERTED {
+		if def.Inverted {
 			// We can have an inverted index on a set of columns if the last column
 			// is an inverted indexable type and the preceding columns are not.
 			invertedIndexableType := colinfo.ColumnTypeIsInvertedIndexable(columnNames[i].typ)
@@ -1148,10 +1141,10 @@ func (og *operationGenerator) createIndex(ctx context.Context, tx pgx.Tx) (*opSt
 		stmt.expectedExecErrors.addAll(codesWithConditions{
 			{code: pgcode.DuplicateRelation, condition: indexExists},
 			// Inverted indexes do not support stored columns.
-			{code: pgcode.InvalidSQLStatementName, condition: len(def.Storing) > 0 && def.Type == idxtype.INVERTED},
+			{code: pgcode.InvalidSQLStatementName, condition: len(def.Storing) > 0 && def.Inverted},
 			// Inverted indexes cannot be unique.
-			{code: pgcode.InvalidSQLStatementName, condition: def.Unique && def.Type == idxtype.INVERTED},
-			{code: pgcode.InvalidSQLStatementName, condition: def.Type == idxtype.INVERTED && len(def.Storing) > 0},
+			{code: pgcode.InvalidSQLStatementName, condition: def.Unique && def.Inverted},
+			{code: pgcode.InvalidSQLStatementName, condition: def.Inverted && len(def.Storing) > 0},
 			{code: pgcode.DuplicateColumn, condition: duplicateStore},
 			{code: pgcode.FeatureNotSupported, condition: nonIndexableType},
 			{code: pgcode.FeatureNotSupported, condition: regionColStored},
@@ -2511,13 +2504,15 @@ func (og *operationGenerator) setColumnType(ctx context.Context, tx pgx.Tx) (*op
 		return nil, err
 	}
 
+	const setSessionVariableString = `SET enable_experimental_alter_column_type_general = true;`
+
 	tableExists, err := og.tableExists(ctx, tx, tableName)
 	if err != nil {
 		return nil, err
 	}
 	if !tableExists {
 		return makeOpStmtForSingleError(OpStmtDDL,
-			fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN IrrelevantColumnName SET DATA TYPE IrrelevantDataType`, tableName),
+			fmt.Sprintf(`%s ALTER TABLE %s ALTER COLUMN IrrelevantColumnName SET DATA TYPE IrrelevantDataType`, setSessionVariableString, tableName),
 			pgcode.UndefinedTable), nil
 	}
 	err = og.tableHasPrimaryKeySwapActive(ctx, tx, tableName)
@@ -2536,8 +2531,8 @@ func (og *operationGenerator) setColumnType(ctx context.Context, tx pgx.Tx) (*op
 	}
 	if !columnExists {
 		return makeOpStmtForSingleError(OpStmtDDL,
-			fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN "%s" SET DATA TYPE IrrelevantTypeName`,
-				tableName, columnForTypeChange.name),
+			fmt.Sprintf(`%s ALTER TABLE %s ALTER COLUMN "%s" SET DATA TYPE IrrelevantTypeName`,
+				setSessionVariableString, tableName, columnForTypeChange.name),
 			pgcode.UndefinedColumn), nil
 	}
 
@@ -2551,52 +2546,24 @@ func (og *operationGenerator) setColumnType(ctx context.Context, tx pgx.Tx) (*op
 		return nil, err
 	}
 
-	colIsRefByComputed, err := og.colIsRefByComputed(ctx, tx, tableName, columnForTypeChange.name)
-	if err != nil {
-		return nil, err
-	}
-
-	// We could potentially fail since colIsRefByComputed cannot catch the case
-	// of a contention with an ongoing alter primary key schema change.
-	hasOngoingAlterPKSchemaChange, err := og.tableHasOngoingAlterPKSchemaChanges(ctx, tx, tableName)
-	if err != nil {
-		return nil, err
-	}
-
 	stmt := makeOpStmt(OpStmtDDL)
 	if newType != nil {
-		// Some type conversions are simply not supported. Instead of attempting to
-		// replicate the runtime logic, which can be error-prone, we will mark it as
-		// a potential error.
-		stmt.potentialExecErrors.add(pgcode.CannotCoerce)
-		// Some type conversions are allowed, but the values stored with the old column
-		// type are out of range for the new type.
-		stmt.potentialExecErrors.add(pgcode.NumericValueOutOfRange)
-		// This can happen for any attempt to use the legacy schema changer.
-		stmt.potentialExecErrors.add(pgcode.FeatureNotSupported)
-		// We fail if the column we are attempting to alter has a TTL expression.
-		stmt.potentialExecErrors.add(pgcode.InvalidTableDefinition)
-		// We fail if the column we are attempting to alter is used as an
-		// identity column and we try to convert it to a non-int.
-		stmt.potentialExecErrors.add(pgcode.InvalidParameterValue)
-		// We could fail since we don't specify the USING expression, so it's
-		// possible that we could pick a data type that doesn't have an automatic cast.
-		stmt.potentialExecErrors.add(pgcode.DatatypeMismatch)
-		// Failure can occur if we attempt to alter a column that has a dependent
-		// computed column.
-		stmt.potentialExecErrors.add(pgcode.DependentObjectsStillExist)
-		// On older versions, attempts to alter the type will fail with an
-		// experimental feature failure.
-		stmt.potentialExecErrors.add(pgcode.ExperimentalFeature)
+		// Ignoring the error here intentionally, as we want to carry on with
+		// the operation and not fail it prematurely.
+		kind, _ := schemachange.ClassifyConversion(context.Background(), columnForTypeChange.typ, newType)
+		stmt.expectedExecErrors.addAll(codesWithConditions{
+			{code: pgcode.CannotCoerce, condition: kind == schemachange.ColumnConversionImpossible},
+			{code: pgcode.FeatureNotSupported, condition: kind != schemachange.ColumnConversionTrivial},
+		})
 	}
 
-	stmt.potentialExecErrors.addAll(codesWithConditions{
+	stmt.expectedExecErrors.addAll(codesWithConditions{
 		{code: pgcode.UndefinedObject, condition: newType == nil},
-		{code: pgcode.DependentObjectsStillExist, condition: columnHasDependencies || colIsRefByComputed || hasOngoingAlterPKSchemaChange},
+		{code: pgcode.DependentObjectsStillExist, condition: columnHasDependencies},
 	})
 
-	stmt.sql = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s SET DATA TYPE %s`,
-		tableName.String(), columnForTypeChange.name.String(), newTypeName.SQLString())
+	stmt.sql = fmt.Sprintf(`%s ALTER TABLE %s ALTER COLUMN %s SET DATA TYPE %s`,
+		setSessionVariableString, tableName.String(), columnForTypeChange.name.String(), newTypeName.SQLString())
 	return stmt, nil
 }
 
@@ -2604,6 +2571,27 @@ func (og *operationGenerator) alterTableAlterPrimaryKey(
 	ctx context.Context, tx pgx.Tx,
 ) (*opStmt, error) {
 	indexableQuery := "COALESCE((SELECT crdb_internal.type_is_indexable((col->'type'->>'oid')::oid)), false)"
+	typeIsIndexableNotSupported, err := isClusterVersionLessThan(
+		ctx,
+		tx,
+		clusterversion.V24_3.Version())
+	if err != nil {
+		return nil, err
+	}
+
+	// Primary Keys are backed by a unique index, therefore we can only use
+	// columns that are of an indexable type. This information is only available
+	// via the colinfo package (not SQL) and is subject to change across
+	// versions. To eliminate the chance of flakes, rely on this allow list to do
+	// the filtering. As this list is static and non-exhaustive, we're trading a
+	// bit of coverage for stability. It may be worth while to add index-ability
+	// information to `SHOW COLUMNS` or an internal SQL function in the future.
+	// TODO(sql-foundations): once #130271 is in the latest release of each active
+	// version, we can remove this allow list/the version gate.
+	if typeIsIndexableNotSupported {
+		indexableQuery = "COALESCE((col->'type'->>'family') = ANY(ARRAY['DecimalFamily', " +
+			"'IntFamily', 'StringFamily', 'UuidFamily']), false)"
+	}
 
 	colQuery := fmt.Sprintf(`
 		SELECT
@@ -2741,10 +2729,12 @@ func (og *operationGenerator) alterTableAlterPrimaryKey(
 		// TODO(sql-foundations): Add support for hash parameters and storage parameters.
 	}
 
-	generationCases = append(generationCases, GenerationCase{
-		Code:     pgcode.FeatureNotSupported,
-		Template: `{ with TableNotUnderGoingSchemaChange } ALTER TABLE { .table_name } ALTER PRIMARY KEY USING COLUMNS ({ . | Unique true | Nullable false | Generated false | Indexable false | InInvertedIndex false | Columns }) { end }`,
-	})
+	if !typeIsIndexableNotSupported {
+		generationCases = append(generationCases, GenerationCase{
+			Code:     pgcode.FeatureNotSupported,
+			Template: `{ with TableNotUnderGoingSchemaChange } ALTER TABLE { .table_name } ALTER PRIMARY KEY USING COLUMNS ({ . | Unique true | Nullable false | Generated false | Indexable false | InInvertedIndex false | Columns }) { end }`,
+		})
+	}
 
 	stmt, code, err := Generate[*tree.AlterTable](og.params.rng, og.produceError(), generationCases, template.FuncMap{
 		"TableNotUnderGoingSchemaChange": func() (map[string]any, error) {
@@ -2802,6 +2792,9 @@ func (og *operationGenerator) alterTableAlterPrimaryKey(
 		return nil, err
 	}
 
+	// TODO(sql-foundations): Until #130165 is resolved, we add this potential
+	// error.
+	og.potentialCommitErrors.add(pgcode.DuplicateColumn)
 	// There is a risk of unique violations if concurrent inserts
 	// happen during an ALTER PRIMARY KEY. So allow this to be
 	// a potential error on the commit.
@@ -3086,18 +3079,17 @@ const (
 
 type opStmtQueryResultCallback func(ctx context.Context, rows pgx.Rows) error
 
-// opStmt encapsulates a generated SQL statement, its type (DDL or DML),
-// expected and potential execution errors, and a callback for handling query results.
+// opStmt a generated statement that is either DDL or DML, including the potential
+// set of execution errors this statement can generate.
 type opStmt struct {
 	// sql the query being executed.
 	sql string
-	// queryType indicates whether the type being executed is DDL or DML.
+	// queryType family of the query type being executed (DML or DDL).
 	queryType opStmtType
 	// expectedExecErrors expected set of execution errors.
 	expectedExecErrors errorCodeSet
 	// potentialExecErrors errors that could be potentially seen on execution.
 	potentialExecErrors errorCodeSet
-	// queryResultCallback handles the results of the query execution.
 	queryResultCallback opStmtQueryResultCallback
 }
 
@@ -4160,7 +4152,6 @@ FROM
 	var nonPublicEnums []string
 	var nonPublicEnumMembers []string
 	var possibleBodyReferences []string
-	var possibleBodyFuncReferences []string
 	var possibleParamReferences []string
 	var possibleParamReferencesWithDefaults []string
 	var possibleReturnReferences []string
@@ -4175,6 +4166,21 @@ FROM
 		possibleParamReferences = append(possibleParamReferences, fmt.Sprintf(`enum_%d %s`, i, enum["name"]))
 	}
 
+	defaultExpressionsNotSupported, err := isClusterVersionLessThan(
+		ctx,
+		tx,
+		clusterversion.V24_1.Version())
+	if err != nil {
+		return nil, err
+	}
+
+	pgVectorNotSupported, err := isClusterVersionLessThan(
+		ctx,
+		tx,
+		clusterversion.V24_2.Version())
+	if err != nil {
+		return nil, err
+	}
 	mixedVersion, err := isMixedVersionState(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -4192,17 +4198,20 @@ FROM
 			typeVal.Family() == types.VoidFamily {
 			continue
 		}
-		if isUnsupportedBit0Type(typeVal.SQLString(), mixedVersion) {
+		if pgVectorNotSupported && typeVal.Family() == types.PGVectorFamily ||
+			isUnsupportedBit0Type(typeVal.SQLString(), mixedVersion) {
 			continue
 		}
 
 		possibleReturnReferences = append(possibleReturnReferences, typeVal.SQLStandardName())
 		possibleParamReferences = append(possibleParamReferences, fmt.Sprintf("val_%d %s", i+len(enums), typeVal.SQLStandardName()))
 		optionalDefaultValue := randgen.RandDatum(og.params.rng, typeVal, true)
-		possibleParamReferencesWithDefaults = append(possibleParamReferencesWithDefaults, fmt.Sprintf("val_%d %s DEFAULT %s",
-			i+len(enums)+len(randgen.SeedTypes),
-			typeVal.SQLStandardName(),
-			tree.AsStringWithFlags(optionalDefaultValue, tree.FmtParsable)))
+		if !defaultExpressionsNotSupported {
+			possibleParamReferencesWithDefaults = append(possibleParamReferencesWithDefaults, fmt.Sprintf("val_%d %s DEFAULT %s",
+				i+len(enums)+len(randgen.SeedTypes),
+				typeVal.SQLStandardName(),
+				tree.AsStringWithFlags(optionalDefaultValue, tree.FmtParsable)))
+		}
 
 	}
 
@@ -4220,52 +4229,57 @@ FROM
 	}
 
 	// For each function generate a possible invocation passing in null arguments.
-	for _, function := range functions {
-		args := ""
-		if function["args"] != nil {
-			args = function["args"].(string)
-			argTypesStr := strings.Split(function["argtypes"].(string), " ")
-			argTypes := make([]int, 0, len(argTypesStr))
-			// Determine how many default arguemnts should be used.
-			numDefaultArgs := int(function["numdefaults"].(int16))
-			if numDefaultArgs > 0 {
-				numDefaultArgs = rand.Intn(numDefaultArgs)
+	disallowUDFCallingUDF, err := isClusterVersionLessThan(ctx, tx, clusterversion.V24_1.Version())
+	if err != nil {
+		return nil, err
+	}
+	if !disallowUDFCallingUDF {
+		for _, function := range functions {
+			args := ""
+			if function["args"] != nil {
+				args = function["args"].(string)
+				argTypesStr := strings.Split(function["argtypes"].(string), " ")
+				argTypes := make([]int, 0, len(argTypesStr))
+				// Determine how many default arguemnts should be used.
+				numDefaultArgs := int(function["numdefaults"].(int16))
+				if numDefaultArgs > 0 {
+					numDefaultArgs = rand.Intn(numDefaultArgs)
+				}
+				// Populate the arguments for this signature, and select some number
+				// of default arguments.
+				for _, oidStr := range argTypesStr {
+					oid, err := strconv.Atoi(oidStr)
+					if err != nil {
+						return nil, err
+					}
+					argTypes = append(argTypes, oid)
+				}
+				argIn := strings.Builder{}
+				for idx := range strings.Split(args, ",") {
+					// We have hit the default arguments that we want to not populate.
+					if idx > len(argTypesStr)-numDefaultArgs {
+						break
+					}
+					if argIn.Len() > 0 {
+						argIn.WriteString(",")
+					}
+					// Resolve the type for each column and if possible generate a random
+					// value via randgen.
+					oidValue := oid.Oid(argTypes[idx])
+					typ, ok := types.OidToType[oidValue]
+					if !ok {
+						argIn.WriteString("NULL")
+					} else {
+						randomDatum := randgen.RandDatum(og.params.rng, typ, true)
+						argIn.WriteString(tree.AsStringWithFlags(randomDatum, tree.FmtParsable))
+					}
+				}
+				args = argIn.String()
 			}
-			// Populate the arguments for this signature, and select some number
-			// of default arguments.
-			for _, oidStr := range argTypesStr {
-				oid, err := strconv.Atoi(oidStr)
-				if err != nil {
-					return nil, err
-				}
-				argTypes = append(argTypes, oid)
-			}
-			argIn := strings.Builder{}
-			for idx := range strings.Split(args, ",") {
-				// We have hit the default arguments that we want to not populate.
-				if idx > len(argTypesStr)-numDefaultArgs {
-					break
-				}
-				if argIn.Len() > 0 {
-					argIn.WriteString(",")
-				}
-				// Resolve the type for each column and if possible generate a random
-				// value via randgen.
-				oidValue := oid.Oid(argTypes[idx])
-				typ, ok := types.OidToType[oidValue]
-				if !ok {
-					argIn.WriteString("NULL")
-				} else {
-					randomDatum := randgen.RandDatum(og.params.rng, typ, true)
-					argIn.WriteString(tree.AsStringWithFlags(randomDatum, tree.FmtParsable))
-				}
-			}
-			args = argIn.String()
+			possibleBodyReferences = append(possibleBodyReferences, fmt.Sprintf("(SELECT %s.%s(%s) IS NOT NULL)", function["schema"].(string), function["name"].(string), args))
 		}
-		possibleBodyFuncReferences = append(possibleBodyFuncReferences, fmt.Sprintf("(SELECT %s.%s(%s) IS NOT NULL)", function["schema"].(string), function["name"].(string), args))
 	}
 
-	hasFuncRefs := false
 	placeholderMap := template.FuncMap{
 		"UniqueName": func() *tree.Name {
 			name := tree.Name(fmt.Sprintf("udf_%s", og.newUniqueSeqNumSuffix()))
@@ -4312,16 +4326,7 @@ FROM
 		},
 		"BodyRefs": func() (string, error) {
 			refs, err := PickAtLeast(og.params.rng, 1, possibleBodyReferences)
-			if len(possibleBodyFuncReferences) > 0 {
-				funcRefs, secondErr := PickAtLeast(og.params.rng, 1, possibleBodyFuncReferences)
-				hasFuncRefs = len(funcRefs) > 0
-				refs = append(refs, funcRefs...)
-				err = errors.CombineErrors(err, secondErr)
-			}
 			if useBodyRefs && err == nil {
-				og.params.rng.Shuffle(len(refs), func(i, j int) {
-					refs[i], refs[j] = refs[j], refs[i]
-				})
 				return strings.Join(refs, " AND "), nil
 			}
 			return "TRUE", nil //nolint:returnerrcheck
@@ -4366,15 +4371,10 @@ FROM
 		}
 	}
 
-	opStmt := newOpStmt(stmt, codesWithConditions{
+	return newOpStmt(stmt, codesWithConditions{
 		{expectedCode, true},
 		{pgcode.DuplicateFunction, fnDuplicate},
-	})
-	opStmt.potentialExecErrors.addAll(codesWithConditions{
-		{pgcode.InvalidFunctionDefinition, hasFuncRefs},
-	})
-
-	return opStmt, nil
+	}), nil
 }
 
 func (og *operationGenerator) dropFunction(ctx context.Context, tx pgx.Tx) (*opStmt, error) {
@@ -4857,6 +4857,13 @@ func isUnsupportedBit0Type(typName string, mixedVersion bool) bool {
 }
 
 func (og *operationGenerator) setSeedInDB(ctx context.Context, tx pgx.Tx) error {
+	if notSupported, err := isClusterVersionLessThan(ctx, tx, clusterversion.V24_1.Version()); err != nil {
+		return err
+	} else if notSupported {
+		// To allow the schemachange workload to work in a mixed-version state,
+		// this should not be treated as an error.
+		return nil
+	}
 	if _, err := tx.Exec(ctx, "SELECT setseed($1)", og.randFloat64()); err != nil {
 		return err
 	}

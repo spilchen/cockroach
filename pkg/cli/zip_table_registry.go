@@ -331,13 +331,6 @@ var zipInternalTablesPerCluster = DebugZipTableRegistry{
 			"resolved_age",
 		},
 	},
-	`"".crdb_internal.logical_replication_spans`: {
-		nonSensitiveCols: NonSensitiveColumns{
-			"job_id",
-			"resolved",
-			"resolved_age",
-		},
-	},
 	"crdb_internal.default_privileges": {
 		nonSensitiveCols: NonSensitiveColumns{
 			"database_name",
@@ -388,6 +381,9 @@ var zipInternalTablesPerCluster = DebugZipTableRegistry{
 			"high_water_timestamp",
 			"coordinator_id",
 			"trace_id",
+			"last_run",
+			"next_run",
+			"num_runs",
 		},
 	},
 	"crdb_internal.system_jobs": {
@@ -939,6 +935,9 @@ var zipInternalTablesPerNode = DebugZipTableRegistry{
 			"index_recommendations",
 			"latency_seconds_min",
 			"latency_seconds_max",
+			"latency_seconds_p50",
+			"latency_seconds_p90",
+			"latency_seconds_p99",
 		},
 	},
 	"crdb_internal.node_transaction_statistics": {
@@ -1198,18 +1197,6 @@ var zipSystemTables = DebugZipTableRegistry{
 			'redacted' AS value
 			FROM system.job_info`,
 	},
-	"system.job_progress": {
-		nonSensitiveCols: NonSensitiveColumns{"job_id", "written", "fraction", "resolved"},
-	},
-	"system.job_progress_history": {
-		nonSensitiveCols: NonSensitiveColumns{"job_id", "written", "fraction", "resolved"},
-	},
-	"system.job_status": {
-		nonSensitiveCols: NonSensitiveColumns{"job_id", "written", "status"},
-	},
-	"system.job_message": {
-		nonSensitiveCols: NonSensitiveColumns{"job_id", "written", "kind", "message"},
-	},
 	"system.lease": {
 		nonSensitiveCols: NonSensitiveColumns{
 			"desc_id",
@@ -1456,7 +1443,6 @@ var zipSystemTables = DebugZipTableRegistry{
 			"plan_gist",
 			"anti_plan_gist",
 			"redacted",
-			"username",
 		},
 	},
 	// statement_statistics can have over 100k rows in just the last hour.

@@ -191,7 +191,6 @@ func collectSpanStatsResponses(
 
 			// Logical values: take the values from the node that responded first.
 			// TODO: This should really be read from the leaseholder.
-			// https://github.com/cockroachdb/cockroach/issues/138792
 			if _, ok := responses[spanStr]; !ok {
 				res.SpanToStats[spanStr].TotalStats = spanStats.TotalStats
 				res.SpanToStats[spanStr].RangeCount = spanStats.RangeCount
@@ -331,16 +330,16 @@ func (s *systemStatusServer) statsForSpan(
 				return nil, err
 			}
 		}
-	}
 
-	spanStats.StoreIDs = make([]roachpb.StoreID, 0, len(storeIDs))
-	for storeID := range storeIDs {
-		spanStats.StoreIDs = append(spanStats.StoreIDs, storeID)
-	}
-	sort.Slice(spanStats.StoreIDs, func(i, j int) bool {
-		return spanStats.StoreIDs[i] < spanStats.StoreIDs[j]
-	})
+		spanStats.StoreIDs = make([]roachpb.StoreID, 0, len(storeIDs))
+		for storeID := range storeIDs {
+			spanStats.StoreIDs = append(spanStats.StoreIDs, storeID)
+		}
+		sort.Slice(spanStats.StoreIDs, func(i, j int) bool {
+			return spanStats.StoreIDs[i] < spanStats.StoreIDs[j]
+		})
 
+	}
 	// If we still have some remaining ranges, request range stats for the current batch.
 	if len(fullyContainedKeysBatch) > 0 {
 		// Obtain stats for fully contained ranges via RangeStats.

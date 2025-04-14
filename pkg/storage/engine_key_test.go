@@ -512,5 +512,3 @@ func randomSerializedEngineKey(r *rand.Rand, maxUserKeyLen int) []byte {
 	}
 	return k
 }
-
-var _ = randomSerializedEngineKey

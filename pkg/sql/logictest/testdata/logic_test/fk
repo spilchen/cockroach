@@ -1020,8 +1020,7 @@ statement ok
 CREATE TABLE referee (id INT PRIMARY KEY);
 
 statement ok
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
+BEGIN TRANSACTION
 
 statement ok
 CREATE TABLE refers (
@@ -1082,8 +1081,7 @@ COMMIT
 
 # CREATE AND DROP a table with a fk in the same transaction.
 statement ok
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
+BEGIN TRANSACTION
 
 statement ok
 CREATE TABLE refers1 (a INT REFERENCES referee);
@@ -2732,10 +2730,7 @@ statement ok
 INSERT INTO parentid (k, v) VALUES (0, 1); INSERT INTO childid (id) VALUES (2);
 
 statement error column \"id\" does not exist
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
-ALTER TABLE parentid ADD id INT NOT NULL AS (k + 2) STORED;
-ALTER TABLE childid ADD CONSTRAINT fk_id FOREIGN KEY (id) REFERENCES parentid (id);
+BEGIN; ALTER TABLE parentid ADD id INT NOT NULL AS (k + 2) STORED; ALTER TABLE childid ADD CONSTRAINT fk_id FOREIGN KEY (id) REFERENCES parentid (id);
 
 statement ok
 ROLLBACK;
@@ -4144,7 +4139,6 @@ CREATE TABLE drop_fk_during_addition_ref (name INT8 PRIMARY KEY);
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 ALTER TABLE drop_fk_during_addition
 	ADD CONSTRAINT fk FOREIGN KEY (name) REFERENCES drop_fk_during_addition_ref (name);
 DROP TABLE drop_fk_during_addition_ref;
@@ -4158,7 +4152,6 @@ subtest 80828
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl = false;
 CREATE TABLE parent80828 (id int primary key);
 CREATE TABLE child80828 (id INT PRIMARY KEY, pid INT NOT NULL REFERENCES parent80828(id) ON DELETE CASCADE, UNIQUE INDEX (pid));
 INSERT INTO parent80828 VALUES (1);
@@ -4241,6 +4234,8 @@ NOTICE: type of foreign key column "t1_fk_col1" (CHAR(8)) is not identical to re
 
 # Test trivial data type change
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
+skipif config local-mixed-24.2
 skipif config weak-iso-level-configs
 query T noticetrace
 ALTER TABLE t2_fk ALTER COLUMN t1_fk_col2 SET DATA TYPE INT8
@@ -4255,7 +4250,10 @@ NOTICE: setting transaction isolation level to SERIALIZABLE due to schema change
 NOTICE: type of foreign key column "t1_fk_col2" (INT8) is not identical to referenced column "t1_fk"."col2" (INT4)
 
 # Test validation data type change
-skipif config local-legacy-schema-changer weak-iso-level-configs
+skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
+skipif config local-mixed-24.2
+skipif config weak-iso-level-configs
 query T noticetrace
 ALTER TABLE t2_fk ALTER COLUMN t1_fk_col1 SET DATA TYPE CHAR(5)
 ----
@@ -4270,6 +4268,8 @@ NOTICE: type of foreign key column "t1_fk_col1" (CHAR(5)) is not identical to re
 
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
+skipif config local-mixed-24.2
 query TT
 SHOW CREATE TABLE t2_fk
 ----

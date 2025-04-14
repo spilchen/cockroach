@@ -515,6 +515,3 @@ func arrayOf(
 	}
 	return &tree.ArrayTypeReference{ElementType: ref}, nil
 }
-
-// ParseDoBlockFn allows the SQL parser to parse a PL/pgSQL DO block body.
-var ParseDoBlockFn func(tree.DoBlockOptions) (tree.DoBlockBody, error)

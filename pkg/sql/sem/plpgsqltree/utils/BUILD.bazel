@@ -8,6 +8,8 @@ go_library(
     deps = [
         "//pkg/sql/plpgsql/parser:plpgparser",
         "//pkg/sql/sem/plpgsqltree",
+        "//pkg/sql/sem/tree",
         "//pkg/sql/sqltelemetry",
+        "//pkg/util/errorutil/unimplemented",
     ],
 )

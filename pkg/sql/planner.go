@@ -27,7 +27,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/lease"
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/multiregion"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/resolver"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/schematelemetry/schematelemetrycontroller"
 	"github.com/cockroachdb/cockroach/pkg/sql/clusterunique"
@@ -35,6 +34,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/exprutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/idxusage"
 	"github.com/cockroachdb/cockroach/pkg/sql/parser"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/querycache"
 	"github.com/cockroachdb/cockroach/pkg/sql/regions"
@@ -45,7 +46,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondatapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/persistedsqlstats"
-	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/sslocal"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/upgrade"
 	"github.com/cockroachdb/cockroach/pkg/util/cancelchecker"
@@ -101,8 +101,6 @@ type extendedEvalContext struct {
 
 	statsProvider *persistedsqlstats.PersistedSQLStats
 
-	localStatsProvider *sslocal.SQLStats
-
 	indexUsageStats *idxusage.LocalIndexUsageStats
 
 	SchemaChangerState *SchemaChangerState
@@ -121,7 +119,6 @@ func (evalCtx *extendedEvalContext) copyFromExecCfg(execCfg *ExecutorConfig) {
 	evalCtx.Tracer = execCfg.AmbientCtx.Tracer
 	if execCfg.SQLLiveness != nil { // nil in some tests
 		evalCtx.SQLLivenessReader = execCfg.SQLLiveness.CachedReader()
-		evalCtx.BlockingSQLLivenessReader = execCfg.SQLLiveness.BlockingReader()
 	}
 	evalCtx.CompactEngineSpan = execCfg.CompactEngineSpanFunc
 	evalCtx.SetCompactionConcurrency = execCfg.CompactionConcurrencyFunc
@@ -285,6 +282,9 @@ type planner struct {
 	// This field is embedded into the planner to avoid an allocation in
 	// checkExprForDistSQL.
 	distSQLVisitor distSQLExprCheckVisitor
+	// This field is embedded into the planner to avoid an allocation in
+	// checkScanParallelizationIfLocal.
+	parallelizationChecker localScanParallelizationChecker
 
 	// datumAlloc is used when decoding datums and running subqueries.
 	datumAlloc *tree.DatumAlloc
@@ -333,7 +333,7 @@ func WithDescCollection(collection *descs.Collection) InternalPlannerParamsOptio
 // NewInternalPlanner is an exported version of newInternalPlanner. It
 // returns an interface{} so it can be used outside of the sql package.
 func NewInternalPlanner(
-	opName redact.SafeString,
+	opName string,
 	txn *kv.Txn,
 	user username.SQLUsername,
 	memMetrics *MemoryMetrics,
@@ -353,7 +353,8 @@ func NewInternalPlanner(
 // Returns a cleanup function that must be called once the caller is done with
 // the planner.
 func newInternalPlanner(
-	opName redact.SafeString,
+	// TODO(yuzefovich): make this redact.RedactableString.
+	opName string,
 	txn *kv.Txn,
 	user username.SQLUsername,
 	memMetrics *MemoryMetrics,
@@ -375,7 +376,7 @@ func newInternalPlanner(
 	// asking the caller for one is hard to explain. What we need is better and
 	// separate interfaces for planning and running plans, which could take
 	// suitable contexts.
-	ctx := logtags.AddTag(context.Background(), string(opName), "")
+	ctx := logtags.AddTag(context.Background(), opName, "")
 
 	sd = sd.Clone()
 	if sd.SessionData.Database == "" {
@@ -402,7 +403,7 @@ func newInternalPlanner(
 	}
 
 	plannerMon := mon.NewMonitor(mon.Options{
-		Name:     mon.MakeName("internal-planner." + opName),
+		Name:     redact.Sprintf("internal-planner.%s.%s", user, opName),
 		CurCount: memMetrics.CurBytesCount,
 		MaxHist:  memMetrics.MaxBytesHist,
 		Settings: execCfg.Settings,
@@ -440,7 +441,6 @@ func newInternalPlanner(
 	p.extendedEvalCtx.NodeID = execCfg.NodeInfo.NodeID
 	p.extendedEvalCtx.Locality = execCfg.Locality
 	p.extendedEvalCtx.OriginalLocality = execCfg.Locality
-	p.extendedEvalCtx.DescIDGenerator = execCfg.DescIDGenerator
 
 	p.sessionDataMutatorIterator = smi
 
@@ -501,7 +501,6 @@ func internalExtendedEvalCtx(
 	var schemaTelemetryController eval.SchemaTelemetryController
 	var indexUsageStatsController eval.IndexUsageStatsController
 	var sqlStatsProvider *persistedsqlstats.PersistedSQLStats
-	var localSqlStatsProvider *sslocal.SQLStats
 	if ief := execCfg.InternalDB; ief != nil {
 		if ief.server != nil {
 			indexUsageStats = ief.server.indexUsageStats
@@ -509,7 +508,6 @@ func internalExtendedEvalCtx(
 			schemaTelemetryController = ief.server.schemaTelemetryController
 			indexUsageStatsController = ief.server.indexUsageStatsController
 			sqlStatsProvider = ief.server.sqlStats
-			localSqlStatsProvider = ief.server.localSqlStats
 		} else {
 			// If the indexUsageStats is nil from the sql.Server, we create a dummy
 			// index usage stats collector. The sql.Server in the ExecutorConfig
@@ -521,7 +519,6 @@ func internalExtendedEvalCtx(
 			schemaTelemetryController = &schematelemetrycontroller.Controller{}
 			indexUsageStatsController = &idxusage.Controller{}
 			sqlStatsProvider = &persistedsqlstats.PersistedSQLStats{}
-			localSqlStatsProvider = &sslocal.SQLStats{}
 		}
 	}
 	ret := extendedEvalContext{
@@ -541,12 +538,11 @@ func internalExtendedEvalCtx(
 			StmtDiagnosticsRequestInserter: execCfg.StmtDiagnosticsRecorder.InsertRequest,
 			RangeStatsFetcher:              execCfg.RangeStatsFetcher,
 		},
-		Tracing:            &SessionTracing{},
-		Descs:              tables,
-		indexUsageStats:    indexUsageStats,
-		statsProvider:      sqlStatsProvider,
-		localStatsProvider: localSqlStatsProvider,
-		jobs:               newTxnJobsCollection(),
+		Tracing:         &SessionTracing{},
+		Descs:           tables,
+		indexUsageStats: indexUsageStats,
+		statsProvider:   sqlStatsProvider,
+		jobs:            newTxnJobsCollection(),
 	}
 	ret.copyFromExecCfg(execCfg)
 	return ret
@@ -674,17 +670,6 @@ func (p *planner) GetRegions(ctx context.Context) (*serverpb.RegionsResponse, er
 		return nil, errors.AssertionFailedf("no regions provider available")
 	}
 	return provider.GetRegions(ctx)
-}
-
-// SynthesizeRegionConfig implements the scbuildstmt.SynthesizeRegionConfig interface.
-func (p *planner) SynthesizeRegionConfig(
-	ctx context.Context, dbID descpb.ID, opts ...multiregion.SynthesizeRegionConfigOption,
-) (multiregion.RegionConfig, error) {
-	provider := p.regionsProvider()
-	if provider == nil {
-		return multiregion.RegionConfig{}, errors.AssertionFailedf("no regions provider available")
-	}
-	return provider.SynthesizeRegionConfig(ctx, dbID, opts...)
 }
 
 // DistSQLPlanner returns the DistSQLPlanner
@@ -1024,6 +1009,10 @@ func (p *planner) mustUseLeafTxn() bool {
 func (p *planner) StartHistoryRetentionJob(
 	ctx context.Context, desc string, protectTS hlc.Timestamp, expiration time.Duration,
 ) (jobspb.JobID, error) {
+	if !p.ExecCfg().Settings.Version.IsActive(ctx, clusterversion.V24_1) {
+		return 0, pgerror.New(pgcode.FeatureNotSupported,
+			"history retention job not supported before V24.1")
+	}
 	return StartHistoryRetentionJob(ctx, p.EvalContext(), p.InternalSQLTxn(), desc, protectTS, expiration)
 }
 

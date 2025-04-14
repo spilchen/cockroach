@@ -21,7 +21,6 @@ go_library(
         "//pkg/roachpb",
         "//pkg/settings",
         "//pkg/settings/cluster",
-        "//pkg/util/debugutil",
         "//pkg/util/errorutil",
         "//pkg/util/hlc",
         "//pkg/util/log",
