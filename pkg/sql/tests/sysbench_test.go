@@ -135,13 +135,13 @@ const (
 	  id INT8 PRIMARY KEY,
 	  k INT8 NOT NULL DEFAULT 0,
 	  c CHAR(120) NOT NULL DEFAULT '',
-	  pad CHAR(60) NOT NULL DEFAULT '',
-    check (true)
+	  pad CHAR(60) NOT NULL DEFAULT ''
 	)`
-	sysbenchCreateIndex  = `CREATE INDEX k_%[1]d ON sbtest%[1]d(k)` // https://github.com/akopytov/sysbench/blob/de18a036cc65196b1a4966d305f33db3d8fa6f8e/src/lua/oltp_common.lua#L245
-	sysbenchEnableRLS    = `ALTER TABLE sbtest%[1]d ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY`
-	sysbenchCreatePolicy = `CREATE POLICY p ON sbtest%[1]d USING (true)`
-	sysbenchAnalyze      = `ANALYZE sbtest%[1]d`
+	sysbenchCreateIndex          = `CREATE INDEX k_%[1]d ON sbtest%[1]d(k)` // https://github.com/akopytov/sysbench/blob/de18a036cc65196b1a4966d305f33db3d8fa6f8e/src/lua/oltp_common.lua#L245
+	sysbenchEnableRLS            = `ALTER TABLE sbtest%[1]d ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY`
+	sysbenchMatchCreatePolicy    = `CREATE POLICY p%[2]d ON sbtest%[1]d USING (true)`
+	sysbenchMismatchCreatePolicy = `CREATE POLICY p%[2]d ON sbtest%[1]d USING (k != -100000 + %[2]d)`
+	sysbenchAnalyze              = `ANALYZE sbtest%[1]d`
 
 	sysbenchStmtBegin          = `BEGIN`
 	sysbenchStmtCommit         = `COMMIT`
@@ -189,13 +189,13 @@ func newTestCluster(
 // TODO(nvanbenschoten): add a variant of this driver which bypasses the gRPC
 // local fast-path optimization.
 type sysbenchSQL struct {
-	ctx       context.Context
-	stopper   *stop.Stopper
-	pgURL     url.URL
-	enableRLS bool
+	ctx         context.Context
+	stopper     *stop.Stopper
+	pgURL       url.URL
+	rlsPolicies int
 }
 
-func newSysbenchSQL(nodes int, localRPCFastPath bool, enableRLS bool) sysbenchDriverConstructor {
+func newSysbenchSQL(nodes int, localRPCFastPath bool, rlsPolicies int) sysbenchDriverConstructor {
 	return func(ctx context.Context, b *testing.B) (sysbenchDriver, func()) {
 		tc := newTestCluster(b, nodes, localRPCFastPath)
 		for i := 0; i < nodes; i++ {
@@ -216,10 +216,10 @@ func newSysbenchSQL(nodes int, localRPCFastPath bool, enableRLS bool) sysbenchDr
 			tc.Stopper().Stop(ctx)
 		}
 		return &sysbenchSQL{
-			ctx:       ctx,
-			stopper:   tc.Stopper(),
-			pgURL:     pgURL,
-			enableRLS: enableRLS,
+			ctx:         ctx,
+			stopper:     tc.Stopper(),
+			pgURL:       pgURL,
+			rlsPolicies: rlsPolicies,
 		}, cleanup
 	}
 }
@@ -327,10 +327,10 @@ func (s *sysbenchSQLClient) DeleteInsert(
 }
 
 func (s *sysbenchSQL) prep(rng *rand.Rand) {
-	s.prepSchema(rng, s.enableRLS)
+	s.prepSchema(rng, s.rlsPolicies)
 }
 
-func (s *sysbenchSQL) prepSchema(rng *rand.Rand, enableRLS bool) {
+func (s *sysbenchSQL) prepSchema(rng *rand.Rand, rlsPolicies int) {
 	conn := try(pgx.Connect(s.ctx, s.pgURL.String()))
 	defer func() { _ = conn.Close(s.ctx) }()
 	// Note the database is created when first establishing the server since it's
@@ -359,9 +359,14 @@ func (s *sysbenchSQL) prepSchema(rng *rand.Rand, enableRLS bool) {
 		// Collect table statistics.
 		try(conn.Exec(s.ctx, fmt.Sprintf(sysbenchAnalyze, i)))
 
-		if enableRLS {
+		if rlsPolicies > 0 {
 			try(conn.Exec(s.ctx, fmt.Sprintf(sysbenchEnableRLS, i)))
-			try(conn.Exec(s.ctx, fmt.Sprintf(sysbenchCreatePolicy, i)))
+			for j := 1; j < rlsPolicies; j++ {
+				try(conn.Exec(s.ctx, fmt.Sprintf(sysbenchMismatchCreatePolicy, i, j)))
+			}
+			// All the policies are permissive meaning only 1 needs to apply. Leave
+			// the last one as the matching policy.
+			try(conn.Exec(s.ctx, fmt.Sprintf(sysbenchMatchCreatePolicy, i, 0)))
 		}
 	}
 }
@@ -863,10 +868,10 @@ func benchmarkSysbenchImpl(b *testing.B, parallel bool) {
 		name          string
 		constructorFn sysbenchDriverConstructor
 	}{
-		{"SQL/1node_local", newSysbenchSQL(1, true, false)},
-		{"SQL/1node_remote", newSysbenchSQL(1, false, false)},
-		{"SQL/3node", newSysbenchSQL(3, false, false)},
-		{"SQL/1node_rls", newSysbenchSQL(3, true, true)},
+		{"SQL/1node_local", newSysbenchSQL(1, true, 0)},
+		{"SQL/1node_remote", newSysbenchSQL(1, false, 0)},
+		{"SQL/3node", newSysbenchSQL(3, false, 0)},
+		{"SQL/1node_rls", newSysbenchSQL(3, true, 50)},
 		{"KV/1node_local", newSysbenchKV(1, true)},
 		{"KV/1node_remote", newSysbenchKV(1, false)},
 		{"KV/3node", newSysbenchKV(3, false)},
