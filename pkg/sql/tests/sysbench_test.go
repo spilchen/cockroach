@@ -125,18 +125,23 @@ type sysbenchDriver interface {
 }
 
 const (
-	sysbenchDB       = `sysbench`
-	sysbenchTableFmt = `sbtest%d`
-	sysbenchCreateDB = `CREATE DATABASE ` + sysbenchDB
-	// https://github.com/akopytov/sysbench/blob/de18a036cc65196b1a4966d305f33db3d8fa6f8e/src/lua/oltp_common.lua#L193
+	sysbenchDB          = `sysbench`
+	sysbenchTableFmt    = `sbtest%d`
+	sysbenchCreateDB    = `CREATE DATABASE ` + sysbenchDB
+	sysbenchUser        = `testuser`
+	sysbenchCreateUser  = `CREATE USER ` + sysbenchUser
+	sysbenchGrantUser   = `GRANT ALL ON DATABASE ` + sysbenchDB + ` TO ` + sysbenchUser
 	sysbenchCreateTable = `CREATE TABLE sbtest%d(
 	  id INT8 PRIMARY KEY,
 	  k INT8 NOT NULL DEFAULT 0,
 	  c CHAR(120) NOT NULL DEFAULT '',
 	  pad CHAR(60) NOT NULL DEFAULT ''
 	)`
-	sysbenchCreateIndex = `CREATE INDEX k_%[1]d ON sbtest%[1]d(k)` // https://github.com/akopytov/sysbench/blob/de18a036cc65196b1a4966d305f33db3d8fa6f8e/src/lua/oltp_common.lua#L245
-	sysbenchAnalyze     = `ANALYZE sbtest%[1]d`
+	sysbenchCreateIndex          = `CREATE INDEX k_%[1]d ON sbtest%[1]d(k)` // https://github.com/akopytov/sysbench/blob/de18a036cc65196b1a4966d305f33db3d8fa6f8e/src/lua/oltp_common.lua#L245
+	sysbenchEnableRLS            = `ALTER TABLE sbtest%[1]d ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY`
+	sysbenchMatchCreatePolicy    = `CREATE POLICY p%[2]d ON sbtest%[1]d USING (true)`
+	sysbenchMismatchCreatePolicy = `CREATE POLICY p%[2]d ON sbtest%[1]d USING (k != -100000 + %[2]d)`
+	sysbenchAnalyze              = `ANALYZE sbtest%[1]d`
 
 	sysbenchStmtBegin          = `BEGIN`
 	sysbenchStmtCommit         = `COMMIT`
@@ -184,27 +189,37 @@ func newTestCluster(
 // TODO(nvanbenschoten): add a variant of this driver which bypasses the gRPC
 // local fast-path optimization.
 type sysbenchSQL struct {
-	ctx     context.Context
-	stopper *stop.Stopper
-	pgURL   url.URL
+	ctx         context.Context
+	stopper     *stop.Stopper
+	pgURL       url.URL
+	rlsPolicies int
 }
 
-func newSysbenchSQL(nodes int, localRPCFastPath bool) sysbenchDriverConstructor {
+func newSysbenchSQL(nodes int, localRPCFastPath bool, rlsPolicies int) sysbenchDriverConstructor {
 	return func(ctx context.Context, b *testing.B) (sysbenchDriver, func()) {
 		tc := newTestCluster(b, nodes, localRPCFastPath)
 		for i := 0; i < nodes; i++ {
 			tc.Server(i).SQLServer().(*sql.Server).GetExecutorConfig().LicenseEnforcer.Disable(ctx)
 		}
 		try0(tc.WaitForFullReplication())
-		pgURL, cleanupURL := tc.ApplicationLayer(0).PGUrl(b, serverutils.DBName(sysbenchDB))
+		sqlDB := tc.ApplicationLayer(0).SQLConn(b, serverutils.DBName(sysbenchDB))
+
+		// Create a non-admin user to execute the benchmark queries.
+		// Create the database.
+		try(sqlDB.Exec(sysbenchCreateDB))
+		try(sqlDB.Exec(sysbenchCreateUser))
+		try(sqlDB.Exec(sysbenchGrantUser))
+
+		pgURL, cleanupURL := tc.ApplicationLayer(0).PGUrl(b, serverutils.DBName(sysbenchDB), serverutils.User(sysbenchUser))
 		cleanup := func() {
 			cleanupURL()
 			tc.Stopper().Stop(ctx)
 		}
 		return &sysbenchSQL{
-			ctx:     ctx,
-			stopper: tc.Stopper(),
-			pgURL:   pgURL,
+			ctx:         ctx,
+			stopper:     tc.Stopper(),
+			pgURL:       pgURL,
+			rlsPolicies: rlsPolicies,
 		}, cleanup
 	}
 }
@@ -312,14 +327,14 @@ func (s *sysbenchSQLClient) DeleteInsert(
 }
 
 func (s *sysbenchSQL) prep(rng *rand.Rand) {
-	s.prepSchema(rng)
+	s.prepSchema(rng, s.rlsPolicies)
 }
 
-func (s *sysbenchSQL) prepSchema(rng *rand.Rand) {
+func (s *sysbenchSQL) prepSchema(rng *rand.Rand, rlsPolicies int) {
 	conn := try(pgx.Connect(s.ctx, s.pgURL.String()))
 	defer func() { _ = conn.Close(s.ctx) }()
-	// Create the database.
-	try(conn.Exec(s.ctx, sysbenchCreateDB))
+	// Note the database is created when first establishing the server since it's
+	// necessary to exist to create the test user we will connect with.
 
 	// NOTE: this is faster without parallelism, for some reason.
 	for i := range sysbenchTables {
@@ -343,6 +358,16 @@ func (s *sysbenchSQL) prepSchema(rng *rand.Rand) {
 
 		// Collect table statistics.
 		try(conn.Exec(s.ctx, fmt.Sprintf(sysbenchAnalyze, i)))
+
+		if rlsPolicies > 0 {
+			try(conn.Exec(s.ctx, fmt.Sprintf(sysbenchEnableRLS, i)))
+			for j := 1; j < rlsPolicies; j++ {
+				try(conn.Exec(s.ctx, fmt.Sprintf(sysbenchMismatchCreatePolicy, i, j)))
+			}
+			// All the policies are permissive meaning only 1 needs to apply. Leave
+			// the last one as the matching policy.
+			try(conn.Exec(s.ctx, fmt.Sprintf(sysbenchMatchCreatePolicy, i, 0)))
+		}
 	}
 }
 
@@ -843,9 +868,9 @@ func benchmarkSysbenchImpl(b *testing.B, parallel bool) {
 		name          string
 		constructorFn sysbenchDriverConstructor
 	}{
-		{"SQL/1node_local", newSysbenchSQL(1, true)},
-		{"SQL/1node_remote", newSysbenchSQL(1, false)},
-		{"SQL/3node", newSysbenchSQL(3, false)},
+		{"SQL/1node_local", newSysbenchSQL(1, true, 1)},
+		{"SQL/1node_remote", newSysbenchSQL(1, false, 1)},
+		{"SQL/3node", newSysbenchSQL(3, false, 1)},
 		{"KV/1node_local", newSysbenchKV(1, true)},
 		{"KV/1node_remote", newSysbenchKV(1, false)},
 		{"KV/3node", newSysbenchKV(3, false)},
