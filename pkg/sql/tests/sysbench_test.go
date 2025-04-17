@@ -135,7 +135,8 @@ const (
 	  id INT8 PRIMARY KEY,
 	  k INT8 NOT NULL DEFAULT 0,
 	  c CHAR(120) NOT NULL DEFAULT '',
-	  pad CHAR(60) NOT NULL DEFAULT ''
+	  pad CHAR(60) NOT NULL DEFAULT '',
+    check (true)
 	)`
 	sysbenchCreateIndex  = `CREATE INDEX k_%[1]d ON sbtest%[1]d(k)` // https://github.com/akopytov/sysbench/blob/de18a036cc65196b1a4966d305f33db3d8fa6f8e/src/lua/oltp_common.lua#L245
 	sysbenchEnableRLS    = `ALTER TABLE sbtest%[1]d ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY`
@@ -865,7 +866,7 @@ func benchmarkSysbenchImpl(b *testing.B, parallel bool) {
 		{"SQL/1node_local", newSysbenchSQL(1, true, false)},
 		{"SQL/1node_remote", newSysbenchSQL(1, false, false)},
 		{"SQL/3node", newSysbenchSQL(3, false, false)},
-		{"SQL/1node_rls", newSysbenchSQL(3, false, true)},
+		{"SQL/1node_rls", newSysbenchSQL(3, true, true)},
 		{"KV/1node_local", newSysbenchKV(1, true)},
 		{"KV/1node_remote", newSysbenchKV(1, false)},
 		{"KV/3node", newSysbenchKV(3, false)},
