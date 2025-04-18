@@ -868,9 +868,9 @@ func benchmarkSysbenchImpl(b *testing.B, parallel bool) {
 		name          string
 		constructorFn sysbenchDriverConstructor
 	}{
-		{"SQL/1node_local", newSysbenchSQL(1, true, 10)},
-		{"SQL/1node_remote", newSysbenchSQL(1, false, 10)},
-		{"SQL/3node", newSysbenchSQL(3, false, 10)},
+		{"SQL/1node_local", newSysbenchSQL(1, true, 1)},
+		{"SQL/1node_remote", newSysbenchSQL(1, false, 1)},
+		{"SQL/3node", newSysbenchSQL(3, false, 1)},
 		{"KV/1node_local", newSysbenchKV(1, true)},
 		{"KV/1node_remote", newSysbenchKV(1, false)},
 		{"KV/3node", newSysbenchKV(3, false)},
