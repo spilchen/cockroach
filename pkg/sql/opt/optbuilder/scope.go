@@ -139,6 +139,7 @@ const (
 	exprKindWindowFrameStart
 	exprKindWindowFrameEnd
 	exprKindWhen
+	exprKindUpdateSet
 )
 
 var exprKindName = [...]string{
@@ -163,6 +164,7 @@ var exprKindName = [...]string{
 	exprKindWindowFrameStart:  "WINDOW FRAME START",
 	exprKindWindowFrameEnd:    "WINDOW FRAME END",
 	exprKindWhen:              "WHEN",
+	exprKindUpdateSet:         "UPDATE SET",
 }
 
 func (k exprKind) String() string {

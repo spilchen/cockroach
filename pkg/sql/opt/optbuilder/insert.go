@@ -389,7 +389,7 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 		mb.addTargetColsForUpdate(ins.OnConflict.Exprs)
 
 		// Build each of the SET expressions.
-		mb.addUpdateCols(ins.OnConflict.Exprs)
+		mb.addUpdateCols(ins.OnConflict.Exprs, nil /* SPILLY probably need valid thing here */)
 
 		// Project row-level BEFORE triggers for UPDATE.
 		mb.buildRowLevelBeforeTriggers(tree.TriggerEventUpdate, false /* cascade */)
@@ -1105,5 +1105,5 @@ func (mb *mutationBuilder) buildOnConflictWhereClause(
 			Right: whereClause.Expr,
 		},
 	}
-	mb.b.buildWhere(where, mb.outScope)
+	mb.b.buildWhere(where, mb.outScope, nil /* SPILLY track col refs for select policy apply? */)
 }

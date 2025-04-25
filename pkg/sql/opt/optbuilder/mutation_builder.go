@@ -327,6 +327,7 @@ func (mb *mutationBuilder) buildInputForUpdate(
 	texpr tree.TableExpr,
 	from tree.TableExprs,
 	where *tree.Where,
+	whereColRefs *opt.ColSet,
 	limit *tree.Limit,
 	orderBy tree.OrderBy,
 ) {
@@ -397,7 +398,7 @@ func (mb *mutationBuilder) buildInputForUpdate(
 	}
 
 	// WHERE
-	mb.b.buildWhere(where, mb.outScope)
+	mb.b.buildWhere(where, mb.outScope, whereColRefs)
 
 	// SELECT + ORDER BY (which may add projected expressions)
 	projectionsScope := mb.outScope.replace()
@@ -518,7 +519,7 @@ func (mb *mutationBuilder) buildInputForDelete(
 	}
 
 	// WHERE
-	mb.b.buildWhere(where, mb.outScope)
+	mb.b.buildWhere(where, mb.outScope, nil)
 
 	// SELECT + ORDER BY (which may add projected expressions)
 	projectionsScope := mb.outScope.replace()
@@ -864,6 +865,7 @@ func (mb *mutationBuilder) addSynthesizedComputedCols(colIDs opt.OptionalColList
 // is true, check columns that do not reference mutation columns are not added
 // to checkColIDs, which allows pruning normalization rules to remove the
 // unnecessary projected column.
+// SPILLY - rename includeSelectOnInsert
 func (mb *mutationBuilder) addCheckConstraintCols(
 	isUpdate bool, policyCmdScope cat.PolicyCommandScope, includeSelectOnInsert bool,
 ) {
@@ -1018,8 +1020,16 @@ func (mb *mutationBuilder) buildRLSCheckExpr(
 			mb.genPolicyWithCheckExpr(tabMeta, cat.PolicyScopeInsert, referencedCols),
 		)
 	case cat.PolicyScopeUpdate:
+		// Only apply select policies if requested.
+		var selectPolicyExpr opt.ScalarExpr = memo.TrueSingleton
+		if includeSelectOnInsert {
+			// Note: we use mb.outScope because we want the policies applied to the newly
+			// inserted rows. For example, INSERT ... RETURNING must ensure the returned
+			// rows are visible.
+			selectPolicyExpr = mb.genPolicyUsingExpr(tabMeta, cat.PolicyScopeSelect, mb.outScope, referencedCols)
+		}
 		scalar = mb.b.factory.ConstructAnd(
-			mb.genPolicyUsingExpr(tabMeta, cat.PolicyScopeSelect, mb.outScope, referencedCols),
+			selectPolicyExpr,
 			mb.genPolicyWithCheckExpr(tabMeta, cat.PolicyScopeUpdate, referencedCols),
 		)
 	case cat.PolicyScopeUpsert:

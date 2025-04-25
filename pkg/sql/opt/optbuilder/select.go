@@ -1221,7 +1221,7 @@ func (b *Builder) buildSelectClause(
 	fromScope := b.buildFrom(sel.From, lockCtx, inScope)
 
 	b.processWindowDefs(sel, fromScope)
-	b.buildWhere(sel.Where, fromScope)
+	b.buildWhere(sel.Where, fromScope, nil)
 
 	projectionsScope := fromScope.replace()
 
@@ -1336,7 +1336,7 @@ func (b *Builder) processWindowDefs(sel *tree.SelectClause, fromScope *scope) {
 //
 // See Builder.buildStmt for a description of the remaining input and return
 // values.
-func (b *Builder) buildWhere(where *tree.Where, inScope *scope) {
+func (b *Builder) buildWhere(where *tree.Where, inScope *scope, colRefs *opt.ColSet) {
 	if where == nil {
 		return
 	}
@@ -1344,9 +1344,13 @@ func (b *Builder) buildWhere(where *tree.Where, inScope *scope) {
 	filter := b.resolveAndBuildScalar(
 		where.Expr,
 		types.Bool,
+		// SPILLY - so we build the where scope, the go onto other things. If we are able to look at the parent (recursively), we should be able to see if columns were referenced in the scope
+		// SPILLY - trouble is there doesn't seem to be a precedence for that.
+		// SPILLY - also, there is no exprKind for SET. But there is one for RETURNING (exprKindReturning)
 		exprKindWhere,
 		tree.RejectGenerators|tree.RejectWindowApplications|tree.RejectProcedures,
 		inScope,
+		colRefs,
 	)
 
 	// Wrap the filter in a FiltersOp.
