@@ -7,6 +7,8 @@ package ttljob
 
 import (
 	"context"
+	"github.com/cockroachdb/cockroach/pkg/settings"
+	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
@@ -21,7 +23,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
-	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/physicalplan"
@@ -32,6 +33,21 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/errors"
+)
+
+var replanThreshold = settings.RegisterFloatSetting(
+	settings.ApplicationLevel,
+	"sql.ttl.replan_flow_threshold",
+	"fraction of initial flow instances that would be added or updated above which a TTL is restarted (0=disabled)",
+	0.1,
+)
+
+var replanFrequency = settings.RegisterDurationSetting(
+	settings.ApplicationLevel,
+	"sql.ttl.replan_flow_frequency",
+	"frequency at which TTL checks to see if restarting would update its physical execution plan",
+	time.Minute*2,
+	settings.PositiveDuration,
 )
 
 // rowLevelTTLResumer implements the TTL job. The job can run on any node, but
@@ -50,7 +66,7 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 	defer func() {
 		if retErr == nil {
 			return
-		} else if joberror.IsPermanentBulkJobError(retErr) {
+		} else if joberror.IsPermanentBulkJobError(retErr) && !errors.Is(retErr, sql.ErrPlanChanged) {
 			retErr = jobs.MarkAsPermanentJobError(retErr)
 		} else {
 			retErr = jobs.MarkAsRetryJobError(retErr)
@@ -129,51 +145,51 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 	statsCtx, statsCancel := context.WithCancelCause(ctx)
 	defer statsCancel(nil)
 	statsGroup := ctxgroup.WithContext(statsCtx)
-	err := func() error {
-		if rowLevelTTL.RowStatsPollInterval != 0 {
-			defer statsCancel(errors.New("cancelling TTL stats query because TTL job completed"))
-			metrics := execCfg.JobRegistry.MetricsStruct().RowLevelTTL.(*RowLevelTTLAggMetrics).loadMetrics(
-				labelMetrics,
-				relationName,
-			)
+	if rowLevelTTL.RowStatsPollInterval != 0 {
+		metrics := execCfg.JobRegistry.MetricsStruct().RowLevelTTL.(*RowLevelTTLAggMetrics).loadMetrics(
+			labelMetrics,
+			relationName,
+		)
 
-			statsGroup.GoCtx(func(ctx context.Context) error {
-				// Do once initially to ensure we have some base statistics.
-				if err := metrics.fetchStatistics(ctx, execCfg, relationName, details, aostDuration, ttlExpr); err != nil {
-					return err
-				}
-				// Wait until poll interval is reached, or early exit when we are done
-				// with the TTL job.
-				for {
-					select {
-					case <-ctx.Done():
-						return nil
-					case <-time.After(rowLevelTTL.RowStatsPollInterval):
-						if err := metrics.fetchStatistics(ctx, execCfg, relationName, details, aostDuration, ttlExpr); err != nil {
-							return err
-						}
+		statsGroup.GoCtx(func(ctx context.Context) error {
+			// Do once initially to ensure we have some base statistics.
+			if err := metrics.fetchStatistics(ctx, execCfg, relationName, details, aostDuration, ttlExpr); err != nil {
+				return err
+			}
+			// Wait until poll interval is reached, or early exit when we are done
+			// with the TTL job.
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(rowLevelTTL.RowStatsPollInterval):
+					if err := metrics.fetchStatistics(ctx, execCfg, relationName, details, aostDuration, ttlExpr); err != nil {
+						return err
 					}
 				}
-			})
-		}
+			}
+		})
+	}
 
-		distSQLPlanner := jobExecCtx.DistSQLPlanner()
+	distSQLPlanner := jobExecCtx.DistSQLPlanner()
 
+	jobSpanCount := 0
+	makePlan := func(ctx context.Context, distSQLPlanner *sql.DistSQLPlanner) (*sql.PhysicalPlan, *sql.PlanningCtx, error) {
 		// We don't return the compatible nodes here since PartitionSpans will
 		// filter out incompatible nodes.
 		planCtx, _, err := distSQLPlanner.SetupAllNodesPlanning(ctx, jobExecCtx.ExtendedEvalContext(), execCfg)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		spanPartitions, err := distSQLPlanner.PartitionSpans(ctx, planCtx, []roachpb.Span{entirePKSpan}, sql.PartitionSpansBoundDefault)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		expectedNumSpanPartitions := knobs.ExpectedNumSpanPartitions
 		if expectedNumSpanPartitions != 0 {
 			actualNumSpanPartitions := len(spanPartitions)
 			if expectedNumSpanPartitions != actualNumSpanPartitions {
-				return errors.AssertionFailedf(
+				return nil, nil, errors.AssertionFailedf(
 					"incorrect number of span partitions expected=%d actual=%d",
 					expectedNumSpanPartitions, actualNumSpanPartitions,
 				)
@@ -204,25 +220,9 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 			}
 		}
 
-		jobSpanCount := 0
+		jobSpanCount = 0
 		for _, spanPartition := range spanPartitions {
 			jobSpanCount += len(spanPartition.Spans)
-		}
-
-		if err := t.job.NoTxn().Update(ctx,
-			func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-				progress := md.Progress
-				rowLevelTTL := progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
-				rowLevelTTL.JobTotalSpanCount = int64(jobSpanCount)
-				rowLevelTTL.JobProcessedSpanCount = 0
-				progress.Progress = &jobspb.Progress_FractionCompleted{
-					FractionCompleted: 0,
-				}
-				ju.UpdateProgress(progress)
-				return nil
-			},
-		); err != nil {
-			return err
 		}
 
 		sqlInstanceIDToTTLSpec := make(map[base.SQLInstanceID]*execinfrapb.TTLSpec, len(spanPartitions))
@@ -252,9 +252,48 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 		physicalPlan.PlanToStreamColMap = []int{}
 
 		sql.FinalizePlan(ctx, planCtx, physicalPlan)
+		return physicalPlan, planCtx, nil
+	}
 
-		metadataCallbackWriter := sql.NewMetadataOnlyMetadataCallbackWriter()
+	metadataCallbackWriter := sql.NewMetadataOnlyMetadataCallbackWriter()
 
+	physicalPlan, planCtx, err := makePlan(ctx, distSQLPlanner)
+	if err != nil {
+		return err
+	}
+
+	if err := t.job.NoTxn().Update(ctx,
+		func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+			progress := md.Progress
+			rowLevelTTL := progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
+			rowLevelTTL.JobTotalSpanCount = int64(jobSpanCount)
+			rowLevelTTL.JobProcessedSpanCount = 0
+			progress.Progress = &jobspb.Progress_FractionCompleted{
+				FractionCompleted: 0,
+			}
+			ju.UpdateProgress(progress)
+			return nil
+		},
+	); err != nil {
+		return err
+	}
+
+	// Get a function to be used in a goroutine to monitor whether a replan is
+	// needed due to changes in node membership. This is important because if
+	// there are idle nodes that become available, it's more efficient to restart
+	// the TTL job to utilize those nodes for parallel work.
+	replanChecker, cancelReplanner := sql.PhysicalPlanChangeChecker(
+		ctx, physicalPlan, makePlan, jobExecCtx,
+		sql.ReplanOnChangedFraction(func() float64 { return replanThreshold.Get(&execCfg.Settings.SV) }),
+		func() time.Duration { return replanFrequency.Get(&execCfg.Settings.SV) },
+	)
+
+	g := ctxgroup.WithContext(ctx)
+	g.GoCtx(func(ctx context.Context) error {
+		defer cancelReplanner()
+		if rowLevelTTL.RowStatsPollInterval != 0 {
+			defer statsCancel(errors.New("cancelling TTL stats query because TTL job completed"))
+		}
 		distSQLReceiver := sql.MakeDistSQLReceiver(
 			ctx,
 			metadataCallbackWriter,
@@ -279,8 +318,11 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 		)
 
 		return metadataCallbackWriter.Err()
-	}()
-	if err != nil {
+	})
+
+	g.GoCtx(replanChecker)
+
+	if err := g.Wait(); err != nil {
 		return err
 	}
 
