@@ -315,8 +315,6 @@ type likeKey struct {
 	escape          rune
 }
 
-var _ tree.RegexpCacheKey = likeKey{}
-
 // LikeEscape converts a like pattern to a regexp pattern.
 func LikeEscape(pattern string) (string, error) {
 	key := likeKey{s: pattern, caseInsensitive: false, escape: '\\'}
@@ -772,8 +770,7 @@ func (k likeKey) patternNoAnchor() (string, error) {
 	return pattern, nil
 }
 
-// Pattern implements the tree.RegexpCacheKey interface.
-//
+// Pattern implements the RegexpCacheKey interface.
 // The strategy for handling custom escape character
 // is to convert all unescaped escape character into '\'.
 // k.escape can either be empty or a single character.
@@ -790,9 +787,7 @@ type similarToKey struct {
 	escape rune
 }
 
-var _ tree.RegexpCacheKey = similarToKey{}
-
-// Pattern implements the tree.RegexpCacheKey interface.
+// Pattern implements the RegexpCacheKey interface.
 func (k similarToKey) Pattern() (string, error) {
 	pattern := similarEscapeCustomChar(k.s, k.escape, k.escape != 0)
 	return anchorPattern(pattern, false), nil
@@ -839,9 +834,7 @@ type regexpKey struct {
 	caseInsensitive bool
 }
 
-var _ tree.RegexpCacheKey = regexpKey{}
-
-// Pattern implements the tree.RegexpCacheKey interface.
+// Pattern implements the RegexpCacheKey interface.
 func (k regexpKey) Pattern() (string, error) {
 	if k.caseInsensitive {
 		return caseInsensitive(k.s), nil

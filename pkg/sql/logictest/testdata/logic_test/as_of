@@ -37,7 +37,7 @@ SELECT pg_sleep(5) -- we need to sleep so that the 4.8s elapses and the SELECT *
 
 # Notices print twice -- once during planning and once during execution.
 # There's no nice way of reducing this to once without some hacks -- so left as is.
-skipif config enterprise-configs
+skipif config 3node-tenant-default-configs
 query T noticetrace,nosort
 SELECT * FROM t AS OF SYSTEM TIME follower_read_timestamp()
 ----
@@ -97,27 +97,27 @@ skipif config 3node-tenant-default-configs
 statement error pq: no value provided for placeholder: \$1
 SELECT * FROM t AS OF SYSTEM TIME $1
 
-skipif config enterprise-configs
+skipif config 3node-tenant-default-configs
 statement error pgcode XXC01 with_min_timestamp can only be used with a CCL distribution
 SELECT with_min_timestamp('2020-01-15 15:16:17')
 
-skipif config enterprise-configs
+skipif config 3node-tenant-default-configs
 statement error pgcode XXC01 with_min_timestamp can only be used with a CCL distribution
 SELECT with_min_timestamp(statement_timestamp())
 
-skipif config enterprise-configs
+skipif config 3node-tenant-default-configs
 statement error pgcode XXC01 with_max_staleness can only be used with a CCL distribution
 SELECT with_max_staleness('1s')
 
-skipif config enterprise-configs
+skipif config 3node-tenant-default-configs
 statement error pgcode XXC01 with_min_timestamp can only be used with a CCL distribution
 SELECT * FROM t AS OF SYSTEM TIME with_min_timestamp('2020-01-15 15:16:17')
 
-skipif config enterprise-configs
+skipif config 3node-tenant-default-configs
 statement error pgcode XXC01 with_min_timestamp can only be used with a CCL distribution
 SELECT * FROM t AS OF SYSTEM TIME with_min_timestamp(statement_timestamp())
 
-skipif config enterprise-configs
+skipif config 3node-tenant-default-configs
 statement error pgcode XXC01 with_max_staleness can only be used with a CCL distribution
 SELECT * FROM t AS OF SYSTEM TIME with_max_staleness('1s'::interval)
 
@@ -133,10 +133,6 @@ SET TRANSACTION AS OF system time '-1s'
 statement ok
 ROLLBACK
 
-skipif config local-mixed-24.3 local-mixed-25.1
-statement ok
-SET kv_transaction_buffered_writes_enabled = false;
-
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE
 
@@ -148,27 +144,6 @@ SET TRANSACTION AS OF system time '-1s'
 
 statement ok
 ROLLBACK
-
-skipif config local-mixed-24.3 local-mixed-25.1
-statement ok
-SET kv_transaction_buffered_writes_enabled = true;
-
-statement ok
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE
-
-statement ok
-INSERT INTO t VALUES(1)
-
-skipif config local-mixed-24.3 local-mixed-25.1
-statement error cannot set fixed timestamp, .* already performed reads
-SET TRANSACTION AS OF system time '-1s'
-
-statement ok
-ROLLBACK
-
-skipif config local-mixed-24.3 local-mixed-25.1
-statement ok
-RESET kv_transaction_buffered_writes_enabled;
 
 # Verify that an expression that requires normalization does not result in an
 # internal error.
