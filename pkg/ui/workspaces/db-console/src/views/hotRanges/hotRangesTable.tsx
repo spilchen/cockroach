@@ -16,7 +16,7 @@ import {
 import { Tooltip } from "antd";
 import classNames from "classnames/bind";
 import round from "lodash/round";
-import React from "react";
+import React, { useState } from "react";
 import { connect } from "react-redux";
 import { Link } from "react-router-dom";
 
@@ -52,7 +52,11 @@ const HotRangesTable = ({
   sortSetting,
   onSortChange,
 }: HotRangesTableProps) => {
-  const [pagination, updatePagination] = util.usePagination(1, PAGE_SIZE);
+  const [pagination, setPagination] = useState({
+    pageSize: PAGE_SIZE,
+    current: 1,
+  });
+
   const columns: ColumnDescriptor<cockroach.server.serverpb.HotRangesResponseV2.IHotRange>[] =
     [
       {
@@ -241,7 +245,7 @@ const HotRangesTable = ({
           </Tooltip>
         ),
         cell: val => val.tables.join(", "),
-        sort: val => val.tables.join(", "),
+        sort: val => val.table_name,
       },
       {
         name: "index",
@@ -308,11 +312,15 @@ const HotRangesTable = ({
         }
       />
       <Pagination
-        pageSize={pagination.pageSize}
+        pageSize={PAGE_SIZE}
         current={pagination.current}
         total={hotRangesList.length}
-        onChange={updatePagination}
-        onShowSizeChange={updatePagination}
+        onChange={(page: number, pageSize?: number) =>
+          setPagination({
+            pageSize,
+            current: page,
+          })
+        }
       />
     </div>
   );

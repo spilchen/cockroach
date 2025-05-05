@@ -30,7 +30,7 @@ func registerChangeReplicasMixedVersion(r registry.Registry) {
 		Owner:            registry.OwnerKV,
 		Cluster:          r.MakeClusterSpec(4),
 		CompatibleClouds: registry.AllExceptAWS,
-		Suites:           registry.Suites(registry.MixedVersion, registry.Nightly),
+		Suites:           registry.Suites(registry.Nightly),
 		Randomized:       true,
 		Run:              runChangeReplicasMixedVersion,
 		Timeout:          60 * time.Minute,
@@ -296,9 +296,6 @@ func runChangeReplicasMixedVersion(ctx context.Context, t test.Test, c cluster.C
 // mixedversion test is running on a multitenant deployment, and only
 // if required by the active version.
 func enableTenantSplitScatter(l *logger.Logger, r *rand.Rand, h *mixedversion.Helper) error {
-	// Note that although TenantsAndSystemAlignedSettingsVersion generally refers to
-	// shared process deployments, the defaults for SPLIT and SCATTER were also changed
-	// for separate process in the same version.
 	if h.Context().FromVersion.AtLeast(mixedversion.TenantsAndSystemAlignedSettingsVersion) {
 		return nil
 	}
@@ -342,27 +339,20 @@ func setTenantSetting(
 		return errors.Wrapf(err, "failed to set %s", name)
 	}
 
-	// Wait for the setting to be visible to all nodes in the tenant.
-	for _, n := range h.Tenant.Descriptor.Nodes {
-		db := h.Tenant.Connect(n)
-		if err := testutils.SucceedsSoonError(func() error {
-			var currentValue bool
-			if err := db.QueryRow(fmt.Sprintf("SHOW CLUSTER SETTING %s", name)).Scan(&currentValue); err != nil {
-				return errors.Wrapf(err, "failed to retrieve setting %s", name)
-			}
+	return testutils.SucceedsSoonError(func() error {
+		var currentValue bool
+		if err := h.QueryRow(r, fmt.Sprintf("SHOW CLUSTER SETTING %s", name)).Scan(&currentValue); err != nil {
+			return errors.Wrapf(err, "failed to retrieve setting %s", name)
+		}
 
-			if currentValue != value {
-				err := fmt.Errorf(
-					"waiting for setting %s: current (%t) != expected (%t)", name, currentValue, value,
-				)
-				l.Printf("%v", err)
-				return err
-			}
-
-			return nil
-		}); err != nil {
+		if currentValue != value {
+			err := fmt.Errorf(
+				"waiting for setting %s: current (%t) != expected (%t)", name, currentValue, value,
+			)
+			l.Printf("%v", err)
 			return err
 		}
-	}
-	return nil
+
+		return nil
+	})
 }

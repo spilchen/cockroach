@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/raft"
 	"github.com/cockroachdb/cockroach/pkg/raft/raftpb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
-	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/testutils/datapathutils"
 	"github.com/cockroachdb/cockroach/pkg/util/admission/admissionpb"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
@@ -87,7 +86,7 @@ func (rn *testRaftNode) SendPingRaftMuLocked(to roachpb.ReplicaID) bool {
 }
 
 func (rn *testRaftNode) SendMsgAppRaftMuLocked(
-	_ roachpb.ReplicaID, _ raft.LeadSlice,
+	_ roachpb.ReplicaID, _ raft.LogSlice,
 ) (raftpb.Message, bool) {
 	panic("unimplemented")
 }
@@ -139,9 +138,8 @@ type testRangeControllerFactory struct {
 func (f *testRangeControllerFactory) New(
 	ctx context.Context, state rangeControllerInitState,
 ) rac2.RangeController {
-	fmt.Fprintf(f.b,
-		" RangeControllerFactory.New(replicaSet=%s, leaseholder=%s, nextRaftIndex=%d, forceFlushIndex=%d)\n",
-		state.replicaSet, state.leaseholder, state.nextRaftIndex, state.forceFlushIndex)
+	fmt.Fprintf(f.b, " RangeControllerFactory.New(replicaSet=%s, leaseholder=%s, nextRaftIndex=%d)\n",
+		state.replicaSet, state.leaseholder, state.nextRaftIndex)
 	rc := &testRangeController{b: f.b, waited: true}
 	f.rcs = append(f.rcs, rc)
 	return rc
@@ -229,10 +227,6 @@ func (c *testRangeController) SetLeaseholderRaftMuLocked(
 	fmt.Fprintf(c.b, " RangeController.SetLeaseholderRaftMuLocked(%s)\n", replica)
 }
 
-func (c *testRangeController) ForceFlushIndexChangedLocked(ctx context.Context, index uint64) {
-	fmt.Fprintf(c.b, " RangeController.ForceFlushIndexChangedLocked(%d)\n", index)
-}
-
 func (c *testRangeController) CloseRaftMuLocked(ctx context.Context) {
 	fmt.Fprintf(c.b, " RangeController.CloseRaftMuLocked\n")
 }
@@ -244,11 +238,6 @@ func (c *testRangeController) InspectRaftMuLocked(ctx context.Context) kvflowins
 
 func (c *testRangeController) SendStreamStats(stats *rac2.RangeSendStreamStats) {
 	fmt.Fprintf(c.b, " RangeController.SendStreamStats\n")
-}
-
-func (c *testRangeController) StatusRaftMuLocked() serverpb.RACStatus {
-	fmt.Fprintf(c.b, " RangeController.StatusRaftMuLocked\n")
-	return serverpb.RACStatus{}
 }
 
 func makeTestMutexAsserter() rac2.ReplicaMutexAsserter {

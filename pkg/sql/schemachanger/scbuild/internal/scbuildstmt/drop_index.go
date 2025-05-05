@@ -36,8 +36,6 @@ import (
 // to search all tables in current db and in schemas in the search path till
 // we first find a table with an index of name `idx`).
 func DropIndex(b BuildCtx, n *tree.DropIndex) {
-	failIfSafeUpdates(b, n)
-
 	if n.Concurrently {
 		b.EvalCtx().ClientNoticeSender.BufferClientNotice(b,
 			pgnotice.Newf("CONCURRENTLY is not required as all indexes are dropped concurrently"))
@@ -90,12 +88,15 @@ func maybeDropIndex(
 				"use DROP CONSTRAINT ... PRIMARY KEY followed by ADD CONSTRAINT ... PRIMARY KEY in a transaction",
 		))
 	}
+	// TODO (Xiang): Check if requires CCL binary for eventual zone config removal.
 	_, _, sie := scpb.FindSecondaryIndex(toBeDroppedIndexElms)
 	if sie == nil {
 		panic(errors.AssertionFailedf("programming error: cannot find secondary index element."))
 	}
-	panicIfRegionChangeUnderwayOnRBRTable(b, "DROP INDEX", sie.TableID)
-	checkTableSchemaChangePrerequisites(b, b.QueryByID(sie.TableID), n)
+	// We don't support handling zone config related properties for tables, so
+	// throw an unsupported error.
+	fallBackIfSubZoneConfigExists(b, nil, sie.TableID)
+	panicIfSchemaChangeIsDisallowed(b.QueryByID(sie.TableID), n)
 	// Cannot drop the index if not CASCADE and a unique constraint depends on it.
 	if n.DropBehavior != tree.DropCascade && sie.IsUnique && !sie.IsCreatedExplicitly {
 		panic(errors.WithHint(
@@ -104,7 +105,7 @@ func maybeDropIndex(
 			"use CASCADE if you really want to drop it.",
 		))
 	}
-	dropSecondaryIndex(b, indexName, n.DropBehavior, sie)
+	dropSecondaryIndex(b, indexName, n.DropBehavior, sie, n)
 	return sie
 }
 
@@ -115,6 +116,7 @@ func dropSecondaryIndex(
 	indexName *tree.TableIndexName,
 	dropBehavior tree.DropBehavior,
 	sie *scpb.SecondaryIndex,
+	stmt tree.Statement,
 ) {
 	{
 		next := b.WithNewSourceElementID()
@@ -141,7 +143,9 @@ func dropSecondaryIndex(
 
 		// If shard index, also drop the shard column and all check constraints that
 		// uses this shard column if no other index uses the shard column.
-		maybeDropAdditionallyForShardedIndex(next, sie, indexName.Index.String(), dropBehavior)
+		maybeDropAdditionallyForShardedIndex(
+			next, sie, indexName.Index.String(), stmt, dropBehavior,
+		)
 
 		// If expression index, also drop the expression column if no other index is
 		// using the expression column.
@@ -208,7 +212,7 @@ func maybeDropDependentFunctions(
 			if forwardRef.IndexID != toBeDroppedIndex.IndexID {
 				continue
 			}
-			// This view depends on the to-be-dropped index;
+			// This function depends on the to-be-dropped index.
 			if dropBehavior != tree.DropCascade {
 				// Get view name for the error message
 				_, _, fnName := scpb.FindFunctionName(b.QueryByID(e.FunctionID))
@@ -292,6 +296,7 @@ func maybeDropAdditionallyForShardedIndex(
 	b BuildCtx,
 	toBeDroppedIndex *scpb.SecondaryIndex,
 	toBeDroppedIndexName string,
+	stmt tree.Statement,
 	dropBehavior tree.DropBehavior,
 ) {
 	if toBeDroppedIndex.Sharding == nil || !toBeDroppedIndex.Sharding.IsSharded {
@@ -349,6 +354,11 @@ func maybeDropAdditionallyForShardedIndex(
 			b.Drop(e)
 		}
 	})
+	tbl := b.QueryByID(toBeDroppedIndex.TableID).FilterTable().MustGetOneElement()
+	ns := b.QueryByID(toBeDroppedIndex.TableID).FilterNamespace().MustGetOneElement()
+	tn := tree.MakeTableNameFromPrefix(b.NamePrefix(tbl), tree.Name(ns.Name))
+	shardCol := shardColElms.FilterColumn().MustGetOneElement()
+	dropColumn(b, &tn, tbl, stmt, stmt, shardCol, shardColElms, dropBehavior)
 }
 
 // dropAdditionallyForExpressionIndex attempts to drop the additional

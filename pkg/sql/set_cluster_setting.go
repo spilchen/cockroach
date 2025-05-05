@@ -53,7 +53,6 @@ import (
 
 // setClusterSettingNode represents a SET CLUSTER SETTING statement.
 type setClusterSettingNode struct {
-	zeroInputPlanNode
 	name    settings.SettingName
 	st      *cluster.Settings
 	setting settings.NonMaskedSetting
@@ -225,7 +224,7 @@ func (p *planner) SetClusterSetting(
 	}
 
 	if st.OverridesInformer != nil && st.OverridesInformer.IsOverridden(setting.InternalKey()) {
-		return nil, errors.Errorf("cluster setting '%s' is currently overridden by the operator", name)
+		return nil, errors.Wrapf(cluster.SettingOverrideErr, "cluster setting '%s' cannot be set", name)
 	}
 
 	value, err := p.getAndValidateTypedClusterSetting(ctx, name, n.Value, setting)
@@ -281,7 +280,7 @@ func (p *planner) getAndValidateTypedClusterSetting(
 				requiredType = types.Float
 			case settings.AnyEnumSetting:
 				// EnumSettings can be set with either strings or integers.
-				requiredType = types.AnyElement
+				requiredType = types.Any
 			case *settings.DurationSetting:
 				requiredType = types.Interval
 			case *settings.DurationSettingWithExplicitUnit:

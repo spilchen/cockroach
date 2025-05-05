@@ -38,7 +38,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/interval"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
-	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timetz"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
@@ -339,7 +338,7 @@ func (v *Value) InitChecksum(key []byte) {
 	}
 	// Should be uninitialized.
 	if v.checksum() != checksumUninitialized {
-		panic(errors.Errorf("initialized checksum = %x", v.checksum()))
+		panic(fmt.Sprintf("initialized checksum = %x", v.checksum()))
 	}
 	v.setChecksum(v.computeChecksum(key))
 }
@@ -515,15 +514,6 @@ func (v *Value) SetBytes(b []byte) {
 	v.ensureRawBytes(headerSize + len(b))
 	copy(v.dataBytes(), b)
 	v.setTag(ValueType_BYTES)
-}
-
-// AllocBytes allocates space for a BYTES value of the given size and clears the
-// checksum. The caller must populate the returned slice with exactly the same
-// number of bytes.
-func (v *Value) AllocBytes(size int) []byte {
-	v.ensureRawBytes(headerSize + size)
-	v.setTag(ValueType_BYTES)
-	return v.RawBytes[headerSize:]
 }
 
 // SetTagAndData copies the bytes and tag field to the receiver and clears the
@@ -954,17 +944,17 @@ func (v Value) PrettyPrint() (ret string) {
 			if i != 0 {
 				buf.WriteRune('/')
 			}
-			_, _, colIDDelta, typ, err := encoding.DecodeValueTag(b)
+			_, _, colIDDiff, typ, err := encoding.DecodeValueTag(b)
 			if err != nil {
 				break
 			}
-			colID += colIDDelta
+			colID += colIDDiff
 			var s string
 			b, s, err = encoding.PrettyPrintValueEncoded(b)
 			if err != nil {
 				break
 			}
-			fmt.Fprintf(&buf, "%d:%d:%s/%s", colIDDelta, colID, typ, s)
+			fmt.Fprintf(&buf, "%d:%d:%s/%s", colIDDiff, colID, typ, s)
 		}
 	case ValueType_INT:
 		var i int64
@@ -1000,18 +990,6 @@ func (v Value) PrettyPrint() (ret string) {
 		var d duration.Duration
 		d, err = v.GetDuration()
 		buf.WriteString(d.StringNanos())
-	case ValueType_TIMETZ:
-		var tz timetz.TimeTZ
-		tz, err = v.GetTimeTZ()
-		buf.WriteString(tz.String())
-	case ValueType_GEO:
-		var g geopb.SpatialObject
-		g, err = v.GetGeo()
-		buf.WriteString(g.String())
-	case ValueType_BOX2D:
-		var g geopb.BoundingBox
-		g, err = v.GetBox2D()
-		buf.WriteString(g.String())
 	default:
 		err = errors.Errorf("unknown tag: %s", t)
 	}
@@ -1414,10 +1392,6 @@ func (t *Transaction) Update(o *Transaction) {
 		switch t.Status {
 		case PENDING:
 			t.Status = o.Status
-		case PREPARED:
-			if o.Status != PENDING {
-				t.Status = o.Status
-			}
 		case STAGING:
 			if o.Status != PENDING {
 				t.Status = o.Status
@@ -1428,8 +1402,6 @@ func (t *Transaction) Update(o *Transaction) {
 			}
 		case COMMITTED:
 			// Nothing to do.
-		default:
-			log.Fatalf(ctx, "unexpected txn status: %s", t.Status)
 		}
 
 		if t.ReadTimestamp == o.ReadTimestamp {
@@ -1470,8 +1442,8 @@ func (t *Transaction) Update(o *Transaction) {
 			// have incremented the txn's epoch without realizing that it was
 			// aborted.
 			t.Status = ABORTED
-		case PREPARED, COMMITTED:
-			log.Warningf(ctx, "updating txn %s with %s txn at earlier epoch %s", t.String(), o.Status, o.String())
+		case COMMITTED:
+			log.Warningf(ctx, "updating txn %s with COMMITTED txn at earlier epoch %s", t.String(), o.String())
 		}
 	}
 
@@ -1554,29 +1526,6 @@ func (t Transaction) SafeFormat(w redact.SafePrinter, _ rune) {
 	}
 	w.Printf("meta={%s} lock=%t stat=%s rts=%s wto=%t gul=%s",
 		t.TxnMeta, t.IsLocking(), t.Status, t.ReadTimestamp, t.WriteTooOld, t.GlobalUncertaintyLimit)
-
-	// Print observed timestamps (limited to 5 for readability).
-	if obsCount := len(t.ObservedTimestamps); obsCount > 0 {
-		w.Printf(" obs={")
-		limit := obsCount
-		if limit > 5 {
-			limit = 5
-		}
-
-		for i := 0; i < limit; i++ {
-			if i > 0 {
-				w.Printf(" ")
-			}
-			obs := t.ObservedTimestamps[i]
-			w.Printf("n%d@%s", obs.NodeID, obs.Timestamp)
-		}
-
-		if obsCount > 5 {
-			w.Printf(", ...")
-		}
-		w.Printf("}")
-	}
-
 	if ni := len(t.LockSpans); t.Status != PENDING && ni > 0 {
 		w.Printf(" int=%d", ni)
 	}
@@ -1628,9 +1577,48 @@ func (t *Transaction) GetObservedTimestamp(nodeID NodeID) (hlc.ClockTimestamp, b
 // allow interior mutations, the existing list is copied instead of being
 // mutated in place.
 //
-// See enginepb.TxnSeqListAppend for more details.
+// The following invariants are assumed to hold and are preserved:
+// - the list contains no overlapping ranges
+// - the list contains no contiguous ranges
+// - the list is sorted, with larger seqnums at the end
+//
+// Additionally, the caller must ensure:
+//
+//  1. if the new range overlaps with some range in the list, then it
+//     also overlaps with every subsequent range in the list.
+//
+//  2. the new range's "end" seqnum is larger or equal to the "end"
+//     seqnum of the last element in the list.
+//
+// For example:
+//
+//	current list [3 5] [10 20] [22 24]
+//	new item:    [8 26]
+//	final list:  [3 5] [8 26]
+//
+//	current list [3 5] [10 20] [22 24]
+//	new item:    [28 32]
+//	final list:  [3 5] [10 20] [22 24] [28 32]
+//
+// This corresponds to savepoints semantics:
+//
+//   - Property 1 says that a rollback to an earlier savepoint
+//     rolls back over all writes following that savepoint.
+//   - Property 2 comes from that the new range's 'end' seqnum is the
+//     current write seqnum and thus larger than or equal to every
+//     previously seen value.
 func (t *Transaction) AddIgnoredSeqNumRange(newRange enginepb.IgnoredSeqNumRange) {
-	t.IgnoredSeqNums = enginepb.TxnSeqListAppend(t.IgnoredSeqNums, newRange)
+	// Truncate the list at the last element not included in the new range.
+
+	list := t.IgnoredSeqNums
+	i := sort.Search(len(list), func(i int) bool {
+		return list[i].End >= newRange.Start
+	})
+
+	cpy := make([]enginepb.IgnoredSeqNumRange, i+1)
+	copy(cpy[:i], list[:i])
+	cpy[i] = newRange
+	t.IgnoredSeqNums = cpy
 }
 
 // AsRecord returns a TransactionRecord object containing only the subset of
@@ -1997,25 +1985,9 @@ const (
 	LeaseLeader
 )
 
-// TestingAllLeaseTypes returns a list of all lease types to test against.
-func TestingAllLeaseTypes() []LeaseType {
-	if syncutil.DeadlockEnabled {
-		// Skip expiration-based leases under deadlock since it could overload the
-		// testing cluster.
-		return []LeaseType{LeaseEpoch, LeaseLeader}
-	}
+// LeaseTypes returns a list of all lease types.
+func LeaseTypes() []LeaseType {
 	return []LeaseType{LeaseExpiration, LeaseEpoch, LeaseLeader}
-}
-
-// EpochAndLeaderLeaseType returns a list of {epcoh, leader} lease types.
-func EpochAndLeaderLeaseType() []LeaseType {
-	return []LeaseType{LeaseEpoch, LeaseLeader}
-}
-
-// ExpirationAndLeaderLeaseType returns a list of {expiration, leader} lease
-// types.
-func ExpirationAndLeaderLeaseType() []LeaseType {
-	return []LeaseType{LeaseExpiration, LeaseLeader}
 }
 
 // Type returns the lease type.
@@ -2030,40 +2002,6 @@ func (l Lease) Type() LeaseType {
 		return LeaseLeader
 	}
 	return LeaseExpiration
-}
-
-// SupportsQuiescence returns whether the lease supports quiescence or not.
-func (l Lease) SupportsQuiescence() bool {
-	switch l.Type() {
-	case LeaseExpiration, LeaseLeader:
-		// Expiration based leases do not support quiescence because they'll likely
-		// be renewed soon, so there's not much point to it.
-		//
-		// Leader leases use the similar but separate concept of sleep to indicate
-		// that followers should stop ticking.
-		return false
-	case LeaseEpoch:
-		return true
-	default:
-		panic("unexpected lease type")
-	}
-}
-
-// SupportsSleep returns whether the lease supports replica sleep or not.
-func (l Lease) SupportsSleep() bool {
-	switch l.Type() {
-	case LeaseExpiration, LeaseEpoch:
-		// Expiration based leases do not support sleep because they'll likely be
-		// renewed soon, so there's not much point to it.
-		//
-		// Epoch leases use the similar but separate concept of quiescence to
-		// indicate that replicas should stop ticking.
-		return false
-	case LeaseLeader:
-		return true
-	default:
-		panic("unexpected lease type")
-	}
 }
 
 // Speculative returns true if this lease instance doesn't correspond to a

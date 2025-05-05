@@ -76,8 +76,8 @@ type Transport struct {
 	// handlers stores the MessageHandler for each store on the node.
 	handlers syncutil.Map[roachpb.StoreID, MessageHandler]
 
-	// TransportKnobs includes all knobs for testing.
-	knobs *TransportKnobs
+	// TransportTestingKnobs includes all knobs for testing.
+	knobs *TransportTestingKnobs
 }
 
 var _ MessageSender = (*Transport)(nil)
@@ -89,10 +89,10 @@ func NewTransport(
 	clock *hlc.Clock,
 	dialer *nodedialer.Dialer,
 	grpcServer *grpc.Server,
-	knobs *TransportKnobs,
+	knobs *TransportTestingKnobs,
 ) *Transport {
 	if knobs == nil {
-		knobs = &TransportKnobs{}
+		knobs = &TransportTestingKnobs{}
 	}
 	t := &Transport{
 		AmbientContext: ambient,
@@ -345,6 +345,7 @@ func (t *Transport) processQueue(q *sendQueue, stream slpb.StoreLiveness_StreamC
 			return nil
 
 		case <-idleTimer.C:
+			idleTimer.Read = true
 			t.metrics.SendQueueIdle.Inc(1)
 			return nil
 
@@ -355,14 +356,14 @@ func (t *Transport) processQueue(q *sendQueue, stream slpb.StoreLiveness_StreamC
 
 			// Pull off as many queued requests as possible within batchDuration.
 			batchTimer.Reset(batchDuration)
-			for done := false; !done; {
+			for !batchTimer.Read {
 				select {
 				case msg = <-q.messages:
 					batch.Messages = append(batch.Messages, msg)
 					t.metrics.SendQueueSize.Dec(1)
 					t.metrics.SendQueueBytes.Dec(int64(msg.Size()))
 				case <-batchTimer.C:
-					done = true
+					batchTimer.Read = true
 				}
 			}
 
@@ -382,4 +383,12 @@ func (t *Transport) processQueue(q *sendQueue, stream slpb.StoreLiveness_StreamC
 			batch.Now = hlc.ClockTimestamp{}
 		}
 	}
+}
+
+// TransportTestingKnobs includes all knobs that facilitate testing Transport.
+type TransportTestingKnobs struct {
+	// OverrideIdleTimeout overrides the idleTimeout, which controls how
+	// long until an instance of processQueue winds down after not observing any
+	// messages.
+	OverrideIdleTimeout func() time.Duration
 }

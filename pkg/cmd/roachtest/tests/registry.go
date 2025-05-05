@@ -5,10 +5,7 @@
 
 package tests
 
-import (
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/tests/perturbation"
-)
+import "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 
 // RegisterTests registers all tests to the Registry. This powers `roachtest run`.
 func RegisterTests(r registry.Registry) {
@@ -27,7 +24,6 @@ func RegisterTests(r registry.Registry) {
 	registerBackupRestoreRoundTrip(r)
 	registerBackupFixtures(r)
 	registerBackupS3Clones(r)
-	registerBlobFixtureGC(r)
 	registerCDC(r)
 	registerCDCBench(r)
 	registerCDCFiltering(r)
@@ -66,7 +62,6 @@ func RegisterTests(r registry.Registry) {
 	registerHibernate(r, hibernateSpatialOpts)
 	registerHotSpotSplits(r)
 	registerHTTPRestart(r)
-	registerFISmokeTest(r)
 	registerImportCancellation(r)
 	registerImportDecommissioned(r)
 	registerImportMixedVersions(r)
@@ -78,8 +73,6 @@ func RegisterTests(r registry.Registry) {
 	registerJasyncSQL(r)
 	registerJepsen(r)
 	registerJobs(r)
-	registerJobsMixedVersions(r)
-	registerKerberosConnectionStressTest(r)
 	registerKV(r)
 	registerKVBench(r)
 	registerKVContention(r)
@@ -89,19 +82,15 @@ func RegisterTests(r registry.Registry) {
 	registerKVScalability(r)
 	registerKVSplits(r)
 	registerKVRestartImpact(r)
-	registerKVStopAndCopy(r)
 	registerKnex(r)
 	registerLOQRecovery(r)
 	registerLargeRange(r)
-	registerLDAPConnectionLatencyTest(r)
-	registerLDAPConnectionScaleTest(r)
 	registerLeasePreferences(r)
 	registerLedger(r)
 	registerLibPQ(r)
 	registerLiquibase(r)
 	registerLoadSplits(r)
 	registerLogicalDataReplicationTests(r)
-	registerLDRMixedVersions(r)
 	registerMVCCGC(r)
 	registerMultiStoreRemove(r)
 	registerMultiTenantDistSQL(r)
@@ -148,7 +137,6 @@ func RegisterTests(r registry.Registry) {
 	registerSchemaChangeMixedVersions(r)
 	registerDeclSchemaChangeCompatMixedVersions(r)
 	registerSchemaChangeRandomLoad(r)
-	registerLargeSchemaBackupRestores(r)
 	registerLargeSchemaBenchmarks(r)
 	registerScrubAllChecksTPCC(r)
 	registerScrubIndexOnlyTPCC(r)
@@ -171,6 +159,4 @@ func RegisterTests(r registry.Registry) {
 	registerMultiRegionMixedVersion(r)
 	registerMultiRegionSystemDatabase(r)
 	registerSqlStatsMixedVersion(r)
-	registerDbConsole(r)
-	perturbation.RegisterTests(r)
 }

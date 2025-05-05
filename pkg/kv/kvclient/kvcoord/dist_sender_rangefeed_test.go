@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
-	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/kvcoord"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
@@ -25,7 +24,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/server"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/desctestutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/testcluster"
 	"github.com/cockroachdb/cockroach/pkg/util"
@@ -135,7 +133,7 @@ func rangeFeed(
 
 	g := ctxgroup.WithContext(ctx)
 	g.GoCtx(func(ctx context.Context) (err error) {
-		return ds.RangeFeed(ctx, []kvcoord.SpanTimePair{{Span: sp, StartAfter: startFrom}}, events, opts...)
+		return ds.RangeFeed(ctx, []roachpb.Span{sp}, startFrom, events, opts...)
 	})
 	g.GoCtx(func(ctx context.Context) error {
 		for {
@@ -311,8 +309,6 @@ func TestMuxRangeFeedDoesNotStallOnError(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	skip.UnderDuress(t, "slow test")
-
 	ctx := context.Background()
 
 	var (
@@ -349,10 +345,7 @@ func TestMuxRangeFeedDoesNotStallOnError(t *testing.T) {
 					StreamClientInterceptor: streamInterceptor,
 				},
 			},
-			JobsTestingKnobs: jobs.NewTestingKnobsWithShortIntervals(),
 		},
-		// Scan like a bat out of hell to ensure down-replication happens quickly.
-		ScanInterval: 50 * time.Millisecond,
 	}
 
 	tc := testcluster.StartTestCluster(t, numServers, base.TestClusterArgs{ServerArgs: serverArgs})
@@ -369,8 +362,6 @@ func TestMuxRangeFeedDoesNotStallOnError(t *testing.T) {
 	sqlDB.ExecMultiple(t,
 		`SET CLUSTER SETTING kv.rangefeed.enabled = true`,
 		`SET CLUSTER SETTING kv.closed_timestamp.target_duration='100ms'`,
-		`SET CLUSTER SETTING kv.closed_timestamp.side_transport_interval = '50ms'`,
-		`SET CLUSTER SETTING kv.rangefeed.closed_timestamp_refresh_interval = '50ms'`,
 		`ALTER DATABASE defaultdb CONFIGURE ZONE USING num_replicas = 1`,
 		`CREATE TABLE foo (key INT PRIMARY KEY)`,
 	)
@@ -382,7 +373,7 @@ func TestMuxRangeFeedDoesNotStallOnError(t *testing.T) {
 		sqlDB.QueryRow(t,
 			"SELECT sum(cardinality(replicas)) FROM [SHOW RANGES FROM TABLE foo WITH DETAILS]").
 			Scan(&replicaCount)
-		if replicaCount != 1 {
+		if replicaCount < 3 {
 			return errors.Newf("too many replicas: %d", replicaCount)
 		}
 		return nil
@@ -391,16 +382,16 @@ func TestMuxRangeFeedDoesNotStallOnError(t *testing.T) {
 	sqlDB.ExecMultiple(t,
 		`INSERT INTO foo (key) SELECT * FROM generate_series(1, 100)`,
 		`ALTER TABLE foo SPLIT AT (SELECT * FROM generate_series(10, 90, 10))`,
+		`ALTER TABLE foo SCATTER`,
 	)
 
 	// We scatter and wait until we have at least one range without replicas on n1.
 	testutils.SucceedsSoon(t, func() error {
-		sqlDB.Exec(t, `ALTER TABLE foo SCATTER`)
 		var nonLocalCount int
 		sqlDB.QueryRow(t,
 			"SELECT count(1) FROM [SHOW RANGES FROM TABLE foo WITH DETAILS] WHERE array_position(replicas, 1) IS NULL").
 			Scan(&nonLocalCount)
-		if nonLocalCount == 0 {
+		if nonLocalCount <= 1 {
 			return errors.New("at least one non-local range required for test")
 		}
 		return nil

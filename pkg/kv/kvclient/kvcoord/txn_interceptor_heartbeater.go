@@ -285,9 +285,6 @@ func (h *txnHeartbeater) setWrapped(wrapped lockedSender) {
 // populateLeafInputState is part of the txnInterceptor interface.
 func (*txnHeartbeater) populateLeafInputState(*roachpb.LeafTxnInputState) {}
 
-// initializeLeaf is part of the txnInterceptor interface.
-func (*txnHeartbeater) initializeLeaf(tis *roachpb.LeafTxnInputState) {}
-
 // populateLeafFinalState is part of the txnInterceptor interface.
 func (*txnHeartbeater) populateLeafFinalState(*roachpb.LeafTxnFinalState) {}
 
@@ -442,22 +439,13 @@ func (h *txnHeartbeater) heartbeat(ctx context.Context) bool {
 // Returns true if heartbeating should continue, false if the transaction is no
 // longer Pending and so there's no point in heartbeating further.
 func (h *txnHeartbeater) heartbeatLocked(ctx context.Context) bool {
-	switch h.mu.txn.Status {
-	case roachpb.PENDING:
-		// Continue heartbeating.
-	case roachpb.PREPARED:
-		// If the transaction is prepared, there's no point in heartbeating. The
-		// transaction will remain active without heartbeats until it is committed
-		// or rolled back.
-		return false
-	case roachpb.ABORTED:
+	if h.mu.txn.Status != roachpb.PENDING {
+		if h.mu.txn.Status == roachpb.COMMITTED {
+			log.Fatalf(ctx, "txn committed but heartbeat loop hasn't been signaled to stop: %s", h.mu.txn)
+		}
 		// If the transaction is aborted, there's no point in heartbeating. The
 		// client needs to send a rollback.
 		return false
-	case roachpb.COMMITTED:
-		log.Fatalf(ctx, "txn committed but heartbeat loop hasn't been signaled to stop: %s", h.mu.txn)
-	default:
-		log.Fatalf(ctx, "unexpected txn status in heartbeat loop: %s", h.mu.txn)
 	}
 
 	// Clone the txn in order to put it in the heartbeat request.

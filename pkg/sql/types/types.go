@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"runtime/debug"
 	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/geo/geopb"
@@ -17,7 +18,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
-	"github.com/cockroachdb/cockroach/pkg/util/debugutil"
 	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/errors"
@@ -86,7 +86,6 @@ import (
 // | TIMETZ            | TIMETZ         | T_timetz      | 0         | 0     |
 // | JSON              | JSONB          | T_json        | 0         | 0     |
 // | JSONB             | JSONB          | T_jsonb       | 0         | 0     |
-// | JSONPATH          | JSONPATH       | T_jsonpath    | 0         | 0     |
 // |                   |                |               |           |       |
 // | BYTES             | BYTES          | T_bytea       | 0         | 0     |
 // |                   |                |               |           |       |
@@ -542,15 +541,6 @@ var (
 		},
 	}
 
-	// Jsonpath is the jsonpath type which represents a jsonpath query.
-	Jsonpath = &T{
-		InternalType: InternalType{
-			Family: JsonpathFamily,
-			Oid:    oidext.T_jsonpath,
-			Locale: &emptyLocale,
-		},
-	}
-
 	// RefCursor is the type for a variable representing the name of a cursor in a
 	// PLpgSQL routine. The underlying value is a string.
 	RefCursor = &T{
@@ -590,25 +580,21 @@ var (
 		TimeTZ,
 		Jsonb,
 		VarBit,
-		// TODO(#22513): consider including jsonpath here.
 	}
 
-	Any = &T{InternalType: InternalType{
-		Family: AnyFamily, Oid: oid.T_any, Locale: &emptyLocale}}
-
-	// AnyElement is a special type used only during static analysis as a wildcard type
+	// Any is a special type used only during static analysis as a wildcard type
 	// that matches any other type, including scalar, array, and tuple types.
 	// Execution-time values should never have this type. As an example of its
 	// use, many SQL builtin functions allow an input value to be of any type,
 	// and so use this type in their static definitions.
-	AnyElement = &T{InternalType: InternalType{
+	Any = &T{InternalType: InternalType{
 		Family: AnyFamily, Oid: oid.T_anyelement, Locale: &emptyLocale}}
 
 	// AnyArray is a special type used only during static analysis as a wildcard
 	// type that matches an array having elements of any (uniform) type (including
 	// nested array types). Execution-time values should never have this type.
 	AnyArray = &T{InternalType: InternalType{
-		Family: ArrayFamily, ArrayContents: AnyElement, Oid: oid.T_anyarray, Locale: &emptyLocale}}
+		Family: ArrayFamily, ArrayContents: Any, Oid: oid.T_anyarray, Locale: &emptyLocale}}
 
 	// AnyEnum is a special type only used during static analysis as a wildcard
 	// type that matches an possible enum value. Execution-time values should
@@ -620,7 +606,7 @@ var (
 	// type that matches a tuple with any number of fields of any type (including
 	// tuple types). Execution-time values should never have this type.
 	AnyTuple = &T{InternalType: InternalType{
-		Family: TupleFamily, TupleContents: []*T{AnyElement}, Oid: oid.T_record, Locale: &emptyLocale}}
+		Family: TupleFamily, TupleContents: []*T{Any}, Oid: oid.T_record, Locale: &emptyLocale}}
 
 	// AnyTupleArray is a special type used only during static analysis as a wildcard
 	// type that matches an array of tuples with any number of fields of any type (including
@@ -735,13 +721,6 @@ var (
 	// by Postgres in system tables. Int2vectors are 0-indexed, unlike normal arrays.
 	Int2Vector = &T{InternalType: InternalType{
 		Family: ArrayFamily, Oid: oid.T_int2vector, ArrayContents: Int2, Locale: &emptyLocale}}
-
-	// JsonpathArray is the type of an array value having Jsonpath-typed elements.
-	JsonpathArray = &T{
-		InternalType: InternalType{
-			Family: ArrayFamily, ArrayContents: Jsonpath, Oid: oidext.T__jsonpath, Locale: &emptyLocale,
-		},
-	}
 )
 
 // Unexported wrapper types.
@@ -992,21 +971,6 @@ func MakeCollatedString(strType *T, locale string) *T {
 	panic(errors.AssertionFailedf("cannot apply collation to non-string type: %s", strType))
 }
 
-// MakeCollatedType is like MakeCollatedString but also handles NULL and arrays
-// of string types that need to become arrays of collated string types.
-//
-// UNKNOWN  => STRING COLLATE EN
-// []STRING => []STRING COLLATE EN
-func MakeCollatedType(typ *T, locale string) *T {
-	if typ.Family() == ArrayFamily {
-		return MakeArray(MakeCollatedType(typ.ArrayContents(), locale))
-	}
-	if typ.Family() == UnknownFamily {
-		return MakeCollatedType(String, locale)
-	}
-	return MakeCollatedString(typ, locale)
-}
-
 // MakeDecimal constructs a new instance of a DECIMAL type (oid = T_numeric)
 // that has at most "precision" # of decimal digits (0 = unspecified number of
 // digits) and at most "scale" # of decimal digits after the decimal point
@@ -1228,11 +1192,9 @@ func MakeEnum(typeOID, arrayTypeOID oid.Oid) *T {
 // MakeArray constructs a new instance of an ArrayFamily type with the given
 // element type (which may itself be an ArrayFamily type).
 func MakeArray(typ *T) *T {
-	// Do not make an array of type unknown[]. Follow Postgres' behavior and convert
-	// this to type string[]. Likewise, Any does not have an array type, so treat it
-	// as an array of strings.
-	if typ.Family() == UnknownFamily ||
-		(typ.Family() == AnyFamily && typ.Oid() == oid.T_any) {
+	// Do not make an array of type unknown[]. Follow Postgres' behavior and
+	// convert this to type string[].
+	if typ.Family() == UnknownFamily {
 		typ = String
 	}
 	arr := &T{InternalType: InternalType{
@@ -1590,7 +1552,6 @@ var familyNames = map[Family]redact.SafeString{
 	UuidFamily:           "uuid",
 	VoidFamily:           "void",
 	EncodedKeyFamily:     "encodedkey",
-	JsonpathFamily:       "jsonpath",
 }
 
 // Name returns a user-friendly word indicating the family type.
@@ -1614,12 +1575,7 @@ func (f Family) Name() redact.SafeString {
 func (t *T) Name() string {
 	switch fam := t.Family(); fam {
 	case AnyFamily:
-		switch t.Oid() {
-		case oid.T_any:
-			return "any"
-		default:
-			return "anyelement"
-		}
+		return "anyelement"
 
 	case ArrayFamily:
 		switch t.Oid() {
@@ -1846,8 +1802,6 @@ func (t *T) SQLStandardNameWithTypmod(haveTypmod bool, typmod int) string {
 	case JsonFamily:
 		// Only binary JSON is currently supported.
 		return "jsonb"
-	case JsonpathFamily:
-		return "jsonpath"
 	case OidFamily:
 		switch t.Oid() {
 		case oid.T_oid:
@@ -2031,8 +1985,6 @@ func (t *T) SQLString() string {
 	case JsonFamily:
 		// Only binary JSON is currently supported.
 		return "JSONB"
-	case JsonpathFamily:
-		return "JSONPATH"
 	case TimestampFamily, TimestampTZFamily, TimeFamily, TimeTZFamily:
 		if t.InternalType.Precision > 0 || t.InternalType.TimePrecisionIsSet {
 			return fmt.Sprintf("%s(%d)", strings.ToUpper(t.Name()), t.Precision())
@@ -2193,7 +2145,7 @@ func fallbackFormatTypeName(UserDefinedTypeName, bool) string {
 // other attributes of equivalent types, such as width, precision, and oid, can
 // be different.
 //
-// Wildcard types (e.g. AnyElement, AnyArray, AnyTuple, etc) have special equivalence
+// Wildcard types (e.g. Any, AnyArray, AnyTuple, etc) have special equivalence
 // behavior. AnyFamily types match any other type, including other AnyFamily
 // types. And a wildcard collation (empty string) matches any other collation.
 func (t *T) Equivalent(other *T) bool {
@@ -2307,7 +2259,7 @@ func (t *T) Equal(other *T) bool {
 // static analysis, and cannot be used during execution.
 func (t *T) IsWildcardType() bool {
 	for _, wildcard := range []*T{
-		Any, AnyElement, AnyArray, AnyCollatedString, AnyEnum, AnyEnumArray, AnyTuple, AnyTupleArray,
+		Any, AnyArray, AnyCollatedString, AnyEnum, AnyEnumArray, AnyTuple, AnyTupleArray,
 	} {
 		// Note that pointer comparison is insufficient since we might have
 		// deserialized t from disk.
@@ -2322,7 +2274,7 @@ func (t *T) IsWildcardType() bool {
 // return-type of a polymorphic function. Note that this does not include RECORD
 // (AnyTuple) or RECORD[].
 func (t *T) IsPolymorphicType() bool {
-	for _, poly := range []*T{AnyElement, AnyArray, AnyEnum, AnyEnumArray} {
+	for _, poly := range []*T{Any, AnyArray, AnyEnum, AnyEnumArray} {
 		if t.Identical(poly) {
 			return true
 		}
@@ -2891,7 +2843,7 @@ func (t *T) EnumGetIdxOfPhysical(phys []byte) (int, error) {
 		phys,
 		t.TypeMeta.Name.FQName(true /* explicitCatalog */),
 		t.TypeMeta.EnumData.debugString(),
-		debugutil.Stack(),
+		debug.Stack(),
 	)
 	return 0, err
 }

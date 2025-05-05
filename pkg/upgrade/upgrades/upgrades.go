@@ -59,62 +59,87 @@ var upgrades = []upgradebase.Upgrade{
 		bootstrapCluster,
 		upgrade.RestoreActionNotRequired("initialization runs before restore")),
 
-	newFirstUpgrade(clusterversion.V25_1_Start.Version()),
+	newFirstUpgrade(clusterversion.V24_2Start.Version()),
 
 	upgrade.NewTenantUpgrade(
-		"add new jobs tables",
-		clusterversion.V25_1_AddJobsTables.Version(),
+		"add the redacted column to system.statement_diagnostics_requests table",
+		clusterversion.V24_2_StmtDiagRedacted.Version(),
 		upgrade.NoPrecondition,
-		addJobsTables,
-		upgrade.RestoreActionNotRequired("cluster restore does not restore the new field"),
-	),
-
-	upgrade.NewTenantUpgrade(
-		"create prepared_transactions table",
-		clusterversion.V25_1_PreparedTransactionsTable.Version(),
-		upgrade.NoPrecondition,
-		createPreparedTransactionsTable,
+		stmtDiagRedactedMigration,
 		upgrade.RestoreActionNotRequired("cluster restore does not restore this table"),
 	),
+
 	upgrade.NewTenantUpgrade(
-		"add new jobs tables",
-		clusterversion.V25_1_AddJobsColumns.Version(),
+		"create all missing system tables in app tenants",
+		clusterversion.V24_2_TenantSystemTables.Version(),
 		upgrade.NoPrecondition,
-		addJobsColumns,
+		createTenantSystemTables,
+		upgrade.RestoreActionNotRequired("cluster restore does not restore these tables"),
+	),
+
+	upgrade.NewTenantUpgrade(
+		"add new columns to the system.tenant_usage table to store tenant consumption rates",
+		clusterversion.V24_2_TenantRates.Version(),
+		upgrade.NoPrecondition,
+		tenantRatesMigration,
 		upgrade.RestoreActionNotRequired("cluster restore does not restore the new field"),
 	),
+
 	upgrade.NewTenantUpgrade(
-		"backfill new jobs tables",
-		clusterversion.V25_1_JobsBackfill.Version(),
+		"delete version row in system.tenant_settings",
+		clusterversion.V24_2_DeleteTenantSettingsVersion.Version(),
 		upgrade.NoPrecondition,
-		backfillJobsTablesAndColumns,
-		upgrade.RestoreActionNotRequired("cluster restore does not restore jobs tables"),
+		deleteVersionTenantSettings,
+		upgrade.RestoreActionImplemented("bad row skipped when restoring system.tenant_settings"),
 	),
 
-	newFirstUpgrade(clusterversion.V25_2_Start.Version()),
+	newFirstUpgrade(clusterversion.V24_3_Start.Version()),
 
-	upgrade.NewTenantUpgrade(
-		"add new sql activity flush job",
-		clusterversion.V25_2_AddSqlActivityFlushJob.Version(),
-		upgrade.NoPrecondition,
-		addSqlActivityFlushJob,
-		upgrade.RestoreActionNotRequired("cluster restore does not restore this job"),
-	),
-
-	upgrade.NewTenantUpgrade(
-		"set new ui.default_timezone setting to ui.display_timezone value",
-		clusterversion.V25_2_SetUiDefaultTimezoneSetting.Version(),
-		upgrade.NoPrecondition,
-		setUiDefaultTimezone,
-		upgrade.RestoreActionNotRequired("cluster restore does not restore this setting"),
+	upgrade.NewSystemUpgrade(
+		"create a zone config for the timeseries range if one does not exist already",
+		clusterversion.V24_3_AddTimeseriesZoneConfig.Version(),
+		addTimeseriesZoneConfig,
+		upgrade.RestoreActionNotRequired("this zone config isn't necessary for restore"),
 	),
 
 	upgrade.NewTenantUpgrade(
-		"add 'username' column to stmt diagnostics requests table",
-		clusterversion.V25_2_AddUsernameToStmtDiagRequest.Version(),
+		"add new table_metadata table and job to the system tenant",
+		clusterversion.V24_3_TableMetadata.Version(),
 		upgrade.NoPrecondition,
-		stmtDiagAddUsernameMigration,
-		upgrade.RestoreActionNotRequired("cluster restore does not restore the new column"),
+		addTableMetadataTableAndJob,
+		upgrade.RestoreActionNotRequired("cluster restore does not restore this table"),
+	),
+
+	upgrade.NewTenantUpgrade(
+		"add exclude_data_from_backup to certain system tables on tenants",
+		clusterversion.V24_3_TenantExcludeDataFromBackup.Version(),
+		upgrade.NoPrecondition,
+		tenantExcludeDataFromBackup,
+		upgrade.RestoreActionNotRequired("cluster restore does not restore affected tables"),
+	),
+
+	upgrade.NewTenantUpgrade(
+		"add new column to the system.sql_instances table to store whether a node is draining",
+		clusterversion.V24_3_SQLInstancesAddDraining.Version(),
+		upgrade.NoPrecondition,
+		sqlInstancesAddDrainingMigration,
+		upgrade.RestoreActionNotRequired("cluster restore does not restore the new field"),
+	),
+
+	upgrade.NewTenantUpgrade(
+		"check that we are not in violation of the new license policies",
+		clusterversion.V24_3_MaybePreventUpgradeForCoreLicenseDeprecation.Version(),
+		checkForPostUpgradeThrottlePreCond,
+		checkForPostUpgradeThrottleProcessing,
+		upgrade.RestoreActionNotRequired("this check does not persist anything"),
+	),
+
+	upgrade.NewTenantUpgrade(
+		"adds new columns to table_metadata table",
+		clusterversion.V24_3_AddTableMetadataCols.Version(),
+		upgrade.NoPrecondition,
+		addTableMetadataCols,
+		upgrade.RestoreActionNotRequired("cluster restore does not restore this table"),
 	),
 
 	// Note: when starting a new release version, the first upgrade (for

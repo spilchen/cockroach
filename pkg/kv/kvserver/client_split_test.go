@@ -49,6 +49,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/spanconfig/spanconfigtestutils"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/bootstrap"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/systemschema"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats"
 	"github.com/cockroachdb/cockroach/pkg/storage"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
 	"github.com/cockroachdb/cockroach/pkg/storage/fs"
@@ -60,7 +61,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/testutils/testcluster"
 	"github.com/cockroachdb/cockroach/pkg/ts"
 	"github.com/cockroachdb/cockroach/pkg/ts/tspb"
-	"github.com/cockroachdb/cockroach/pkg/upgrade/upgradebase"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/encoding"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -2622,58 +2622,45 @@ func TestLeaderAfterSplit(t *testing.T) {
 	skip.UnderDeadlock(t)
 	skip.UnderRace(t)
 
-	testutils.RunValues(t, "lease-type", roachpb.TestingAllLeaseTypes(), func(t *testing.T, leaseType roachpb.LeaseType) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // time out early
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // time out early
+	defer cancel()
 
-		settings := cluster.MakeTestingClusterSettings()
-		kvserver.OverrideDefaultLeaseType(ctx, &settings.SV, leaseType)
-		raftConfig := base.RaftConfig{
-			RangeLeaseDuration: time.Hour, // don't expire leases
-		}
-		// Suppress timeout-based elections to avoid leadership changes in ways this
-		// test doesn't expect. For leader leases, fortification itself provides us
-		// this guarantee.
-		if leaseType != roachpb.LeaseLeader {
-			raftConfig.RaftElectionTimeoutTicks = 1000000
-		}
-		tc := testcluster.StartTestCluster(t, 3, base.TestClusterArgs{
-			ReplicationMode: base.ReplicationManual,
-			ServerArgs: base.TestServerArgs{
-				Settings:   settings,
-				RaftConfig: raftConfig,
+	tc := testcluster.StartTestCluster(t, 3, base.TestClusterArgs{
+		ReplicationMode: base.ReplicationManual,
+		ServerArgs: base.TestServerArgs{
+			RaftConfig: base.RaftConfig{
+				RangeLeaseDuration:       time.Hour, // don't expire leases
+				RaftElectionTimeoutTicks: 1000000,   // disable elections
 			},
-		})
-		defer tc.Stopper().Stop(ctx)
-
-		store := tc.GetFirstStoreFromServer(t, 0)
-		sender := tc.Servers[0].DistSenderI().(kv.Sender)
-
-		leftKey := roachpb.Key("a")
-		splitKey := roachpb.Key("m")
-		rightKey := roachpb.Key("z")
-
-		repl := store.LookupReplica(roachpb.RKey(leftKey))
-		require.NotNil(t, repl)
-		tc.AddVotersOrFatal(t, repl.Desc().StartKey.AsRawKey(), tc.Targets(1, 2)...)
-
-		// Split the range.
-		_, pErr := kv.SendWrapped(ctx, sender, adminSplitArgs(splitKey))
-		require.NoError(t, pErr.GoError())
-
-		// Make sure both the LHS and RHS can replicate a write request. This will
-		// time out if the RHS can't elect a Raft leader.
-		_, pErr = kv.SendWrapped(ctx, sender, incrementArgs(leftKey, 1))
-		require.NoError(t, pErr.GoError())
-
-		_, pErr = kv.SendWrapped(ctx, sender, incrementArgs(rightKey, 1))
-		require.NoError(t, pErr.GoError())
+		},
 	})
+	defer tc.Stopper().Stop(ctx)
+
+	store := tc.GetFirstStoreFromServer(t, 0)
+	sender := tc.Servers[0].DistSenderI().(kv.Sender)
+
+	leftKey := roachpb.Key("a")
+	splitKey := roachpb.Key("m")
+	rightKey := roachpb.Key("z")
+
+	repl := store.LookupReplica(roachpb.RKey(leftKey))
+	require.NotNil(t, repl)
+	tc.AddVotersOrFatal(t, repl.Desc().StartKey.AsRawKey(), tc.Targets(1, 2)...)
+
+	// Split the range.
+	_, pErr := kv.SendWrapped(ctx, sender, adminSplitArgs(splitKey))
+	require.NoError(t, pErr.GoError())
+
+	// Make sure both the LHS and RHS can replicate a write request. This will
+	// time out if the RHS can't elect a Raft leader.
+	_, pErr = kv.SendWrapped(ctx, sender, incrementArgs(leftKey, 1))
+	require.NoError(t, pErr.GoError())
+
+	_, pErr = kv.SendWrapped(ctx, sender, incrementArgs(rightKey, 1))
+	require.NoError(t, pErr.GoError())
 }
 
 func BenchmarkStoreRangeSplit(b *testing.B) {
-	defer log.Scope(b).Close(b)
-
 	ctx := context.Background()
 	s := serverutils.StartServerOnly(b, base.TestServerArgs{})
 
@@ -2681,23 +2668,20 @@ func BenchmarkStoreRangeSplit(b *testing.B) {
 	store, err := s.GetStores().(*kvserver.Stores).GetStore(s.GetFirstStoreID())
 	require.NoError(b, err)
 
-	_, err = s.ScratchRange()
-	require.NoError(b, err)
-
 	// Perform initial split of ranges.
-	sArgs := adminSplitArgs(scratchKey("b"))
+	sArgs := adminSplitArgs(roachpb.Key("b"))
 	if _, err := kv.SendWrapped(ctx, store.TestSender(), sArgs); err != nil {
 		b.Fatal(err)
 	}
 
 	// Write some values left and right of the split key.
-	aDesc := store.LookupReplica([]byte(scratchKey("a"))).Desc()
-	bDesc := store.LookupReplica([]byte(scratchKey("c"))).Desc()
-	kvserver.WriteRandomDataToRange(b, store, aDesc.RangeID, scratchKey("aaa"))
-	kvserver.WriteRandomDataToRange(b, store, bDesc.RangeID, scratchKey("ccc"))
+	aDesc := store.LookupReplica([]byte("a")).Desc()
+	bDesc := store.LookupReplica([]byte("c")).Desc()
+	kvserver.WriteRandomDataToRange(b, store, aDesc.RangeID, []byte("aaa"))
+	kvserver.WriteRandomDataToRange(b, store, bDesc.RangeID, []byte("ccc"))
 
 	// Merge the b range back into the a range.
-	mArgs := adminMergeArgs(keys.ScratchRangeMin)
+	mArgs := adminMergeArgs(roachpb.KeyMin)
 	if _, err := kv.SendWrapped(ctx, store.TestSender(), mArgs); err != nil {
 		b.Fatal(err)
 	}
@@ -3061,8 +3045,8 @@ func TestUnsplittableRange(t *testing.T) {
 			SpanConfig: &spanconfig.TestingKnobs{
 				ProtectedTSReaderOverrideFn: spanconfig.EmptyProtectedTSReader,
 			},
-			KeyVisualizer:  &keyvisualizer.TestingKnobs{SkipZoneConfigBootstrap: true},
-			UpgradeManager: &upgradebase.TestingKnobs{SkipZoneConfigBootstrap: true},
+			KeyVisualizer: &keyvisualizer.TestingKnobs{SkipZoneConfigBootstrap: true},
+			SQLStatsKnobs: &sqlstats.TestingKnobs{SkipZoneConfigBootstrap: true},
 		},
 	})
 
@@ -4140,12 +4124,7 @@ func TestStoreRangeSplitAndMergeWithGlobalReads(t *testing.T) {
 
 	// Verify that the closed timestamp policy is set up.
 	repl := store.LookupReplica(roachpb.RKey(descKey))
-	testutils.SucceedsSoon(t, func() error {
-		if actual := repl.ClosedTimestampPolicy(); actual != roachpb.LEAD_FOR_GLOBAL_READS {
-			return errors.Newf("expected LEAD_FOR_GLOBAL_READS, got %s", actual)
-		}
-		return nil
-	})
+	require.Equal(t, repl.ClosedTimestampPolicy(), roachpb.LEAD_FOR_GLOBAL_READS)
 
 	// Write to the range, which has the effect of bumping the closed timestamp.
 	pArgs := putArgs(descKey, []byte("foo"))

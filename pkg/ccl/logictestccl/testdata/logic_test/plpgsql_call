@@ -338,8 +338,6 @@ DROP PROCEDURE p_nested;
 
 statement ok
 DROP PROCEDURE p;
-
-statement ok
 DROP PROCEDURE p_nested;
 
 # Recursive CALL is not possible.

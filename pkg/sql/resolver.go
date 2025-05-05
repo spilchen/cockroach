@@ -420,6 +420,10 @@ func (p *planner) getDescriptorsFromTargetListForPrivilegeChange(
 
 			return descs, nil
 		} else if targets.AllFunctionsInSchema || targets.AllProceduresInSchema {
+			isProcs := true
+			if targets.AllFunctionsInSchema {
+				isProcs = false
+			}
 			var descs []DescriptorWithObjectType
 			for _, scName := range targets.Schemas {
 				dbName := p.CurrentDatabase()
@@ -439,16 +443,10 @@ func (p *planner) getDescriptorsFromTargetListForPrivilegeChange(
 					if err != nil {
 						return err
 					}
-					// Only include procedures if ALL PROCEDURES was specified, and
-					// only include functions if ALL FUNCTIONS was specified.
-					if fn.IsProcedure() {
-						if !targets.AllProceduresInSchema {
-							return nil
-						}
-					} else {
-						if !targets.AllFunctionsInSchema {
-							return nil
-						}
+					if isProcs != fn.IsProcedure() {
+						// Skip functions if ALL PROCEDURES was specified, and
+						// skip procedures if ALL FUNCTIONS was specified.
+						return nil
 					}
 					descs = append(descs, DescriptorWithObjectType{
 						descriptor: fn,

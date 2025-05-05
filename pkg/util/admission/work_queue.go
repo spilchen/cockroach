@@ -130,30 +130,43 @@ var epochLIFOEpochDuration = settings.RegisterDurationSetting(
 	"admission.epoch_lifo.epoch_duration",
 	"the duration of an epoch, for epoch-LIFO admission control ordering",
 	epochLength,
-	settings.DurationWithMinimum(time.Millisecond),
-	settings.WithPublic)
+	settings.WithValidateDuration(func(v time.Duration) error {
+		if v < time.Millisecond {
+			return errors.Errorf("epoch-LIFO: epoch duration is too small")
+		}
+		return nil
+	}), settings.WithPublic)
 
 var epochLIFOEpochClosingDeltaDuration = settings.RegisterDurationSetting(
 	settings.ApplicationLevel,
 	"admission.epoch_lifo.epoch_closing_delta_duration",
 	"the delta duration before closing an epoch, for epoch-LIFO admission control ordering",
 	epochClosingDelta,
-	settings.DurationWithMinimum(time.Millisecond),
-	settings.WithPublic)
+	settings.WithValidateDuration(func(v time.Duration) error {
+		if v < time.Millisecond {
+			return errors.Errorf("epoch-LIFO: epoch closing delta is too small")
+		}
+		return nil
+	}), settings.WithPublic)
 
 var epochLIFOQueueDelayThresholdToSwitchToLIFO = settings.RegisterDurationSetting(
 	settings.ApplicationLevel,
 	"admission.epoch_lifo.queue_delay_threshold_to_switch_to_lifo",
 	"the queue delay encountered by a (tenant,priority) for switching to epoch-LIFO ordering",
 	maxQueueDelayToSwitchToLifo,
-	settings.DurationWithMinimum(time.Millisecond),
-	settings.WithPublic)
+	settings.WithValidateDuration(func(v time.Duration) error {
+		if v < time.Millisecond {
+			return errors.Errorf("epoch-LIFO: queue delay threshold is too small")
+		}
+		return nil
+	}), settings.WithPublic)
 
 var rangeSequencerGCThreshold = settings.RegisterDurationSetting(
 	settings.ApplicationLevel,
 	"admission.replication_control.range_sequencer_gc_threshold",
 	"the inactive duration for a range sequencer after it's garbage collected",
 	5*time.Minute,
+	settings.NonNegativeDuration,
 )
 
 // WorkInfo provides information that is used to order work within an WorkQueue.
@@ -335,6 +348,8 @@ func makeWorkQueueOptions(workKind WorkKind) workQueueOptions {
 		return workQueueOptions{usesTokens: false, tiedToRange: true}
 	case SQLKVResponseWork, SQLSQLResponseWork:
 		return workQueueOptions{usesTokens: true, tiedToRange: false}
+	case SQLStatementLeafStartWork, SQLStatementRootStartWork:
+		return workQueueOptions{usesTokens: false, tiedToRange: false}
 	default:
 		panic(errors.AssertionFailedf("unexpected workKind %d", workKind))
 	}
@@ -514,20 +529,7 @@ func (q *WorkQueue) tryCloseEpoch(timeNow time.Time) {
 		return
 	}
 	q.mu.closedEpochThreshold = epoch
-	initializedDoLog := false
-	doLog := false
-	// doLogFunc is called inside the for loop, whenever a caller has something
-	// interesting to log. It delays sampling logThreshold until it is actually
-	// needed. Once logThreshold is sampled, it is not sampled again.
-	doLogFunc := func() bool {
-		if initializedDoLog {
-			return doLog
-		}
-		initializedDoLog = true
-		// Log only if epochLIFOEnabled.
-		doLog = epochLIFOEnabled && q.logThreshold.ShouldLog()
-		return doLog
-	}
+	doLog := q.logThreshold.ShouldLog()
 	for _, tenant := range q.mu.tenants {
 		prevThreshold := tenant.fifoPriorityThreshold
 		tenant.fifoPriorityThreshold =
@@ -536,7 +538,7 @@ func (q *WorkQueue) tryCloseEpoch(timeNow time.Time) {
 		if !epochLIFOEnabled {
 			tenant.fifoPriorityThreshold = int(admissionpb.LowPri)
 		}
-		if tenant.fifoPriorityThreshold != prevThreshold && doLogFunc() {
+		if tenant.fifoPriorityThreshold != prevThreshold || doLog {
 			logVerb := redact.SafeString("is")
 			if tenant.fifoPriorityThreshold != prevThreshold {
 				logVerb = "changed to"
@@ -843,21 +845,19 @@ func recordAdmissionWorkQueueStats(
 	if span == nil {
 		return
 	}
-	var deadlineExceededCount int32
-	if deadlineExceeded {
-		deadlineExceededCount = 1
-	}
 	span.RecordStructured(&admissionpb.AdmissionWorkQueueStats{
-		WaitDurationNanos:     waitDur,
-		QueueKind:             string(queueKind),
-		DeadlineExceededCount: deadlineExceededCount,
-		WorkPriority:          int32(workPriority),
+		WaitDurationNanos: waitDur,
+		QueueKind:         string(queueKind),
+		DeadlineExceeded:  deadlineExceeded,
+		WorkPriority:      admissionpb.WorkPriorityDict[workPriority],
 	})
 }
 
 // AdmittedWorkDone is used to inform the WorkQueue that some admitted work is
 // finished. It must be called iff the WorkKind of this WorkQueue uses slots
-// (not tokens), i.e., KVWork.
+// (not tokens), i.e., KVWork, SQLStatementLeafStartWork,
+// SQLStatementRootStartWork. Note, there is no support for SQLStatementLeafStartWork,
+// SQLStatementRootStartWork in the code yet.
 func (q *WorkQueue) AdmittedWorkDone(tenantID roachpb.TenantID, cpuTime time.Duration) {
 	if q.usesTokens {
 		panic(errors.AssertionFailedf("tokens should not be returned"))

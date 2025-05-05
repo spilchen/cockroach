@@ -115,26 +115,11 @@ Examples:
 			}
 
 			for _, s := range specs {
-				var skip, randomized, timeout string
+				var skip string
 				if s.Skip != "" {
 					skip = " (skipped: " + s.Skip + ")"
 				}
-				var prefix, separator string
-				longListing := false
-				if s.Randomized {
-					longListing = true
-					randomized = "randomized"
-					separator = ","
-				}
-				if s.Timeout != 0 {
-					longListing = true
-					timeout = fmt.Sprintf("%stimeout: %s", separator, s.Timeout)
-				}
-				if longListing {
-					// N.B. use a prefix to separate the extended listing.
-					prefix = "  "
-				}
-				fmt.Printf("%s [%s]%s %s%s%s\n", s.Name, s.Owner, skip, prefix, randomized, timeout)
+				fmt.Printf("%s [%s]%s\n", s.Name, s.Owner, skip)
 			}
 			return nil
 		},
@@ -204,15 +189,12 @@ the cluster nodes on start.
 		Long: `Run an automated operation on an existing roachprod cluster.
 If multiple operations are matched by the passed-in regex filter, one operation
 is chosen at random and run. The provided cluster name must already exist in roachprod;
-this command does no setup/teardown of clusters.
-
-This command can be used to run operation in parallel and infinitely on a cluster. 
-Check --parallelism, --run-forever and --wait-before-next-execution flags`,
+this command does no setup/teardown of clusters.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Printf("\nRunning operation %s on %s.\n\n", args[1], args[0])
 			cmd.SilenceUsage = true
-			return runOperations(operations.RegisterOperations, args[1], args[0])
+			return runOperation(operations.RegisterOperations, args[1], args[0])
 		},
 	}
 	roachtestflags.AddRunOpsFlags(runOperationCmd.Flags())
@@ -265,7 +247,9 @@ func testsToRun(
 		return nil, errors.Newf("%s", msg)
 	}
 
-	if roachtestflags.SelectiveTests {
+	// selective-tests is considered only if the select-probability is 1.0. This is because select probability already
+	// takes care of running limited tests.
+	if roachtestflags.SelectiveTests && roachtestflags.SelectProbability == 1.0 {
 		fmt.Printf("selective Test enabled\n")
 		// the test categorization must be complete in 30 seconds
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -284,12 +268,8 @@ func testsToRun(
 				fmt.Fprintf(os.Stdout, "##teamcity[testIgnored name='%s' message='%s']\n",
 					s.Name, TeamCityEscape(s.Skip))
 			}
-			skipDetails := s.Skip
-			if skipDetails != "" {
-				skipDetails = " (" + s.SkipDetails + ")"
-			}
 			if print {
-				fmt.Fprintf(os.Stdout, "--- SKIP: %s (%s)\n\t%s\n", s.Name, "0.00s", skipDetails)
+				fmt.Fprintf(os.Stdout, "--- SKIP: %s (%s)\n\t%s\n", s.Name, "0.00s", s.Skip)
 			}
 		}
 	}
@@ -531,11 +511,5 @@ func validateAndConfigure(cmd *cobra.Command, args []string) {
 			printErrAndExit(fmt.Errorf("unsupported option value %q for option %q; Usage: %s",
 				roachtestflags.UseSpotVM, spotFlagInfo.Name, spotFlagInfo.Usage))
 		}
-	}
-
-	// Test selection and select probability flags are mutually exclusive.
-	selectProbFlagInfo := roachtestflags.Changed(&roachtestflags.SelectProbability)
-	if roachtestflags.SelectiveTests && selectProbFlagInfo != nil {
-		printErrAndExit(fmt.Errorf("select-probability and selective-tests=true are incompatible. Disable one of them"))
 	}
 }

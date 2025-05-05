@@ -358,15 +358,13 @@ func TestBulkJobTelemetryLogging(t *testing.T) {
 
 		if strings.Contains(tc.query, "WITH detached") {
 			err = db.DB.QueryRowContext(ctx, tc.query).Scan(&jobID)
-		} else if strings.HasPrefix(tc.query, "IMPORT") {
-			err = db.DB.QueryRowContext(ctx, tc.query).Scan(&jobID, &unused, &unused, &unused, &unused, &unused)
 		} else {
-			err = db.DB.QueryRowContext(ctx, tc.query).Scan(&jobID, &unused, &unused, &unused)
+			err = db.DB.QueryRowContext(ctx, tc.query).Scan(&jobID, &unused, &unused, &unused, &unused, &unused)
 		}
 		if err != nil {
 			t.Errorf("unexpected error executing query `%s`: %v", tc.query, err)
 		}
-		waitForJobResult(t, testCluster, jobspb.JobID(jobID), jobs.StateSucceeded)
+		waitForJobResult(t, testCluster, jobspb.JobID(jobID), jobs.StatusSucceeded)
 		t.Logf("finished:%q\n", tc.query)
 
 		execTimestamp++
@@ -415,7 +413,7 @@ func TestBulkJobTelemetryLogging(t *testing.T) {
 }
 
 func waitForJobResult(
-	t *testing.T, tc serverutils.TestClusterInterface, id jobspb.JobID, expected jobs.State,
+	t *testing.T, tc serverutils.TestClusterInterface, id jobspb.JobID, expected jobs.Status,
 ) {
 	// Force newly created job to be adopted and verify its result.
 	tc.Server(0).JobRegistry().(*jobs.Registry).TestingNudgeAdoptionQueue()
