@@ -376,197 +376,39 @@ func TestMakeBackupCodec(t *testing.T) {
 	}
 }
 
-func TestValidateEndTimeAndTruncate(t *testing.T) {
+func TestElideSkippedLayers(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
 
-	m := func(start, end int, compacted bool, revision bool) backuppb.BackupManifest {
-		b := backuppb.BackupManifest{
-			StartTime:   hlc.Timestamp{WallTime: int64(start)},
-			EndTime:     hlc.Timestamp{WallTime: int64(end)},
-			IsCompacted: compacted,
-		}
-		if revision {
-			b.MVCCFilter = backuppb.MVCCFilter_All
-			b.RevisionStartTime = hlc.Timestamp{WallTime: int64(start)}
-		}
-		return b
-	}
-	mNorm := func(start, end int) backuppb.BackupManifest {
-		return m(start, end, false /* compacted */, false /* revision */)
-	}
-	mComp := func(start, end int) backuppb.BackupManifest {
-		return m(start, end, true /* compacted */, false /* revision */)
-	}
-	mRev := func(start, end int) backuppb.BackupManifest {
-		return m(start, end, false /* compacted */, true /* revision */)
-	}
-
-	// Note: The tests here work under the assumption that the input manifests are
-	// always sorted in ascending order by end time, and then sorted in ascending
-	// order by start time.
 	for _, tc := range []struct {
-		name             string
-		manifests        []backuppb.BackupManifest
-		endTime          int
-		includeCompacted bool
-		err              string
-		expected         [][]int // expected timestamps of returned backups
+		name     string
+		times    [][]int // len 2 slices of start and end time.
+		expected []int   // expected end times.
 	}{
-		{
-			name: "single backup",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1),
-			},
-			endTime:  1,
-			expected: [][]int{{0, 1}},
-		},
-		{
-			name: "double backup",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2),
-			},
-			endTime:  2,
-			expected: [][]int{{0, 1}, {1, 2}},
-		},
-		{
-			name: "out of bounds end time",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2),
-			},
-			endTime: 3,
-			err:     "supplied backups do not cover requested time",
-		},
-		{
-			name: "revision history restore should fail on non-revision history backups",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 2), mNorm(2, 4),
-			},
-			endTime: 3,
-			err:     "restoring to arbitrary time",
-		},
-		{
-			name: "revision history restore should succeed on revision history backups",
-			manifests: []backuppb.BackupManifest{
-				mRev(0, 2), mRev(2, 4),
-			},
-			endTime:  3,
-			expected: [][]int{{0, 2}, {2, 4}},
-		},
-		{
-			name: "end time in middle of chain should truncate",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2), mNorm(2, 3),
-				mNorm(3, 5), mNorm(5, 8),
-			},
-			endTime:  3,
-			expected: [][]int{{0, 1}, {1, 2}, {2, 3}},
-		},
-		{
-			name: "non-continuous backup chain should fail",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(2, 3),
-			},
-			endTime: 3,
-			err:     "backups are not continuous",
-		},
-		{
-			name: "ignore compacted backups if includeCompacted is false",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2), mComp(1, 3), mNorm(2, 3),
-			},
-			endTime:  3,
-			expected: [][]int{{0, 1}, {1, 2}, {2, 3}},
-		},
-		{
-			name: "compaction of two backups",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2), mComp(1, 3), mNorm(2, 3),
-				mNorm(3, 5), mNorm(5, 8),
-			},
-			endTime:          8,
-			includeCompacted: true,
-			expected:         [][]int{{0, 1}, {1, 3}, {3, 5}, {5, 8}},
-		},
-		{
-			name: "compaction of entire incremental chain",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2), mNorm(2, 3), mNorm(3, 5),
-				mComp(1, 8), mNorm(5, 8),
-			},
-			endTime:          8,
-			includeCompacted: true,
-			expected:         [][]int{{0, 1}, {1, 8}},
-		},
-		{
-			name: "two separate compactions of two backups",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2), mComp(1, 3), mNorm(2, 3),
-				mNorm(3, 5), mComp(3, 8), mNorm(5, 8),
-			},
-			endTime:          8,
-			includeCompacted: true,
-			expected:         [][]int{{0, 1}, {1, 3}, {3, 8}},
-		},
-		{
-			name: "compaction includes a compacted backup in the middle",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2), mComp(1, 3), mNorm(2, 3),
-				mNorm(3, 5), mComp(1, 8), mNorm(5, 8),
-			},
-			endTime:          8,
-			includeCompacted: true,
-			expected:         [][]int{{0, 1}, {1, 8}},
-		},
-		{
-			name: "two compactions with the same end time",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2), mNorm(2, 3), mNorm(3, 5),
-				mComp(1, 8), mComp(3, 8), mNorm(5, 8),
-			},
-			endTime:          8,
-			includeCompacted: true,
-			expected:         [][]int{{0, 1}, {1, 8}},
-		},
-		{
-			name: "end time in middle of compacted chain should pick base incremental",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2), mNorm(2, 3),
-				mComp(1, 5), mNorm(3, 5),
-			},
-			endTime:          3,
-			includeCompacted: true,
-			expected:         [][]int{{0, 1}, {1, 2}, {2, 3}},
-		},
-		{
-			name: "overlapping compacted backups",
-			manifests: []backuppb.BackupManifest{
-				mNorm(0, 1), mNorm(1, 2), mComp(1, 3), mNorm(2, 3), mComp(2, 4), mNorm(3, 4),
-			},
-			endTime:          4,
-			includeCompacted: true,
-			expected:         [][]int{{0, 1}, {1, 2}, {2, 4}},
-		},
+		{"single", [][]int{{0, 1}}, []int{1}},
+		{"double", [][]int{{0, 1}, {1, 2}}, []int{1, 2}},
+		{"simple chain", [][]int{{0, 1}, {1, 2}, {2, 3}, {3, 5}, {5, 8}}, []int{1, 2, 3, 5, 8}},
+		{"skip one", [][]int{{0, 1}, {1, 2}, {1, 3}, {3, 5}, {5, 8}}, []int{1, 3, 5, 8}},
+		{"skip all", [][]int{{0, 1}, {1, 2}, {1, 3}, {3, 5}, {1, 8}}, []int{1, 8}},
+		{"skip twice to first", [][]int{{0, 1}, {1, 2}, {1, 3}, {3, 5}, {3, 8}}, []int{1, 3, 8}},
+		{"skip twice to second", [][]int{{0, 1}, {1, 2}, {1, 3}, {3, 5}, {2, 8}}, []int{1, 2, 8}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			uris, res, locs, err := backupinfo.ValidateEndTimeAndTruncate(
-				make([]string, len(tc.manifests)),
-				tc.manifests,
-				make([]jobspb.RestoreDetails_BackupLocalityInfo, len(tc.manifests)),
-				hlc.Timestamp{WallTime: int64(tc.endTime)},
-				false, /* includeSkipped */
-				tc.includeCompacted,
-			)
-			if tc.err != "" {
-				require.ErrorContains(t, err, tc.err)
-				return
+			chain := make([]backuppb.BackupManifest, len(tc.times))
+			for i, ts := range tc.times {
+				chain[i].StartTime = hlc.Timestamp{WallTime: int64(ts[0])}
+				chain[i].EndTime = hlc.Timestamp{WallTime: int64(ts[1])}
 			}
+			uris, res, locs, err := backupinfo.ElideSkippedLayers(
+				make([]string, len(tc.times)),
+				chain,
+				make([]jobspb.RestoreDetails_BackupLocalityInfo, len(tc.times)),
+			)
+			require.NoError(t, err)
 			require.Equal(t, len(tc.expected), len(uris))
 			require.Equal(t, len(tc.expected), len(locs))
 			require.Equal(t, len(tc.expected), len(res))
 			for i := range tc.expected {
-				actual := []int{int(res[i].StartTime.WallTime), int(res[i].EndTime.WallTime)}
-				require.Equal(t, tc.expected[i], actual)
+				require.Equal(t, tc.expected[i], int(res[i].EndTime.WallTime), "expected %q\ngot: %q")
 			}
 		})
 	}

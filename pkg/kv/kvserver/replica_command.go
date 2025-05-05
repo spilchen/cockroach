@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/storepool"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/batcheval"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/benignerror"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/concurrency"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/rditer"
@@ -915,15 +914,11 @@ func (r *Replica) AdminMerge(
 		// This must be a single request in a BatchRequest: there are multiple
 		// places that do special logic (needed for safety) that rely on
 		// BatchRequest.IsSingleSubsumeRequest() returning true.
-		shouldPreserveLocks := concurrency.UnreplicatedLockReliabilityMerge.Get(&r.ClusterSettings().SV)
 		br, pErr := kv.SendWrapped(ctx, r.store.DB().NonTransactionalSender(),
 			&kvpb.SubsumeRequest{
-				RequestHeader: kvpb.RequestHeader{
-					Key: rightDesc.StartKey.AsRawKey(),
-				},
-				PreserveUnreplicatedLocks: shouldPreserveLocks,
-				LeftDesc:                  *origLeftDesc,
-				RightDesc:                 rightDesc,
+				RequestHeader: kvpb.RequestHeader{Key: rightDesc.StartKey.AsRawKey()},
+				LeftDesc:      *origLeftDesc,
+				RightDesc:     rightDesc,
 			})
 		if pErr != nil {
 			return pErr.GoError()
@@ -3234,8 +3229,7 @@ var traceSnapshotThreshold = settings.RegisterDurationSetting(
 	"kv.trace.snapshot.enable_threshold",
 	"enables tracing and gathers timing information on all snapshots;"+
 		"snapshots with a duration longer than this threshold will have their "+
-		"trace logged (set to 0 to disable);",
-	0,
+		"trace logged (set to 0 to disable);", 0,
 )
 
 var externalFileSnapshotting = settings.RegisterBoolSetting(
@@ -3363,7 +3357,7 @@ func (r *Replica) followerSendSnapshot(
 	sent := func() {
 		r.store.metrics.RangeSnapshotsGenerated.Inc(1)
 	}
-	comparisonResult := r.store.getLocalityComparison(req.CoordinatorReplica.NodeID,
+	comparisonResult := r.store.getLocalityComparison(ctx, req.CoordinatorReplica.NodeID,
 		req.RecipientReplica.NodeID)
 
 	recordBytesSent := func(inc int64) {
@@ -4189,16 +4183,12 @@ func (r *Replica) adminScatter(
 	// Loop until we hit an error or until we hit `maxAttempts` for the range.
 	for re := retry.StartWithCtx(ctx, retryOpts); re.Next(); {
 		if currentAttempt == maxAttempts {
-			log.Eventf(ctx, "stopped scattering after hitting max %d attempts", maxAttempts)
 			break
 		}
 		desc, conf := r.DescAndSpanConfig()
 		_, err := rq.replicaCanBeProcessed(ctx, r, false /* acquireLeaseIfNeeded */)
 		if err != nil {
 			// The replica can not be processed, so skip it.
-			log.Warningf(ctx,
-				"failed to scatter range (%v) at %dth attempt: cannot process replica due to %v",
-				desc, currentAttempt+1, err)
 			break
 		}
 		_, err = rq.processOneChange(
@@ -4210,11 +4200,9 @@ func (r *Replica) adminScatter(
 			// issued, in which case the scatter may fail due to the range split
 			// updating the descriptor while processing.
 			if IsRetriableReplicationChangeError(err) {
-				log.Errorf(ctx, "retrying scatter process for range %v after retryable error: %v", desc, err)
+				log.VEventf(ctx, 1, "retrying scatter process after retryable error: %v", err)
 				continue
 			}
-			log.Warningf(ctx, "failed to scatter range (%v) at %dth attempt due to %v",
-				desc, currentAttempt+1, err)
 			break
 		}
 		currentAttempt++
@@ -4266,11 +4254,6 @@ func (r *Replica) adminScatter(
 		// that were moved so the value may not be entirely accurate, but it is
 		// adequate.
 		ReplicasScatteredBytes: stats.Total() * int64(numReplicasMoved),
-		// NB: this needs to be a separate field, since we can't reliably infer
-		// "no replica moved" from ReplicasScatteredBytes == 0. Empty ranges have
-		// stats.Total() == 0 and ReplicasScatteredBytes will be 0 regardless of
-		// whether any replicas were moved.
-		NoReplicasMoved: numReplicasMoved == 0,
 	}, nil
 }
 

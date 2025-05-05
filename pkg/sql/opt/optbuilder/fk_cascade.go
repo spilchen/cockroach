@@ -314,7 +314,7 @@ func (cb *onDeleteFastCascadeBuilder) Build(
 			}
 
 			// Build the input to the delete mutation, which is simply a Scan with a
-			// Select on top. The scan is exempt from RLS to maintain data integrity.
+			// Select on top.
 			mb.fetchScope = b.buildScan(
 				b.addTable(cb.childTable, &mb.alias),
 				tableOrdinals(cb.childTable, columnKinds{
@@ -326,7 +326,6 @@ func (cb *onDeleteFastCascadeBuilder) Build(
 				noRowLocking,
 				b.allocScope(),
 				true, /* disableNotVisibleIndex */
-				cat.PolicyScopeExempt,
 			)
 			mb.outScope = mb.fetchScope
 
@@ -570,7 +569,6 @@ func (b *Builder) buildDeleteCascadeMutationInput(
 		indexFlags = &tree.IndexFlags{AvoidFullScan: true}
 	}
 
-	// The scan is exempt from RLS to maintain data integrity.
 	outScope = b.buildScan(
 		b.addTable(childTable, childTableAlias),
 		tableOrdinals(childTable, columnKinds{
@@ -582,7 +580,6 @@ func (b *Builder) buildDeleteCascadeMutationInput(
 		noRowLocking,
 		b.allocScope(),
 		true, /* disableNotVisibleIndex */
-		cat.PolicyScopeExempt,
 	)
 
 	numFKCols := fk.ColumnCount()
@@ -845,7 +842,6 @@ func (b *Builder) buildUpdateCascadeMutationInput(
 		indexFlags = &tree.IndexFlags{AvoidFullScan: true}
 	}
 
-	// The scan is exempt from RLS to maintain data integrity.
 	outScope = b.buildScan(
 		b.addTable(childTable, childTableAlias),
 		tableOrdinals(childTable, columnKinds{
@@ -857,7 +853,6 @@ func (b *Builder) buildUpdateCascadeMutationInput(
 		noRowLocking,
 		b.allocScope(),
 		true, /* disableNotVisibleIndex */
-		cat.PolicyScopeExempt,
 	)
 
 	numFKCols := fk.ColumnCount()

@@ -59,28 +59,25 @@ func Set(
 		// Cast these as strings.
 		expr := paramparse.UnresolvedNameToStrVal(sp.Value)
 
-		err := func() error {
-			// Storage params handle their own scalar arguments, with no help from the
-			// optimizer. As such, they cannot contain subqueries.
-			defer semaCtx.Properties.Restore(semaCtx.Properties)
-			semaCtx.Properties.Require("table storage parameters", tree.RejectSubqueries)
+		// Storage params handle their own scalar arguments, with no help from the
+		// optimizer. As such, they cannot contain subqueries.
+		defer semaCtx.Properties.Restore(semaCtx.Properties)
+		semaCtx.Properties.Require("table storage parameters", tree.RejectSubqueries)
 
-			// Convert the expressions to a datum.
-			typedExpr, err := tree.TypeCheck(ctx, expr, semaCtx, types.AnyElement)
-			if err != nil {
-				return err
-			}
-			if typedExpr, err = normalize.Expr(ctx, evalCtx, typedExpr); err != nil {
-				return err
-			}
-			datum, err := eval.Expr(ctx, evalCtx, typedExpr)
-			if err != nil {
-				return err
-			}
-			return setter.Set(ctx, semaCtx, evalCtx, key, datum)
-		}()
-
+		// Convert the expressions to a datum.
+		typedExpr, err := tree.TypeCheck(ctx, expr, semaCtx, types.Any)
 		if err != nil {
+			return err
+		}
+		if typedExpr, err = normalize.Expr(ctx, evalCtx, typedExpr); err != nil {
+			return err
+		}
+		datum, err := eval.Expr(ctx, evalCtx, typedExpr)
+		if err != nil {
+			return err
+		}
+
+		if err := setter.Set(ctx, semaCtx, evalCtx, key, datum); err != nil {
 			return err
 		}
 	}
@@ -132,13 +129,8 @@ func storageParamPreChecks(
 		return errors.AssertionFailedf("only one of setParams and resetParams should be non-nil.")
 	}
 
-	keys := make([]string, 0, len(setParams)+len(resetParams))
-	params := make(map[string]struct{}, len(setParams))
+	var keys []string
 	for _, param := range setParams {
-		if _, exists := params[param.Key]; exists {
-			return pgerror.Newf(pgcode.InvalidParameterValue, "parameter %q specified more than once", param.Key)
-		}
-		params[param.Key] = struct{}{}
 		keys = append(keys, param.Key)
 	}
 	keys = append(keys, resetParams...)

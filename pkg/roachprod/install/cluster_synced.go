@@ -619,23 +619,18 @@ func (c *SyncedCluster) Wipe(ctx context.Context, l *logger.Logger, preserveCert
 		var cmd string
 		if c.IsLocal() {
 			// Not all shells like brace expansion, so we'll do it here
-			paths := []string{
-				"data*",
-				"logs*",
-				"cockroach-*.sh",
-			}
+			dirs := []string{"data*", "logs*"}
 			if !preserveCerts {
-				paths = append(paths, fmt.Sprintf("%s*", CockroachNodeCertsDir))
-				paths = append(paths, fmt.Sprintf("%s*", CockroachNodeTenantCertsDir))
+				dirs = append(dirs, fmt.Sprintf("%s*", CockroachNodeCertsDir))
+				dirs = append(dirs, fmt.Sprintf("%s*", CockroachNodeTenantCertsDir))
 			}
-			for _, dir := range paths {
+			for _, dir := range dirs {
 				cmd += fmt.Sprintf(`rm -fr %s/%s ;`, c.localVMDir(node), dir)
 			}
 		} else {
 			rmCmds := []string{
 				fmt.Sprintf(`sudo find /mnt/data* -maxdepth 1 -type f -not -name %s -exec rm -f {} \;`, vm.InitializedFile),
 				`sudo rm -fr /mnt/data*/{auxiliary,local,tmp,cassandra,cockroach,cockroach-temp*,mongo-data}`,
-				`sudo rm -fr cockroach-*.sh`,
 				`sudo rm -fr logs* data*`,
 			}
 			if !preserveCerts {
@@ -782,12 +777,10 @@ func (r *RunResultDetails) Output(decorate bool) string {
 type RunCmdOptions struct {
 	combinedOut             bool
 	includeRoachprodEnvVars bool
-	// If true, logs the expanded result if it differs from the original command.
-	logExpandedCmd bool
-	stdin          io.Reader
-	stdout, stderr io.Writer
-	remoteOptions  []remoteSessionOption
-	expanderConfig ExpanderConfig
+	stdin                   io.Reader
+	stdout, stderr          io.Writer
+	remoteOptions           []remoteSessionOption
+	expanderConfig          ExpanderConfig
 }
 
 // Default RunCmdOptions enable combining output (stdout and stderr) and capturing ssh (verbose) debug output.
@@ -827,9 +820,6 @@ func (c *SyncedCluster) runCmdOnSingleNode(
 	expandedCmd, err := e.expand(ctx, l, c, opts.expanderConfig, cmd)
 	if err != nil {
 		return &noResult, errors.WithDetailf(err, "error expanding command: %s", cmd)
-	}
-	if opts.logExpandedCmd && expandedCmd != cmd {
-		l.Printf("Node %d expanded cmd: %s", e.node, expandedCmd)
 	}
 
 	nodeCmd := expandedCmd
@@ -936,7 +926,6 @@ func (c *SyncedCluster) Run(
 			stdout:                  stdout,
 			stderr:                  stderr,
 			expanderConfig:          options.ExpanderConfig,
-			logExpandedCmd:          options.LogExpandedCmd,
 		}
 		result, err := c.runCmdOnSingleNode(ctx, l, node, cmd, opts)
 		return result, err
@@ -1021,7 +1010,6 @@ func (c *SyncedCluster) RunWithDetails(
 			stdout:                  l.Stdout,
 			stderr:                  l.Stderr,
 			expanderConfig:          options.ExpanderConfig,
-			logExpandedCmd:          options.LogExpandedCmd,
 		}
 		result, err := c.runCmdOnSingleNode(ctx, l, node, cmd, opts)
 		return result, err

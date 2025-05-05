@@ -166,7 +166,7 @@ func (b *Builder) analyzeSelectList(
 				}
 			}
 
-			desired := types.AnyElement
+			desired := types.Any
 			if i < len(desiredTypes) {
 				desired = desiredTypes[i]
 			}
@@ -219,7 +219,7 @@ func (b *Builder) resolveColRef(e tree.Expr, inScope *scope) tree.TypedExpr {
 			if sqlerrors.IsUndefinedColumnError(resolveErr) {
 				return func() tree.TypedExpr {
 					defer wrapColTupleStarPanic(resolveErr)
-					return inScope.resolveType(columnNameAsTupleStar(colName), types.AnyElement)
+					return inScope.resolveType(columnNameAsTupleStar(colName), types.Any)
 				}()
 			}
 			panic(resolveErr)

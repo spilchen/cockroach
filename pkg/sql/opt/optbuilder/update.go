@@ -9,7 +9,6 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/sql/opt"
-	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
@@ -337,8 +336,7 @@ func (mb *mutationBuilder) buildUpdate(returning *tree.ReturningExprs) {
 	mb.disambiguateColumns()
 
 	// Add any check constraint boolean columns to the input.
-	mb.addCheckConstraintCols(true, /* isUpdate */
-		cat.PolicyScopeUpdate, false /* includeSelectOnInsert */)
+	mb.addCheckConstraintCols(true /* isUpdate */)
 
 	// Add the partial index predicate expressions to the table metadata.
 	// These expressions are used to prune fetch columns during
@@ -349,7 +347,7 @@ func (mb *mutationBuilder) buildUpdate(returning *tree.ReturningExprs) {
 	mb.projectPartialIndexPutAndDelCols()
 
 	// Project vector index PUT and DEL columns.
-	mb.projectVectorIndexColsForUpdate()
+	mb.projectVectorIndexCols()
 
 	mb.buildUniqueChecksForUpdate()
 
@@ -357,7 +355,7 @@ func (mb *mutationBuilder) buildUpdate(returning *tree.ReturningExprs) {
 
 	mb.buildRowLevelAfterTriggers(opt.UpdateOp)
 
-	private := mb.makeMutationPrivate(returning != nil, false /* vectorInsert */)
+	private := mb.makeMutationPrivate(returning != nil)
 	for _, col := range mb.extraAccessibleCols {
 		if col.id != 0 {
 			private.PassthroughCols = append(private.PassthroughCols, col.id)

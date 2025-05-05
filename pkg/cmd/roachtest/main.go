@@ -115,26 +115,11 @@ Examples:
 			}
 
 			for _, s := range specs {
-				var skip, randomized, timeout string
+				var skip string
 				if s.Skip != "" {
 					skip = " (skipped: " + s.Skip + ")"
 				}
-				var prefix, separator string
-				longListing := false
-				if s.Randomized {
-					longListing = true
-					randomized = "randomized"
-					separator = ","
-				}
-				if s.Timeout != 0 {
-					longListing = true
-					timeout = fmt.Sprintf("%stimeout: %s", separator, s.Timeout)
-				}
-				if longListing {
-					// N.B. use a prefix to separate the extended listing.
-					prefix = "  "
-				}
-				fmt.Printf("%s [%s]%s %s%s%s\n", s.Name, s.Owner, skip, prefix, randomized, timeout)
+				fmt.Printf("%s [%s]%s\n", s.Name, s.Owner, skip)
 			}
 			return nil
 		},
@@ -284,12 +269,8 @@ func testsToRun(
 				fmt.Fprintf(os.Stdout, "##teamcity[testIgnored name='%s' message='%s']\n",
 					s.Name, TeamCityEscape(s.Skip))
 			}
-			skipDetails := s.Skip
-			if skipDetails != "" {
-				skipDetails = " (" + s.SkipDetails + ")"
-			}
 			if print {
-				fmt.Fprintf(os.Stdout, "--- SKIP: %s (%s)\n\t%s\n", s.Name, "0.00s", skipDetails)
+				fmt.Fprintf(os.Stdout, "--- SKIP: %s (%s)\n\t%s\n", s.Name, "0.00s", s.Skip)
 			}
 		}
 	}

@@ -40,10 +40,10 @@ func registerJobsMixedVersions(r registry.Registry) {
 func runJobsMixedVersions(ctx context.Context, t test.Test, c cluster.Cluster) {
 	mvt := mixedversion.NewTest(
 		ctx, t, t.L(), c, c.All(),
-		mixedversion.NumUpgrades(2),
-		mixedversion.UpgradeTimeout(time.Minute*30),
+		mixedversion.NumUpgrades(1),
 		mixedversion.MinimumSupportedVersion("v24.3.0"),
 		mixedversion.AlwaysUseLatestPredecessors,
+		mixedversion.UpgradeTimeout(time.Minute*30),
 		mixedversion.NeverUseFixtures,
 	)
 	mvt.OnStartup("create a few jobs", func(ctx context.Context, l *logger.Logger, r *rand.Rand, h *mixedversion.Helper) error {

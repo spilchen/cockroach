@@ -65,7 +65,7 @@ func TestColBatchScanMeta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	leafTxn := kv.NewLeafTxn(ctx, s.DB(), s.DistSQLPlanningNodeID(), leafInputState, nil /* header */)
+	leafTxn := kv.NewLeafTxn(ctx, s.DB(), s.DistSQLPlanningNodeID(), leafInputState)
 	flowCtx := execinfra.FlowCtx{
 		EvalCtx: &evalCtx,
 		Mon:     evalCtx.TestingMon,

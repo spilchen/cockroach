@@ -377,13 +377,12 @@ func (p *pendingLeaseRequest) InitOrJoinRequest(
 		Now:                   status.Now,
 		MinLeaseProposedTS:    p.repl.mu.minLeaseProposedTS,
 		RaftStatus:            raftStatus,
-		RaftCompacted:         p.repl.raftCompactedIndexRLocked(),
+		RaftFirstIndex:        p.repl.raftFirstIndexRLocked(),
 		PrevLease:             status.Lease,
 		PrevLeaseNodeLiveness: status.Liveness,
 		PrevLeaseExpired:      status.IsExpired(),
 		NextLeaseHolder:       nextLeaseHolder,
 		BypassSafetyChecks:    bypassSafetyChecks,
-		DesiredLeaseType:      p.repl.desiredLeaseTypeRLocked(),
 	}
 	out, err := leases.VerifyAndBuild(ctx, st, nl, in)
 	if err != nil {
@@ -757,7 +756,7 @@ func (r *Replica) leaseStatusForRequestRLocked(
 		MinProposedTs:      r.mu.minLeaseProposedTS,
 		MinValidObservedTs: r.mu.minValidObservedTimestamp,
 		RequestTs:          reqTS,
-		Lease:              r.shMu.state.Lease,
+		Lease:              *r.shMu.state.Lease,
 	}
 
 	if in.Lease.Type() == roachpb.LeaseLeader {
@@ -796,9 +795,8 @@ func (r *Replica) leaseSettings(ctx context.Context) leases.Settings {
 		// TODO(arul): remove this field entirely.
 		ExpToEpochEquiv: true,
 		// TODO(radu): remove this field entirely.
-		MinExpirationSupported:   true,
-		RangeLeaseDuration:       r.store.cfg.RangeLeaseDuration,
-		FortificationGracePeriod: r.store.cfg.FortificationGracePeriod,
+		MinExpirationSupported: true,
+		RangeLeaseDuration:     r.store.cfg.RangeLeaseDuration,
 	}
 }
 
@@ -1443,10 +1441,10 @@ func (r *Replica) redirectOnOrAcquireLeaseForRequest(
 					log.VErrEventf(ctx, 2, "lease acquisition failed: %s", err)
 					return kvpb.NewError(err)
 				case <-slowTimer.C:
+					slowTimer.Read = true
 					log.Warningf(ctx, "have been waiting %s attempting to acquire lease (%d attempts)",
 						base.SlowRequestThreshold, attempt)
 					r.store.metrics.SlowLeaseRequests.Inc(1)
-					//nolint:deferloop
 					defer func(attempt int) {
 						r.store.metrics.SlowLeaseRequests.Dec(1)
 						log.Infof(ctx, "slow lease acquisition finished after %s with error %v after %d attempts", timeutil.Since(tBegin), pErr, attempt)

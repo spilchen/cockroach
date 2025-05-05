@@ -91,14 +91,6 @@ var featureRestoreEnabled = settings.RegisterBoolSetting(
 	featureflag.FeatureFlagEnabledDefault,
 	settings.WithPublic)
 
-var restoreCompactedBackups = settings.RegisterBoolSetting(
-	settings.ApplicationLevel,
-	"restore.compacted_backups.enabled",
-	"allow restoring from compacted backups",
-	true,
-	settings.WithVisibility(settings.Reserved),
-)
-
 // maybeFilterMissingViews filters the set of tables to restore to exclude views
 // whose dependencies are either missing or are themselves unrestorable due to
 // missing dependencies, and returns the resulting set of tables. If the
@@ -1086,7 +1078,6 @@ func resolveOptionsForRestoreJobDescription(
 		UnsafeRestoreIncompatibleVersion: opts.UnsafeRestoreIncompatibleVersion,
 		ExecutionLocality:                opts.ExecutionLocality,
 		ExperimentalOnline:               opts.ExperimentalOnline,
-		ExperimentalCopy:                 opts.ExperimentalCopy,
 		RemoveRegions:                    opts.RemoveRegions,
 	}
 
@@ -1194,7 +1185,7 @@ func restoreTypeCheck(
 	}
 	if restoreStmt.Options.Detached {
 		header = jobs.DetachedJobExecutionResultHeader
-	} else if restoreStmt.Options.OnlineImpl() {
+	} else if restoreStmt.Options.ExperimentalOnline {
 		header = jobs.OnlineRestoreJobExecutionResultHeader
 	} else {
 		header = jobs.BackupRestoreJobResultHeader
@@ -1333,7 +1324,7 @@ func restorePlanHook(
 		}
 	}
 
-	if restoreStmt.Options.OnlineImpl() && restoreStmt.Options.VerifyData {
+	if restoreStmt.Options.ExperimentalOnline && restoreStmt.Options.VerifyData {
 		return nil, nil, false, errors.New("cannot run online restore with verify_backup_table_data")
 	}
 
@@ -1431,7 +1422,7 @@ func restorePlanHook(
 	var header colinfo.ResultColumns
 	if restoreStmt.Options.Detached {
 		header = jobs.DetachedJobExecutionResultHeader
-	} else if restoreStmt.Options.OnlineImpl() {
+	} else if restoreStmt.Options.ExperimentalOnline {
 		header = jobs.OnlineRestoreJobExecutionResultHeader
 	} else {
 		header = jobs.BackupRestoreJobResultHeader
@@ -1792,19 +1783,18 @@ func doRestorePlan(
 	mem := p.ExecCfg().RootMemoryMonitor.MakeBoundAccount()
 	defer mem.Close(ctx)
 
-	includeCompacted := restoreCompactedBackups.Get(&p.ExecCfg().Settings.SV)
 	// Given the stores for the base full backup, and the fully resolved backup
 	// directories, return the URIs and manifests of all backup layers in all
 	// localities. Incrementals will be searched for automatically.
 	defaultURIs, mainBackupManifests, localityInfo, memReserved, err := backupdest.ResolveBackupManifests(
 		ctx, &mem, baseStores, incStores, mkStore, fullyResolvedBaseDirectory,
-		fullyResolvedIncrementalsDirectory, endTime, encryption, &kmsEnv,
-		p.User(), false, includeCompacted,
+		fullyResolvedIncrementalsDirectory, endTime, encryption, &kmsEnv, p.User(), false,
 	)
+
 	if err != nil {
 		return err
 	}
-	if restoreStmt.Options.OnlineImpl() {
+	if restoreStmt.Options.ExperimentalOnline {
 		for _, uri := range defaultURIs {
 			if err := cloud.SchemeSupportsEarlyBoot(uri); err != nil {
 				return errors.Wrap(err, "backup URI not supported for online restore")
@@ -1822,8 +1812,8 @@ func doRestorePlan(
 		return err
 	}
 
-	if restoreStmt.Options.OnlineImpl() {
-		if err := checkManifestsForOnlineCompat(ctx, p.ExecCfg().Settings, mainBackupManifests); err != nil {
+	if restoreStmt.Options.ExperimentalOnline {
+		if err := checkManifestsForOnlineCompat(ctx, mainBackupManifests); err != nil {
 			return err
 		}
 	}
@@ -2005,7 +1995,7 @@ func doRestorePlan(
 		return err
 	}
 
-	if restoreStmt.Options.OnlineImpl() {
+	if restoreStmt.Options.ExperimentalOnline {
 		if err := checkBackupElidedPrefixForOnlineCompat(ctx, mainBackupManifests, descriptorRewrites); err != nil {
 			return err
 		}
@@ -2101,7 +2091,6 @@ func doRestorePlan(
 		SkipLocalitiesCheck:              restoreStmt.Options.SkipLocalitiesCheck,
 		ExecutionLocality:                execLocality,
 		ExperimentalOnline:               restoreStmt.Options.ExperimentalOnline,
-		ExperimentalCopy:                 restoreStmt.Options.ExperimentalCopy,
 		RemoveRegions:                    restoreStmt.Options.RemoveRegions,
 		UnsafeRestoreIncompatibleVersion: restoreStmt.Options.UnsafeRestoreIncompatibleVersion,
 	}

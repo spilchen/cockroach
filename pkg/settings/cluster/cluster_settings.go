@@ -32,6 +32,8 @@ type Settings struct {
 	// overwriting the default of a single setting.
 	Manual atomic.Value // bool
 
+	ExternalIODir string
+
 	// Tracks whether a CPU profile is going on and if so, which kind. See
 	// CPUProfileType().
 	// This is used so that we can enable "non-cheap" instrumentation only when it
@@ -61,6 +63,8 @@ type Settings struct {
 type OverridesInformer interface {
 	IsOverridden(settingKey settings.InternalKey) bool
 }
+
+var SettingOverrideErr = errors.New("cluster setting is overridden by system virtual cluster")
 
 // TelemetryOptOut controls whether to opt out of telemetry (including Sentry) or not.
 var TelemetryOptOut = envutil.EnvOrDefaultBool("COCKROACH_SKIP_ENABLING_DIAGNOSTIC_REPORTING", false)
@@ -172,7 +176,9 @@ func MakeTestingClusterSettingsWithVersions(
 // be used for settings objects that are passed as initial parameters for test
 // clusters; the given Settings object should not be in use by any server.
 func TestingCloneClusterSettings(st *Settings) *Settings {
-	result := &Settings{}
+	result := &Settings{
+		ExternalIODir: st.ExternalIODir,
+	}
 	result.Version = clusterversion.MakeVersionHandle(
 		&result.SV, st.Version.LatestVersion(), st.Version.MinSupportedVersion(),
 	)

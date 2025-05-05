@@ -29,7 +29,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
 	"github.com/cockroachdb/cockroach/pkg/storage/fs"
-	"github.com/cockroachdb/cockroach/pkg/storage/mvccencoding"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -41,7 +40,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/pebble"
-	"github.com/cockroachdb/pebble/cockroachkvs"
 	"github.com/cockroachdb/pebble/objstorage/objstorageprovider"
 	"github.com/cockroachdb/pebble/sstable"
 	"github.com/cockroachdb/pebble/vfs"
@@ -90,8 +88,6 @@ func TestEngineComparer(t *testing.T) {
 	ts5 := hlc.Timestamp{WallTime: 1}
 
 	syntheticBit := []byte{1}
-	// mvccencoding.mvccEncodedTimeLogicalLen = 4
-	var zeroLogical [4]byte
 	ts2a := appendBytesToTimestamp(ts2, syntheticBit)
 	ts3a := appendBytesToTimestamp(ts3, zeroLogical[:])
 	ts3b := appendBytesToTimestamp(ts3, slices.Concat(zeroLogical[:], syntheticBit))
@@ -193,7 +189,7 @@ func TestEngineComparer(t *testing.T) {
 	for _, v := range []any{ts1, ts2, ts2a, ts3, ts3a, ts3b, ts4, ts5, lock1, lock2} {
 		suffixes = append(suffixes, encodeVersion(v))
 	}
-	require.NoError(t, pebble.CheckComparer(&EngineComparer, prefixes, suffixes))
+	require.NoError(t, pebble.CheckComparer(EngineComparer, prefixes, suffixes))
 }
 
 func TestPebbleIterReuse(t *testing.T) {
@@ -538,7 +534,7 @@ func BenchmarkMVCCKeyCompare(b *testing.B) {
 	keys := makeRandEncodedKeys()
 	b.ResetTimer()
 	for i, j := 0, 0; i < b.N; i, j = i+1, j+3 {
-		_ = EngineComparer.Compare(keys[i%len(keys)], keys[j%len(keys)])
+		_ = EngineKeyCompare(keys[i%len(keys)], keys[j%len(keys)])
 	}
 }
 
@@ -546,7 +542,7 @@ func BenchmarkMVCCKeyEqual(b *testing.B) {
 	keys := makeRandEncodedKeys()
 	b.ResetTimer()
 	for i, j := 0, 0; i < b.N; i, j = i+1, j+3 {
-		_ = EngineComparer.Equal(keys[i%len(keys)], keys[j%len(keys)])
+		_ = EngineKeyEqual(keys[i%len(keys)], keys[j%len(keys)])
 	}
 }
 
@@ -639,6 +635,7 @@ func TestPebbleValidateKey(t *testing.T) {
 	l := &nonFatalLogger{t: t}
 	opt := func(cfg *engineConfig) error {
 		cfg.opts.LoggerAndTracer = l
+
 		comparer := *cfg.opts.Comparer
 		comparer.ValidateKey = func(k []byte) error {
 			if bytes.Contains(k, []byte("foo")) {
@@ -653,7 +650,9 @@ func TestPebbleValidateKey(t *testing.T) {
 	defer engine.Close()
 
 	ek := EngineKey{Key: roachpb.Key("foo")}
+
 	require.NoError(t, engine.PutEngineKey(ek, []byte("bar")))
+
 	// Force a flush to trigger the compaction error.
 	require.NoError(t, engine.Flush())
 
@@ -689,18 +688,62 @@ func (fs *errorFS) Create(name string, category vfs.DiskWriteCategory) (vfs.File
 	return fs.FS.Create(name, category)
 }
 
+func TestPebbleMVCCIntervalMapper(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	m := pebbleIntervalMapper{}
+	aKey := roachpb.Key("a")
+	uuid := uuid.Must(uuid.FromString("6ba7b810-9dad-11d1-80b4-00c04fd430c8"))
+
+	for _, tc := range []struct {
+		userKey  []byte
+		expected sstable.BlockInterval
+	}{
+		{
+			userKey: func() []byte {
+				ek, _ := LockTableKey{aKey, lock.Intent, uuid}.ToEngineKey(nil)
+				return ek.Encode()
+			}(),
+			// Lock keys are not MVCC keys.
+			expected: sstable.BlockInterval{},
+		},
+		{
+			userKey:  EncodeMVCCKey(MVCCKey{aKey, hlc.Timestamp{WallTime: 2, Logical: 1}}),
+			expected: sstable.BlockInterval{Lower: 2, Upper: 3},
+		},
+		{
+			userKey:  EncodeMVCCKey(MVCCKey{aKey, hlc.Timestamp{WallTime: 22, Logical: 1}}),
+			expected: sstable.BlockInterval{Lower: 22, Upper: 23},
+		},
+		{
+			userKey:  EncodeMVCCKey(MVCCKey{aKey, hlc.Timestamp{WallTime: 25}}),
+			expected: sstable.BlockInterval{Lower: 25, Upper: 26},
+		},
+	} {
+		i, err := m.MapPointKey(sstable.InternalKey{UserKey: tc.userKey}, nil)
+		require.NoError(t, err)
+		require.Equal(t, tc.expected, i)
+	}
+	// An invalid key (malformed sentinel) results in an error.
+	key := EncodeMVCCKey(MVCCKey{aKey, hlc.Timestamp{WallTime: 2, Logical: 1}})
+	sentinelPos := len(key) - 1 - int(key[len(key)-1])
+	key[sentinelPos] = '\xff'
+	_, err := m.MapPointKey(sstable.InternalKey{UserKey: key}, nil)
+	require.Error(t, err)
+}
+
 func TestPebbleMVCCBlockIntervalSuffixReplacer(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	r := cockroachkvs.MVCCBlockIntervalSuffixReplacer{}
-	suffix := mvccencoding.EncodeMVCCTimestampSuffix(hlc.Timestamp{WallTime: 42, Logical: 1})
+	r := MVCCBlockIntervalSuffixReplacer{}
+	suffix := EncodeMVCCTimestampSuffix(hlc.Timestamp{WallTime: 42, Logical: 1})
 	before := sstable.BlockInterval{Lower: 10, Upper: 15}
 	after, err := r.ApplySuffixReplacement(before, suffix)
 	require.NoError(t, err)
 	require.Equal(t, sstable.BlockInterval{Lower: 42, Upper: 43}, after)
 
 	// An invalid suffix (too short) results in an error.
-	suffix = mvccencoding.EncodeMVCCTimestampSuffix(hlc.Timestamp{WallTime: 42, Logical: 1})[1:]
+	suffix = EncodeMVCCTimestampSuffix(hlc.Timestamp{WallTime: 42, Logical: 1})[1:]
 	_, err = r.ApplySuffixReplacement(sstable.BlockInterval{Lower: 1, Upper: 2}, suffix)
 	require.Error(t, err)
 }
@@ -1139,6 +1182,10 @@ func TestPebbleReaderMultipleIterators(t *testing.T) {
 	defer snapshot.Close()
 	require.NoError(t, snapshot.PinEngineStateForIterators(fs.UnknownReadCategory))
 
+	efos := eng.NewEventuallyFileOnlySnapshot([]roachpb.Span{{Key: keys.MinKey, EndKey: keys.MaxKey}})
+	defer efos.Close()
+	require.NoError(t, efos.PinEngineStateForIterators(fs.UnknownReadCategory))
+
 	batch := eng.NewBatch()
 	defer batch.Close()
 	require.NoError(t, batch.PinEngineStateForIterators(fs.UnknownReadCategory))
@@ -1152,6 +1199,7 @@ func TestPebbleReaderMultipleIterators(t *testing.T) {
 		"Engine":   eng,
 		"ReadOnly": readOnly,
 		"Snapshot": snapshot,
+		"EFOS":     efos,
 		"Batch":    batch,
 	}
 	for name, r := range testcases {
@@ -1618,8 +1666,11 @@ func TestPebbleLoggingSlowReads(t *testing.T) {
 		dFS := delayFS{FS: memFS}
 		e, err := fs.InitEnv(context.Background(), dFS, "" /* dir */, fs.EnvConfig{}, nil /* statsCollector */)
 		require.NoError(t, err)
-		// Tiny block cache, so all reads go to FS.
-		db, err := Open(ctx, e, cluster.MakeClusterSettings(), CacheSize(1024))
+		// No block cache, so all reads go to FS.
+		db, err := Open(ctx, e, cluster.MakeClusterSettings(), func(cfg *engineConfig) error {
+			cfg.cacheSize = nil
+			return nil
+		})
 		require.NoError(t, err)
 		defer db.Close()
 		// Write some data and flush to disk.

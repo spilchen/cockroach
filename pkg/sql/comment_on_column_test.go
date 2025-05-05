@@ -224,7 +224,7 @@ func runCommentOnTestsDeclarativeOnly(t *testing.T, testFunc func(db *gosql.DB))
 }
 
 func runOneCommentOnTest(t *testing.T, setupQuery string, testFunc func(db *gosql.DB)) {
-	params, _ := createTestServerParamsAllowTenants()
+	params, _ := createTestServerParams()
 	s, db, _ := serverutils.StartServer(t, params)
 	defer s.Stopper().Stop(context.Background())
 	_, err := db.Exec(setupQuery)

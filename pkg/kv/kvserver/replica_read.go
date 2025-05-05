@@ -583,7 +583,7 @@ func (r *Replica) collectSpansRead(
 				getAlloc.union.Get = &getAlloc.get
 				ru := kvpb.RequestUnion{Value: &getAlloc.union}
 				baCopy.Requests = append(baCopy.Requests, ru)
-			}, false /* includeLockedNonExisting */); err != nil {
+			}); err != nil {
 				return nil, nil, err
 			}
 			continue

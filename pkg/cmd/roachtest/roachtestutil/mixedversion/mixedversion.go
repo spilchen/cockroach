@@ -91,12 +91,10 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/testutils/release"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/version"
 )
 
 const (
 	logPrefix                  = "mixed-version-test"
-	beforeClusterStartLabel    = "run before cluster start hooks"
 	startupLabel               = "run startup hooks"
 	backgroundLabel            = "start background hooks"
 	mixedVersionLabel          = "run mixed-version hooks"
@@ -312,7 +310,6 @@ type (
 	// testHooks groups hooks associated with a mixed-version test in
 	// its different stages: startup, mixed-version, and after-test.
 	testHooks struct {
-		beforeClusterStart    hooks
 		startup               hooks
 		background            hooks
 		mixedVersion          hooks
@@ -535,26 +532,25 @@ func WithTag(tag string) CustomOption {
 // previous major version during upgrade. For example, 24.3 supports upgrade
 // directly from 24.1, but 25.1 only supports upgrade from 24.3.
 func supportsSkipUpgradeTo(v *clusterupgrade.Version) bool {
+	major, minor := v.Version.Major(), v.Version.Minor()
+
 	// Special case for the current release series. This is useful to keep the
 	// test correct when we bump the minimum supported version separately from
 	// the current version.
-	r := clusterversion.Latest.ReleaseSeries()
-	currentMajor := version.MajorVersion{Year: int(r.Major), Ordinal: int(r.Minor)}
-	if currentMajor.Equals(v.Version.Major()) {
+	if r := clusterversion.Latest.ReleaseSeries(); int(r.Major) == major && int(r.Minor) == minor {
 		return len(clusterversion.SupportedPreviousReleases()) > 1
 	}
 
-	series := v.Version.Major()
 	switch {
-	case series.Year < 24:
+	case major < 24:
 		return false
-	case series.Year == 24:
+	case major == 24:
 		// v24.3 is the first version which officially supports the skip upgrade.
-		return series.Ordinal == 3
+		return minor == 3
 	default:
 		// The current plan for 2025+ is for .1 and .3 to be skippable innovation
 		// releases and thus allow skip upgrades to 25.2 and 25.4.
-		return series.Ordinal == 2 || series.Ordinal == 4
+		return minor == 2 || minor == 4
 	}
 }
 
@@ -711,18 +707,6 @@ func (t *Test) InMixedVersion(desc string, fn stepFunc) {
 	}
 
 	t.hooks.AddMixedVersion(versionUpgradeHook{name: desc, predicate: predicate, fn: fn})
-}
-
-// BeforeClusterStart registers a callback that is run before cluster
-// initialization. In the case of multitenant deployments, hooks
-// will be run for both the system and tenant cluster startup. If
-// only one of the two is desired, the caller can check the upgrade
-// stage.
-func (t *Test) BeforeClusterStart(desc string, fn stepFunc) {
-	// Since the callbacks here are only referenced in the setup steps
-	// of the planner, there is no need to have a predicate function
-	// gating them.
-	t.hooks.AddBeforeClusterStart(versionUpgradeHook{name: desc, fn: fn})
 }
 
 // OnStartup registers a callback that is run once the cluster is
@@ -1111,7 +1095,7 @@ func randomPredecessor(
 
 	// If the latest release of a series is a pre-release, we validate
 	// whether the minimum supported version is valid.
-	if predV.IsPrerelease() && !predV.AtLeast(minSupported) {
+	if predV.PreRelease() != "" && !predV.AtLeast(minSupported) {
 		return nil, fmt.Errorf(
 			"latest release for %s (%s) is not sufficient for minimum supported version (%s)",
 			predV.Series(), predV, minSupported.Version,
@@ -1135,7 +1119,7 @@ func randomPredecessor(
 	var supportedPatchReleases []*clusterupgrade.Version
 	for j := minSupported.Patch(); j <= latestPred.Patch(); j++ {
 		supportedV := clusterupgrade.MustParseVersion(
-			fmt.Sprintf("%s.%d", predV.Major().String(), j),
+			fmt.Sprintf("v%d.%d.%d", predV.Major(), predV.Minor(), j),
 		)
 
 		isWithdrawn, err := release.IsWithdrawn(&supportedV.Version)
@@ -1300,10 +1284,6 @@ func (h hooks) AsSteps(prng *rand.Rand, testContext *Context, stopChans []should
 	return steps
 }
 
-func (th *testHooks) AddBeforeClusterStart(hook versionUpgradeHook) {
-	th.beforeClusterStart = append(th.beforeClusterStart, hook)
-}
-
 func (th *testHooks) AddStartup(hook versionUpgradeHook) {
 	th.startup = append(th.startup, hook)
 }
@@ -1318,10 +1298,6 @@ func (th *testHooks) AddMixedVersion(hook versionUpgradeHook) {
 
 func (th *testHooks) AddAfterUpgradeFinalized(hook versionUpgradeHook) {
 	th.afterUpgradeFinalized = append(th.afterUpgradeFinalized, hook)
-}
-
-func (th *testHooks) BeforeClusterStartSteps(testContext *Context, rng *rand.Rand) []testStep {
-	return th.beforeClusterStart.AsSteps(rng, testContext, nil)
 }
 
 func (th *testHooks) StartupSteps(testContext *Context, rng *rand.Rand) []testStep {
@@ -1427,8 +1403,11 @@ func assertValidTest(test *Test, fatalFunc func(...interface{})) {
 
 	currentVersion := clusterupgrade.CurrentVersion()
 	msv := test.options.minimumSupportedVersion
-	// The minimum supported version should be strictly less than the current version
-	validVersion := currentVersion.AtLeast(msv) && !currentVersion.Equal(msv)
+	// The minimum supported version should be from an older major
+	// version or, if from the same major version, from an older minor
+	// version.
+	validVersion := msv.Major() < currentVersion.Major() ||
+		(msv.Major() == currentVersion.Major() && msv.Minor() < currentVersion.Minor())
 
 	if !validVersion {
 		fail(
@@ -1482,8 +1461,12 @@ func assertValidTest(test *Test, fatalFunc func(...interface{})) {
 
 	// Validate that the minimum bootstrap version if set.
 	if minBootstrapVersion := test.options.minimumBootstrapVersion; minBootstrapVersion != nil {
-		// The minimum bootstrap version should be from an older major version.
-		validVersion = minBootstrapVersion.Major().LessThan(currentVersion.Major())
+		// The minimum bootstrap version should be from an older major
+		// version or, if from the same major version, from an older minor
+		// version.
+		validVersion = minBootstrapVersion.Major() < currentVersion.Major() ||
+			(minBootstrapVersion.Major() == currentVersion.Major() && minBootstrapVersion.Minor() < currentVersion.Minor())
+
 		if !validVersion {
 			fail(
 				fmt.Errorf(

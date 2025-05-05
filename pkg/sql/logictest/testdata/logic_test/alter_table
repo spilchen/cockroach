@@ -4430,62 +4430,6 @@ SET use_declarative_schema_changer = $use_decl_sc;
 
 subtest end
 
-subtest alter_table_duplicate_storage_params
-
-statement ok
-CREATE TABLE alter_table_duplicate_storage_params_a (
-  a INT PRIMARY KEY,
-  b TEXT NOT NULL
-);
-
-statement error pgcode 22023 pq: parameter "fillfactor" specified more than once
-ALTER TABLE alter_table_duplicate_storage_params_a SET (fillfactor=20, fillfactor=30);
-
-subtest end
-
-subtest alter_table_alter_primary_key_duplicate_storage_params
-
-statement ok
-CREATE TABLE alter_table_alter_primary_key_duplicate_storage_params_a (
-  a INT PRIMARY KEY,
-  b TEXT NOT NULL
-);
-
-skipif config local-legacy-schema-changer
-statement error pgcode 22023 pq: parameter "bucket_count" specified more than once
-ALTER TABLE alter_table_alter_primary_key_duplicate_storage_params_a
-  ALTER PRIMARY KEY
-  USING COLUMNS (b)
-  USING HASH
-  WITH (bucket_count=30, bucket_count=20);
-
-subtest end
-
-
-# Regression test for #141352, which would previously happen
-# when adding a column with an invalid geometry expression.
-subtest alter_table_add_column_with_invalid_geometry_expression
-
-let $use_decl_sc
-SHOW use_declarative_schema_changer
-
-statement ok
-set use_declarative_schema_changer = on
-
-statement ok
-CREATE TABLE alter_table_add_column_with_invalid_geometry_expression (
-  id INT PRIMARY KEY
-);
-INSERT INTO alter_table_add_column_with_invalid_geometry_expression VALUES (1);
-
-statement error pgcode 22023 pq: failed to construct index entries during backfill: error parsing EWKB: unexpected EOF
-ALTER TABLE alter_table_add_column_with_invalid_geometry_expression ADD COLUMN geom GEOMETRY NULL DEFAULT x'001a'
-
-statement ok
-SET use_declarative_schema_changer = $use_decl_sc;
-
-subtest end
-
 # This is a regression test for #144293 where we were bumping the UDT version of
 # all types unconditionally in the legacy schema changer.
 subtest conditional_bump_udt_version
@@ -4561,24 +4505,5 @@ DROP TABLE t_conditional_bump_udt_version;
 
 statement ok
 DROP TYPE e1;
-
-subtest end
-
-subtest set_logged
-
-statement ok
-CREATE TABLE t_set_logged (a INT PRIMARY KEY);
-
-skipif config weak-iso-level-configs
-query T noticetrace
-ALTER TABLE t_set_logged SET LOGGED;
-----
-NOTICE: SET LOGGED is not supported and has no effect
-
-skipif config weak-iso-level-configs
-query T noticetrace
-ALTER TABLE t_set_logged SET UNLOGGED;
-----
-NOTICE: SET UNLOGGED is not supported and has no effect
 
 subtest end

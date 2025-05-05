@@ -76,9 +76,9 @@ func (c *CustomFuncs) BoolType() *types.T {
 	return types.Bool
 }
 
-// AnyType returns the wildcard AnyElement type.
+// AnyType returns the wildcard Any type.
 func (c *CustomFuncs) AnyType() *types.T {
-	return types.AnyElement
+	return types.Any
 }
 
 // CanConstructBinary returns true if (op left right) has a valid binary op

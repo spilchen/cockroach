@@ -290,13 +290,6 @@ func TestLogic_bpchar(
 	runLogicTest(t, "bpchar")
 }
 
-func TestLogic_buffered_writes(
-	t *testing.T,
-) {
-	defer leaktest.AfterTest(t)()
-	runLogicTest(t, "buffered_writes")
-}
-
 func TestLogic_builtin_function(
 	t *testing.T,
 ) {
@@ -575,13 +568,6 @@ func TestLogic_dependencies(
 ) {
 	defer leaktest.AfterTest(t)()
 	runLogicTest(t, "dependencies")
-}
-
-func TestLogic_direct_columnar_scans(
-	t *testing.T,
-) {
-	defer leaktest.AfterTest(t)()
-	runLogicTest(t, "direct_columnar_scans")
 }
 
 func TestLogic_discard(
@@ -2502,13 +2488,6 @@ func TestLogic_values(
 	runLogicTest(t, "values")
 }
 
-func TestLogic_vector_index(
-	t *testing.T,
-) {
-	defer leaktest.AfterTest(t)()
-	runLogicTest(t, "vector_index")
-}
-
 func TestLogic_vectorize_agg(
 	t *testing.T,
 ) {
@@ -2542,6 +2521,13 @@ func TestLogic_vectorize_unsupported(
 ) {
 	defer leaktest.AfterTest(t)()
 	runLogicTest(t, "vectorize_unsupported")
+}
+
+func TestLogic_vectoross(
+	t *testing.T,
+) {
+	defer leaktest.AfterTest(t)()
+	runLogicTest(t, "vectoross")
 }
 
 func TestLogic_views(

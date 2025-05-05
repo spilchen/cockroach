@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/server/srverrors"
 	"github.com/cockroachdb/cockroach/pkg/settings"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/persistedsqlstats"
 	"github.com/cockroachdb/cockroach/pkg/util/grpcutil"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/stop"
@@ -442,7 +443,7 @@ func (s *drainServer) drainClients(
 	s.sqlServer.distSQLServer.Drain(ctx, queryMaxWait, reporter)
 
 	// Flush in-memory SQL stats into the statement stats system table.
-	statsProvider := s.sqlServer.pgServer.SQLServer.GetSQLStatsProvider()
+	statsProvider := s.sqlServer.pgServer.SQLServer.GetSQLStatsProvider().(*persistedsqlstats.PersistedSQLStats)
 	// If the SQL server is disabled there is nothing to drain here.
 	if !s.sqlServer.cfg.DisableSQLServer {
 		statsProvider.MaybeFlush(ctx, s.stopper)

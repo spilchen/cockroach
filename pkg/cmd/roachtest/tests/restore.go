@@ -44,19 +44,6 @@ import (
 // will restore.
 const defaultRestoreUptoIncremental = 12
 
-var restoreAggregateFunction = func(test string, histogram *roachtestutil.HistogramMetric) (roachtestutil.AggregatedPerfMetrics, error) {
-	metricValue := histogram.Summaries[0].HighestTrackableValue / 1e9
-
-	return roachtestutil.AggregatedPerfMetrics{
-		{
-			Name:           fmt.Sprintf("%s_max", test),
-			Value:          metricValue,
-			Unit:           "MB/s/node",
-			IsHigherBetter: false,
-		},
-	}, nil
-}
-
 func registerRestoreNodeShutdown(r registry.Registry) {
 	sp := restoreSpecs{
 		hardware: makeHardwareSpecs(hardwareSpecs{}),
@@ -77,7 +64,7 @@ func registerRestoreNodeShutdown(r registry.Registry) {
 	r.Add(registry.TestSpec{
 		Name:                      "restore/nodeShutdown/worker",
 		Owner:                     registry.OwnerDisasterRecovery,
-		Cluster:                   sp.hardware.makeClusterSpecs(r),
+		Cluster:                   sp.hardware.makeClusterSpecs(r, sp.backup.cloud),
 		CompatibleClouds:          sp.backup.CompatibleClouds(),
 		Suites:                    registry.Suites(registry.Nightly),
 		TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
@@ -101,7 +88,7 @@ func registerRestoreNodeShutdown(r registry.Registry) {
 	r.Add(registry.TestSpec{
 		Name:                      "restore/nodeShutdown/coordinator",
 		Owner:                     registry.OwnerDisasterRecovery,
-		Cluster:                   sp.hardware.makeClusterSpecs(r),
+		Cluster:                   sp.hardware.makeClusterSpecs(r, sp.backup.cloud),
 		CompatibleClouds:          sp.backup.CompatibleClouds(),
 		Suites:                    registry.Suites(registry.Nightly),
 		TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
@@ -144,12 +131,11 @@ func registerRestore(r registry.Registry) {
 		Name:                      withPauseSpecs.testName,
 		Owner:                     registry.OwnerDisasterRecovery,
 		Benchmark:                 true,
-		Cluster:                   withPauseSpecs.hardware.makeClusterSpecs(r),
+		Cluster:                   withPauseSpecs.hardware.makeClusterSpecs(r, withPauseSpecs.backup.cloud),
 		Timeout:                   withPauseSpecs.timeout,
 		CompatibleClouds:          withPauseSpecs.backup.CompatibleClouds(),
 		Suites:                    registry.Suites(registry.Nightly),
 		TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
-		PostProcessPerfMetrics:    restoreAggregateFunction,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 
 			rd := makeRestoreDriver(t, c, withPauseSpecs)
@@ -197,7 +183,7 @@ func registerRestore(r registry.Registry) {
 						var fraction gosql.NullFloat64
 						sql.QueryRow(t, `SELECT fraction_completed FROM [SHOW JOB $1]`,
 							jobID).Scan(&fraction)
-						t.L().Printf("RESTORE Progress %.2f", fraction.Float64)
+						t.L().Printf("RESTORE Progress %.2f", fraction)
 						if !fraction.Valid || fraction.Float64 < pauseAtProgress[pauseIndex] {
 							continue
 						}
@@ -264,9 +250,9 @@ func registerRestore(r registry.Registry) {
 						var status string
 						err := conn.QueryRow(`SELECT status FROM [SHOW JOBS] WHERE job_type = 'RESTORE'`).Scan(&status)
 						require.NoError(t, err)
-						if status == string(jobs.StateSucceeded) {
+						if status == string(jobs.StatusSucceeded) {
 							isJobComplete = true
-						} else if status == string(jobs.StateFailed) || status == string(jobs.StateCanceled) {
+						} else if status == string(jobs.StatusFailed) || status == string(jobs.StatusCanceled) {
 							t.Fatalf("job unexpectedly found in %s state", status)
 						}
 					}
@@ -438,7 +424,7 @@ func registerRestore(r registry.Registry) {
 			Name:      sp.testName,
 			Owner:     registry.OwnerDisasterRecovery,
 			Benchmark: true,
-			Cluster:   sp.hardware.makeClusterSpecs(r),
+			Cluster:   sp.hardware.makeClusterSpecs(r, sp.backup.cloud),
 			Timeout:   sp.timeout,
 			// These tests measure performance. To ensure consistent perf,
 			// disable metamorphic encryption.
@@ -447,7 +433,6 @@ func registerRestore(r registry.Registry) {
 			Suites:                    sp.suites,
 			TestSelectionOptOutSuites: sp.suites,
 			Skip:                      sp.skip,
-			PostProcessPerfMetrics:    restoreAggregateFunction,
 			Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 
 				rd := makeRestoreDriver(t, c, sp)
@@ -529,7 +514,9 @@ type hardwareSpecs struct {
 	zones []string
 }
 
-func (hw hardwareSpecs) makeClusterSpecs(r registry.Registry) spec.ClusterSpec {
+func (hw hardwareSpecs) makeClusterSpecs(
+	r registry.Registry, backupCloud spec.Cloud,
+) spec.ClusterSpec {
 	clusterOpts := make([]spec.Option, 0)
 	clusterOpts = append(clusterOpts, spec.CPU(hw.cpus))
 	if hw.volumeSize != 0 {
@@ -541,11 +528,6 @@ func (hw hardwareSpecs) makeClusterSpecs(r registry.Registry) spec.ClusterSpec {
 	addWorkloadNode := 0
 	if hw.workloadNode {
 		addWorkloadNode++
-		clusterOpts = append(clusterOpts, spec.WorkloadNodeCount(1))
-		// If the workload node has 32 cpus, we need to specify it.
-		if hw.workloadNode && hw.cpus != 0 {
-			clusterOpts = append(clusterOpts, spec.WorkloadNodeCPU(min(16, hw.cpus)))
-		}
 	}
 	if len(hw.zones) > 0 {
 		// Each test is set up to run on one specific cloud, so it's ok that the

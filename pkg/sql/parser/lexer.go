@@ -164,10 +164,7 @@ func (l *lexer) Lex(lval *sqlSymType) int {
 		(afterCommaOrParen && followedByNonPunctThenParen) ||
 			// CREATE ... (INVERTED INDEX abc (
 			// CREATE ... (x INT, y INT, INVERTED INDEX abc (
-			(afterCommaOrParenThenINVERTED && followedByNonPunctThenParen) ||
-			// CREATE ... (VECTOR INDEX abc (
-			// CREATE ... (x INT, y INT, VECTOR INDEX abc (
-			(afterCommaOrParenThenVECTOR && followedByNonPunctThenParen) {
+			(afterCommaOrParenThenINVERTED && followedByNonPunctThenParen) {
 			lval.id = INDEX_BEFORE_NAME_THEN_PAREN
 			break
 		}

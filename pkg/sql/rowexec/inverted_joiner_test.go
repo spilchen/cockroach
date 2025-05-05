@@ -776,7 +776,7 @@ func TestInvertedJoinerDrain(t *testing.T) {
 	rootTxn := kv.NewTxn(ctx, s.DB(), s.NodeID())
 	leafInputState, err := rootTxn.GetLeafTxnInputState(ctx)
 	require.NoError(t, err)
-	leafTxn := kv.NewLeafTxn(ctx, s.DB(), s.NodeID(), leafInputState, nil /* header */)
+	leafTxn := kv.NewLeafTxn(ctx, s.DB(), s.NodeID(), leafInputState)
 	flowCtx := execinfra.FlowCtx{
 		EvalCtx: &evalCtx,
 		Mon:     evalCtx.TestingMon,

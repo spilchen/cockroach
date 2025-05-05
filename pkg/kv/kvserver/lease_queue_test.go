@@ -545,9 +545,7 @@ func TestLeaseQueueShedsOnIOOverload(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	// The SucceedsSoon has been observed to occasionally time out in both
-	// deadlock and race builds.
-	skip.UnderDuressWithIssue(t, 138903)
+	skip.WithIssue(t, 139324)
 
 	ctx := context.Background()
 

@@ -104,7 +104,7 @@ type ShowBackup struct {
 
 // Format implements the NodeFormatter interface.
 func (node *ShowBackup) Format(ctx *FmtCtx) {
-	if node.Path == nil {
+	if node.InCollection != nil && node.Path == nil {
 		ctx.WriteString("SHOW BACKUPS IN ")
 		ctx.FormatURIs(node.InCollection)
 		return
@@ -124,10 +124,13 @@ func (node *ShowBackup) Format(ctx *FmtCtx) {
 		ctx.WriteString("FROM ")
 	}
 
-	ctx.FormatNode(node.Path)
-	ctx.WriteString(" IN ")
-	ctx.FormatURIs(node.InCollection)
-
+	if node.InCollection != nil {
+		ctx.FormatNode(node.Path)
+		ctx.WriteString(" IN ")
+		ctx.FormatURIs(node.InCollection)
+	} else {
+		ctx.FormatURI(node.Path)
+	}
 	if !node.Options.IsDefault() {
 		ctx.WriteString(" WITH OPTIONS (")
 		ctx.FormatNode(&node.Options)

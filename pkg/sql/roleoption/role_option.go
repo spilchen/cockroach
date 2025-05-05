@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
 	"github.com/cockroachdb/errors"
 )
 
@@ -116,8 +117,6 @@ var toSQLStmts = map[Option]string{
 	VIEWCLUSTERSETTING:     `INSERT INTO system.role_options (username, option, user_id) VALUES ($1, 'VIEWCLUSTERSETTING', $2) ON CONFLICT DO NOTHING`,
 	NOVIEWCLUSTERSETTING:   `DELETE FROM system.role_options WHERE username = $1 AND user_id = $2 AND option = 'VIEWCLUSTERSETTING'`,
 	SUBJECT:                `UPSERT INTO system.role_options (username, option, value, user_id) VALUES ($1, 'SUBJECT', $2::string, $3)`,
-	BYPASSRLS:              `INSERT INTO system.role_options (username, option, user_id) VALUES ($1, 'BYPASSRLS', $2) ON CONFLICT DO NOTHING`,
-	NOBYPASSRLS:            `DELETE FROM system.role_options WHERE username = $1 AND user_id = $2 AND option = 'BYPASSRLS'`,
 }
 
 // Mask returns the bitmask for a given role option.
@@ -262,6 +261,10 @@ func (rol List) GetSQLStmts(onRoleOption func(Option)) (map[string]*RoleOption, 
 		if ro.Option == PASSWORD {
 			continue
 		}
+		if ro.Option == BYPASSRLS || ro.Option == NOBYPASSRLS {
+			return nil, unimplemented.NewWithIssuef(
+				136910, "the BYPASSRLS and NOBYPASSRLS options for roles are not currently supported")
+		}
 
 		stmt := toSQLStmts[ro.Option]
 		stmts[stmt] = ro
@@ -327,9 +330,7 @@ func (rol List) CheckRoleOptionConflicts() error {
 		(roleOptionBits&VIEWCLUSTERSETTING.Mask() != 0 &&
 			roleOptionBits&NOVIEWCLUSTERSETTING.Mask() != 0) ||
 		(roleOptionBits&REPLICATION.Mask() != 0 &&
-			roleOptionBits&NOREPLICATION.Mask() != 0) ||
-		(roleOptionBits&BYPASSRLS.Mask() != 0 &&
-			roleOptionBits&NOBYPASSRLS.Mask() != 0) {
+			roleOptionBits&NOREPLICATION.Mask() != 0) {
 		return pgerror.Newf(pgcode.Syntax, "conflicting role options")
 	}
 	return nil

@@ -97,7 +97,7 @@ func TestValidationWithProtectedTS(t *testing.T) {
 		ptsReader := store.GetStoreConfig().ProtectedTimestampReader
 		require.NoError(
 			t,
-			spanconfigptsreader.TestingRefreshPTSState(ctx, ptsReader, asOf),
+			spanconfigptsreader.TestingRefreshPTSState(ctx, t, ptsReader, asOf),
 		)
 		require.NoError(t, repl.ReadProtectedTimestampsForTesting(ctx))
 	}
@@ -312,7 +312,7 @@ func TestBackfillQueryWithProtectedTS(t *testing.T) {
 			return errors.New(`could not find replica`)
 		}
 		ptsReader := store.GetStoreConfig().ProtectedTimestampReader
-		if err := spanconfigptsreader.TestingRefreshPTSState(ctx, ptsReader, asOf); err != nil {
+		if err := spanconfigptsreader.TestingRefreshPTSState(ctx, t, ptsReader, asOf); err != nil {
 			return err
 		}
 		return repl.ReadProtectedTimestampsForTesting(ctx)

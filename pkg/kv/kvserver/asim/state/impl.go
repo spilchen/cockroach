@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/RaduBerinde/btree" // TODO(#144504): switch to the newer btree
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/allocatorimpl"
@@ -34,6 +33,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/spanconfig/spanconfigreporter"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
+	"github.com/google/btree"
 )
 
 type state struct {
@@ -1207,7 +1207,7 @@ func (s *state) RaftStatus(rangeID RangeID, storeID StoreID) *raft.Status {
 	status.Commit = 2
 	// TODO(kvoli): A replica is never behind on their raft log, this should
 	// change to enable testing this scenario where replicas fall behind. e.g.
-	// Compacted on all replicas will return 1.
+	// FirstIndex on all replicas will return 2.
 	for _, replica := range rng.replicas {
 		status.Progress[raftpb.PeerID(replica.ReplicaID())] = tracker.Progress{
 			Match: 2,

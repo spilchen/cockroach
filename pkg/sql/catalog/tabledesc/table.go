@@ -356,10 +356,6 @@ func (desc *wrapper) EnforcedCheckConstraints() []catalog.CheckConstraint {
 	return desc.getExistingOrNewConstraintCache().checksEnforced
 }
 
-func (desc *wrapper) EnforcedCheckValidators() []catalog.CheckConstraintValidator {
-	return desc.getExistingOrNewConstraintCache().checkValidators
-}
-
 // OutboundForeignKeys implements the catalog.TableDescriptor interface.
 func (desc *wrapper) OutboundForeignKeys() []catalog.ForeignKeyConstraint {
 	return desc.getExistingOrNewConstraintCache().fks
@@ -534,25 +530,8 @@ func RenameColumnInTable(
 		}
 	}
 
-	// Rename the column in any policy expressions.
-	for i := range tableDesc.GetPolicies() {
-		p := &tableDesc.GetPolicies()[i]
-		if p.WithCheckExpr != "" {
-			if err := renameInExpr(&p.WithCheckExpr); err != nil {
-				return err
-			}
-		}
-		if p.UsingExpr != "" {
-			if err := renameInExpr(&p.UsingExpr); err != nil {
-				return err
-			}
-		}
-	}
-
 	// Do all of the above renames inside check constraints, computed expressions,
-	// idx predicates that are in mutations. Policies are excluded here,
-	// as they cannot be modified using the legacy schema changer. Therefore,
-	// no mutations exist for policies.
+	// and idx predicates that are in mutations.
 	for i := range tableDesc.Mutations {
 		m := &tableDesc.Mutations[i]
 		if constraint := m.GetConstraint(); constraint != nil {

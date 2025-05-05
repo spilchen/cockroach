@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -180,7 +179,7 @@ var (
 	}
 
 	possibleNumIncrementalBackups = []int{
-		2,
+		1,
 		3,
 	}
 
@@ -411,14 +410,6 @@ type (
 		incNum     int
 	}
 
-	compactedBackup struct {
-		collection backupCollection
-		startTime  string
-		endTime    string
-
-		fullSubdir string
-	}
-
 	// labeledNodes allows us to label a set of nodes with the version
 	// they are running, to allow for human-readable backup names
 	labeledNodes struct {
@@ -465,7 +456,6 @@ func tableNamesWithDB(db string, tables []string) []string {
 
 func (fb fullBackup) String() string        { return "full" }
 func (ib incrementalBackup) String() string { return "incremental" }
-func (cb compactedBackup) String() string   { return "compacted" }
 
 func (rh revisionHistory) String() string {
 	return "revision_history"
@@ -1724,7 +1714,7 @@ func (u *CommonTestUtils) waitForJobSuccess(
 			continue
 		}
 
-		if jobs.State(status) == jobs.StateFailed {
+		if jobs.Status(status) == jobs.StatusFailed {
 			payload := &jobspb.Payload{}
 			if err := protoutil.Unmarshal(payloadBytes, payload); err == nil {
 				lastErr = fmt.Errorf("job %d failed with error: %s", jobID, payload.Error)
@@ -1736,7 +1726,7 @@ func (u *CommonTestUtils) waitForJobSuccess(
 			break
 		}
 
-		if expected, actual := jobs.StateSucceeded, jobs.State(status); expected != actual {
+		if expected, actual := jobs.StatusSucceeded, jobs.Status(status); expected != actual {
 			lastErr = fmt.Errorf("job %d: current status %q, waiting for %q", jobID, actual, expected)
 			l.Printf("%v", lastErr)
 			continue
@@ -1876,14 +1866,6 @@ func (d *BackupRestoreTestDriver) runBackup(
 		collection = b.collection
 		latest = " LATEST IN"
 		l.Printf("creating incremental backup num %d for %s", b.incNum, collection.name)
-	case compactedBackup:
-		collection = b.collection
-
-		// This latest var is only required to comply with this driver. It has no
-		// effect on compacted backup construction, as the full subdir passed to the
-		// cmd determines the full we compact on.
-		latest = " LATEST IN"
-		l.Printf("creating compacted backup for %s from start %s to end %s", collection.name, b.startTime, b.endTime)
 	}
 
 	for _, opt := range collection.options {
@@ -1901,24 +1883,12 @@ func (d *BackupRestoreTestDriver) runBackup(
 		backupTime,
 		strings.Join(options, ", "),
 	)
-
+	l.Printf("creating %s backup via node %d: %s", bType, node, stmt)
 	var jobID int
-	if compactData, ok := bType.(compactedBackup); ok {
-		backupTime = compactData.endTime
-		if err := db.QueryRowContext(ctx,
-			`SELECT crdb_internal.backup_compaction(
-				$1, 
-				$2,
-				$3::DECIMAL, $4::DECIMAL
-			)`, stmt, compactData.fullSubdir, compactData.startTime, compactData.endTime).Scan(&jobID); err != nil {
-			return backupCollection{}, "", fmt.Errorf("error while creating %s compacted backup %s: %w", bType, collection.name, err)
-		}
-	} else {
-		l.Printf("creating %s backup via node %d: %s", bType, node, stmt)
-		if err := db.QueryRowContext(ctx, stmt).Scan(&jobID); err != nil {
-			return backupCollection{}, "", fmt.Errorf("error while creating %s backup %s: %w", bType, collection.name, err)
-		}
+	if err := db.QueryRowContext(ctx, stmt).Scan(&jobID); err != nil {
+		return backupCollection{}, "", fmt.Errorf("error while creating %s backup %s: %w", bType, collection.name, err)
 	}
+
 	backupErr := make(chan error)
 	tasker.Go(func(ctx context.Context, l *logger.Logger) error {
 		defer close(backupErr)
@@ -2054,7 +2024,6 @@ func (d *BackupRestoreTestDriver) createBackupCollection(
 	isMultitenant bool,
 ) (*backupCollection, error) {
 	var collection backupCollection
-	backupEndTimes := make([]string, 0)
 	var latestIncBackupEndTime string
 	var fullBackupEndTime string
 
@@ -2069,15 +2038,17 @@ func (d *BackupRestoreTestDriver) createBackupCollection(
 	}); err != nil {
 		return nil, err
 	}
-	backupEndTimes = append(backupEndTimes, fullBackupEndTime)
 
 	// Create incremental backups.
 	numIncrementals := possibleNumIncrementalBackups[rng.Intn(len(possibleNumIncrementalBackups))]
 	if d.testUtils.mock {
-		numIncrementals = 2
+		numIncrementals = 1
+	}
+	if d.testUtils.onlineRestore {
+		numIncrementals = 0
 	}
 	l.Printf("creating %d incremental backups", numIncrementals)
-	for i := range numIncrementals {
+	for i := 0; i < numIncrementals; i++ {
 		d.randomWait(l, rng)
 		if err := d.testUtils.runJobOnOneOf(ctx, l, incBackupSpec.Execute.Nodes, func() error {
 			var err error
@@ -2088,44 +2059,6 @@ func (d *BackupRestoreTestDriver) createBackupCollection(
 			return err
 		}); err != nil {
 			return nil, err
-		}
-		backupEndTimes = append(backupEndTimes, latestIncBackupEndTime)
-
-		if d.testUtils.compactionEnabled && !collection.withRevisionHistory() && len(backupEndTimes) >= 3 {
-			// Require that endIdx - startIdx >= 2 so at least 2 inc backups are
-			// compacted. If there are 3 backupEndTimes, the start must be the the
-			// 0th. Thn endIdx is always the last index for now, so the compacted
-			// backup gets selected to restore.
-			startIdx := rng.Intn(len(backupEndTimes) - 2)
-			endIdx := len(backupEndTimes) - 1
-
-			var fullPath string
-			_, db := d.testUtils.RandomDB(rng, d.roachNodes)
-			row := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT path 
-        FROM [SHOW BACKUPS IN '%s']
-        ORDER BY path DESC
-        LIMIT 1`, collection.uri()))
-			if err := row.Scan(&fullPath); err != nil {
-				return nil, errors.Wrapf(err, "error while getting full backup path %s", collection.name)
-			}
-			compact := compactedBackup{collection: collection, startTime: backupEndTimes[startIdx], endTime: backupEndTimes[endIdx], fullSubdir: fullPath}
-			if err := d.testUtils.runJobOnOneOf(ctx, l, incBackupSpec.Execute.Nodes, func() error {
-				var err error
-				collection, latestIncBackupEndTime, err = d.runBackup(
-					ctx, l, tasker, rng, incBackupSpec.Plan.Nodes, incBackupSpec.PauseProbability,
-					compact, internalSystemJobs, isMultitenant)
-				return err
-			}); err != nil {
-				return nil, err
-			}
-			// Since a compacted backup was made, then the backup end times of the
-			// backups it compacted should be removed from the slice. This prevents a
-			// scenario where a later compaction attempts to pick a start time from
-			// one of the backups that were compacted. Since compaction looks at the
-			// elided backup chain, these compacted backups are replaced by the
-			// compacted backup and compaction will fail due to being unable to find
-			// the starting backup.
-			backupEndTimes = slices.Delete(backupEndTimes, startIdx+1, endIdx)
 		}
 	}
 
@@ -2751,6 +2684,7 @@ func registerBackupMixedVersion(r registry.Registry) {
 				// of concurrent steps.
 				mixedversion.DisableMutators(
 					mixedversion.ClusterSettingMutator("kv.expiration_leases_only.enabled"),
+					mixedversion.ClusterSettingMutator("kv.snapshot_receiver.excise.enabled"),
 					mixedversion.ClusterSettingMutator("storage.ingest_split.enabled"),
 					mixedversion.ClusterSettingMutator("storage.sstable.compression_algorithm"),
 				),
@@ -2899,12 +2833,11 @@ func prepSchemaChangeWorkload(
 }
 
 type CommonTestUtils struct {
-	t                 test.Test
-	cluster           cluster.Cluster
-	roachNodes        option.NodeListOption
-	mock              bool
-	onlineRestore     bool
-	compactionEnabled bool
+	t             test.Test
+	cluster       cluster.Cluster
+	roachNodes    option.NodeListOption
+	mock          bool
+	onlineRestore bool
 
 	connCache struct {
 		mu    syncutil.Mutex
@@ -2912,34 +2845,17 @@ type CommonTestUtils struct {
 	}
 }
 
-type commonTestOption func(*CommonTestUtils)
-
-func withMock(mock bool) commonTestOption {
-	return func(c *CommonTestUtils) {
-		c.mock = mock
-	}
-}
-
-func withOnlineRestore(or bool) commonTestOption {
-	return func(c *CommonTestUtils) {
-		c.onlineRestore = or
-	}
-}
-
-func withCompaction(c bool) commonTestOption {
-	return func(cu *CommonTestUtils) {
-		cu.compactionEnabled = c
-	}
-}
-
-// Change the function signature
+// newCommonTestUtils creates a connection to each node (given that the nodes list is not empty)
+// and puts these connections in a cache for reuse. The caller should remember to close all connections
+// once done with them to prevent any goroutine leaks (CloseConnections).
 func newCommonTestUtils(
 	ctx context.Context,
 	t test.Test,
 	c cluster.Cluster,
 	connectFunc func(int) (*gosql.DB, error),
 	nodes option.NodeListOption,
-	opts ...commonTestOption,
+	mock bool,
+	onlineRestore bool,
 ) (*CommonTestUtils, error) {
 	cc := make([]*gosql.DB, len(nodes))
 	for _, node := range nodes {
@@ -2955,16 +2871,13 @@ func newCommonTestUtils(
 	}
 
 	u := &CommonTestUtils{
-		t:          t,
-		cluster:    c,
-		roachNodes: nodes,
+		t:             t,
+		cluster:       c,
+		roachNodes:    nodes,
+		mock:          mock,
+		onlineRestore: onlineRestore,
 	}
 	u.connCache.cache = cc
-
-	// Apply all options
-	for _, opt := range opts {
-		opt(u)
-	}
 	return u, nil
 }
 
@@ -2975,7 +2888,7 @@ func (mvb *mixedVersionBackup) CommonTestUtils(
 	mvb.utilsOnce.Do(func() {
 		connectFunc := func(node int) (*gosql.DB, error) { return h.Connect(node), nil }
 		mvb.commonTestUtils, err = newCommonTestUtils(
-			ctx, mvb.t, mvb.cluster, connectFunc, mvb.roachNodes,
+			ctx, mvb.t, mvb.cluster, connectFunc, mvb.roachNodes, false, false,
 		)
 	})
 	return mvb.commonTestUtils, err

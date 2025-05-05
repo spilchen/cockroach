@@ -29,12 +29,12 @@ var _ metric.PrometheusExportable = (*AggCounter)(nil)
 // NewCounter constructs a new AggCounter.
 func NewCounter(metadata metric.Metadata, childLabels ...string) *AggCounter {
 	c := &AggCounter{g: *metric.NewCounter(metadata)}
-	c.initWithBTreeStorageType(childLabels)
+	c.init(childLabels)
 	return c
 }
 
 // GetName is part of the metric.Iterable interface.
-func (c *AggCounter) GetName(useStaticLabels bool) string { return c.g.GetName(useStaticLabels) }
+func (c *AggCounter) GetName() string { return c.g.GetName() }
 
 // GetHelp is part of the metric.Iterable interface.
 func (c *AggCounter) GetHelp() string { return c.g.GetHelp() }
@@ -57,8 +57,8 @@ func (c *AggCounter) GetType() *io_prometheus_client.MetricType {
 }
 
 // GetLabels is part of the metric.PrometheusExportable interface.
-func (c *AggCounter) GetLabels(useStaticLabels bool) []*io_prometheus_client.LabelPair {
-	return c.g.GetLabels(useStaticLabels)
+func (c *AggCounter) GetLabels() []*io_prometheus_client.LabelPair {
+	return c.g.GetLabels()
 }
 
 // ToPrometheusMetric is part of the metric.PrometheusExportable interface.
@@ -145,12 +145,12 @@ var _ metric.PrometheusExportable = (*AggCounterFloat64)(nil)
 // NewCounterFloat64 constructs a new AggCounterFloat64.
 func NewCounterFloat64(metadata metric.Metadata, childLabels ...string) *AggCounterFloat64 {
 	c := &AggCounterFloat64{g: *metric.NewCounterFloat64(metadata)}
-	c.initWithBTreeStorageType(childLabels)
+	c.init(childLabels)
 	return c
 }
 
 // GetName is part of the metric.Iterable interface.
-func (c *AggCounterFloat64) GetName(useStaticLabels bool) string { return c.g.GetName(useStaticLabels) }
+func (c *AggCounterFloat64) GetName() string { return c.g.GetName() }
 
 // GetHelp is part of the metric.Iterable interface.
 func (c *AggCounterFloat64) GetHelp() string { return c.g.GetHelp() }
@@ -173,8 +173,8 @@ func (c *AggCounterFloat64) GetType() *io_prometheus_client.MetricType {
 }
 
 // GetLabels is part of the metric.PrometheusExportable interface.
-func (c *AggCounterFloat64) GetLabels(useStaticLabels bool) []*io_prometheus_client.LabelPair {
-	return c.g.GetLabels(useStaticLabels)
+func (c *AggCounterFloat64) GetLabels() []*io_prometheus_client.LabelPair {
+	return c.g.GetLabels()
 }
 
 // ToPrometheusMetric is part of the metric.PrometheusExportable interface.
@@ -242,131 +242,4 @@ func (g *CounterFloat64) Inc(i float64) {
 // than the currently set one. It's assumed the caller holds
 func (g *CounterFloat64) UpdateIfHigher(i float64) {
 	g.value.UpdateIfHigher(i)
-}
-
-// SQLCounter maintains a value as the sum of its children. The counter will
-// report to crdb-internal time series only the aggregate sum of all of its
-// children, while its children are additionally exported to prometheus via the
-// PrometheusIterable interface. SQLCounter differs from AggCounter in that
-// a SQLCounter creates child metrics dynamically while AggCounter needs the
-// child creation up front.
-type SQLCounter struct {
-	g metric.Counter
-	*SQLMetric
-}
-
-var _ metric.Iterable = (*SQLCounter)(nil)
-var _ metric.PrometheusReinitialisable = (*SQLCounter)(nil)
-var _ metric.PrometheusExportable = (*SQLCounter)(nil)
-
-// NewSQLCounter constructs a new SQLCounter.
-func NewSQLCounter(metadata metric.Metadata) *SQLCounter {
-	c := &SQLCounter{
-		g: *metric.NewCounter(metadata),
-	}
-	c.SQLMetric = NewSQLMetric(metric.LabelConfigDisabled)
-	return c
-}
-
-// GetType is part of the metric.PrometheusExportable interface.
-func (c *SQLCounter) GetType() *io_prometheus_client.MetricType {
-	return c.g.GetType()
-}
-
-// GetLabels is part of the metric.PrometheusExportable interface.
-func (c *SQLCounter) GetLabels(useStaticLabels bool) []*io_prometheus_client.LabelPair {
-	return c.g.GetLabels(useStaticLabels)
-}
-
-// ToPrometheusMetric is part of the metric.PrometheusExportable interface.
-func (c *SQLCounter) ToPrometheusMetric() *io_prometheus_client.Metric {
-	return c.g.ToPrometheusMetric()
-}
-
-// GetName is part of the metric.Iterable interface.
-func (c *SQLCounter) GetName(useStaticLabels bool) string {
-	return c.g.GetName(useStaticLabels)
-}
-
-// GetHelp is part of the metric.Iterable interface.
-func (c *SQLCounter) GetHelp() string {
-	return c.g.GetHelp()
-}
-
-// GetMeasurement is part of the metric.Iterable interface.
-func (c *SQLCounter) GetMeasurement() string {
-	return c.g.GetMeasurement()
-}
-
-// GetUnit is part of the metric.Iterable interface.
-func (c *SQLCounter) GetUnit() metric.Unit {
-	return c.g.GetUnit()
-}
-
-// GetMetadata is part of the metric.Iterable interface.
-func (c *SQLCounter) GetMetadata() metric.Metadata {
-	return c.g.GetMetadata()
-}
-
-// Inspect is part of the metric.Iterable interface.
-func (c *SQLCounter) Inspect(f func(interface{})) {
-	f(c)
-}
-
-// Clear resets the counter to zero.
-func (c *SQLCounter) Clear() {
-	c.g.Clear()
-}
-
-// Count returns the aggregate count of all of its current and past children.
-func (c *SQLCounter) Count() int64 {
-	return c.g.Count()
-}
-
-// Inc increments the counter value by i for the given label values. If a
-// counter with the given label values doesn't exist yet, it creates a new
-// counter based on labelConfig and increments it. Inc increments parent metrics
-// irrespective of labelConfig.
-func (c *SQLCounter) Inc(i int64, db, app string) {
-	c.g.Inc(i)
-
-	childMetric, isChildMetricEnabled := c.getChildByLabelConfig(c.createChildCounter, db, app)
-	if !isChildMetricEnabled {
-		return
-	}
-
-	childMetric.(*SQLChildCounter).Inc(i)
-}
-
-func (c *SQLCounter) createChildCounter(labelValues labelValuesSlice) ChildMetric {
-	return &SQLChildCounter{
-		labelValuesSlice: labelValues,
-	}
-}
-
-// SQLChildCounter is a child of a SQLCounter. When metrics are collected by prometheus,
-// each of the children will appear with a distinct label, however, when cockroach
-// internally collects metrics, only the parent is collected.
-type SQLChildCounter struct {
-	labelValuesSlice
-	value metric.Counter
-}
-
-// ToPrometheusMetric constructs a prometheus metric for this Counter.
-func (s *SQLChildCounter) ToPrometheusMetric() *io_prometheus_client.Metric {
-	return &io_prometheus_client.Metric{
-		Counter: &io_prometheus_client.Counter{
-			Value: proto.Float64(float64(s.Value())),
-		},
-	}
-}
-
-// Value returns the SQLChildCounter's current value.
-func (s *SQLChildCounter) Value() int64 {
-	return s.value.Count()
-}
-
-// Inc increments the SQLChildCounter's value.
-func (s *SQLChildCounter) Inc(i int64) {
-	s.value.Inc(i)
 }

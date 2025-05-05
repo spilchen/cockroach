@@ -6,7 +6,6 @@
 package ttlschedule
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 
@@ -21,7 +20,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
-	"github.com/cockroachdb/cockroach/pkg/sql/lexbase"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
@@ -171,12 +169,12 @@ func (s rowLevelTTLExecutor) NotifyJobTermination(
 	ctx context.Context,
 	txn isql.Txn,
 	jobID jobspb.JobID,
-	jobStatus jobs.State,
+	jobStatus jobs.Status,
 	details jobspb.Details,
 	env scheduledjobs.JobSchedulerEnv,
 	sj *jobs.ScheduledJob,
 ) error {
-	if jobStatus == jobs.StateFailed {
+	if jobStatus == jobs.StatusFailed {
 		jobs.DefaultHandleFailedRun(
 			sj,
 			"row level ttl for table [%d] job failed",
@@ -186,7 +184,7 @@ func (s rowLevelTTLExecutor) NotifyJobTermination(
 		return nil
 	}
 
-	if jobStatus == jobs.StateSucceeded {
+	if jobStatus == jobs.StatusSucceeded {
 		s.metrics.NumSucceeded.Inc(1)
 	}
 
@@ -224,13 +222,7 @@ func makeTTLJobDescription(
 ) string {
 	relationName := tn.FQString()
 	pkIndex := tableDesc.GetPrimaryIndex().IndexDesc()
-	pkColNames := make([]string, 0, len(pkIndex.KeyColumnNames))
-	var buf bytes.Buffer
-	for _, name := range pkIndex.KeyColumnNames {
-		lexbase.EncodeRestrictedSQLIdent(&buf, name, lexbase.EncNoFlags)
-		pkColNames = append(pkColNames, buf.String())
-		buf.Reset()
-	}
+	pkColNames := pkIndex.KeyColumnNames
 	pkColDirs := pkIndex.KeyColumnDirections
 	rowLevelTTL := tableDesc.GetRowLevelTTL()
 	ttlExpirationExpr := rowLevelTTL.GetTTLExpr()

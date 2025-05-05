@@ -78,8 +78,6 @@ func alterTableAlterColumnType(
 			// Otherwise, it is a dependency on the column used in the expiration
 			// expression.
 			panic(sqlerrors.NewAlterDependsOnExpirationExprError(op, objType, t.Column.String(), tn.Object(), string(e.ExpirationExpr)))
-		case *scpb.PolicyUsingExpr, *scpb.PolicyWithCheckExpr:
-			panic(sqlerrors.NewAlterDependsOnPolicyExprError(op, objType, t.Column.String()))
 		}
 	})
 

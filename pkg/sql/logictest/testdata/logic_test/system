@@ -313,9 +313,7 @@ ORDER BY name
 ----
 cluster.secret
 diagnostics.reporting.enabled
-feature.vector_index.enabled
 sql.crdb_internal.table_row_statistics.as_of_time
-sql.vecindex.deterministic_fixups.enabled
 version
 
 onlyif config 3node-tenant-default-configs
@@ -331,9 +329,7 @@ ORDER BY name
 ----
 cluster.secret
 diagnostics.reporting.enabled
-feature.vector_index.enabled
 sql.crdb_internal.table_row_statistics.as_of_time
-sql.vecindex.deterministic_fixups.enabled
 version
 
 statement ok
@@ -354,10 +350,8 @@ AND name NOT IN ('version', 'cluster.secret', 'kv.range_merge.queue_enabled')
 ORDER BY name
 ----
 diagnostics.reporting.enabled                      true
-feature.vector_index.enabled                       true
 somesetting                                        somevalue
 sql.crdb_internal.table_row_statistics.as_of_time  -1µs
-sql.vecindex.deterministic_fixups.enabled          true
 
 onlyif config 3node-tenant-default-configs
 query TT
@@ -372,10 +366,8 @@ AND name NOT IN ('version', 'cluster.secret')
 ORDER BY name
 ----
 diagnostics.reporting.enabled                      true
-feature.vector_index.enabled                       true
 somesetting                                        somevalue
 sql.crdb_internal.table_row_statistics.as_of_time  -1µs
-sql.vecindex.deterministic_fixups.enabled          true
 
 user testuser
 

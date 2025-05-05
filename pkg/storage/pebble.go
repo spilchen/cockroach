@@ -6,7 +6,10 @@
 package storage
 
 import (
+	"bytes"
+	"cmp"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -29,7 +32,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/storage/disk"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
 	"github.com/cockroachdb/cockroach/pkg/storage/fs"
-	"github.com/cockroachdb/cockroach/pkg/storage/mvccencoding"
 	"github.com/cockroachdb/cockroach/pkg/storage/pebbleiter"
 	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
 	"github.com/cockroachdb/cockroach/pkg/util/envutil"
@@ -46,7 +48,6 @@ import (
 	"github.com/cockroachdb/logtags"
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
-	"github.com/cockroachdb/pebble/cockroachkvs"
 	"github.com/cockroachdb/pebble/objstorage/objstorageprovider"
 	"github.com/cockroachdb/pebble/objstorage/remote"
 	"github.com/cockroachdb/pebble/rangekey"
@@ -54,8 +55,36 @@ import (
 	"github.com/cockroachdb/pebble/sstable"
 	"github.com/cockroachdb/pebble/sstable/block"
 	"github.com/cockroachdb/pebble/vfs"
-	"github.com/cockroachdb/redact"
-	"github.com/dustin/go-humanize"
+	humanize "github.com/dustin/go-humanize"
+)
+
+// UseEFOS controls whether uses of pebble Snapshots should use
+// EventuallyFileOnlySnapshots instead. This reduces write-amp with the main
+// tradeoff being higher space-amp. Note that UseExciseForSnapshot, if true,
+// effectively causes EventuallyFileOnlySnapshots to be used as well.
+//
+// Note: Do NOT read this setting directly. Use ShouldUseEFOS() instead.
+var UseEFOS = settings.RegisterBoolSetting(
+	settings.SystemOnly,
+	"storage.experimental.eventually_file_only_snapshots.enabled",
+	"set to false to disable eventually-file-only-snapshots (kv.snapshot_receiver.excise.enabled must also be false)",
+	metamorphic.ConstantWithTestBool(
+		"storage.experimental.eventually_file_only_snapshots.enabled", true), /* defaultValue */
+	settings.WithPublic)
+
+// UseExciseForSnapshots controls whether virtual-sstable-based excises should
+// be used instead of range deletions for clearing out replica contents as part
+// of a rebalance/recovery snapshot application. Applied on the receiver side.
+// Note that setting this setting to true also effectively causes UseEFOS above
+// to become true. This interaction is why this setting is defined in the
+// storage package even though it mostly affects KV.
+var UseExciseForSnapshots = settings.RegisterBoolSetting(
+	settings.SystemOnly,
+	"kv.snapshot_receiver.excise.enabled",
+	"set to false to disable excises in place of range deletions for KV snapshots",
+	metamorphic.ConstantWithTestBool(
+		"kv.snapshot_receiver.excise.enabled", true), /* defaultValue */
+	settings.WithPublic,
 )
 
 // IngestSplitEnabled controls whether ingest-time splitting is enabled in
@@ -294,14 +323,241 @@ var concurrentDownloadCompactions = settings.RegisterIntSetting(
 	settings.IntWithMinimum(1),
 )
 
+// ShouldUseEFOS returns true if either of the UseEFOS or UseExciseForSnapshots
+// cluster settings are enabled, and EventuallyFileOnlySnapshots must be used
+// to guarantee snapshot-like semantics.
+func ShouldUseEFOS(settings *settings.Values) bool {
+	return UseEFOS.Get(settings) || UseExciseForSnapshots.Get(settings)
+}
+
+// EngineRangeSuffixCompare implements pebble.Comparer.CompareRangeSuffixes. It
+// compares cockroach suffixes (which are composed of the version and a trailing
+// sentinel byte); the version can be an MVCC timestamp or a lock key. It is
+// more strict than EnginePointSuffixCompare due to historical reasons; see
+// https://github.com/cockroachdb/cockroach/issues/130533
+func EngineRangeSuffixCompare(a, b []byte) int {
+	if len(a) == 0 || len(b) == 0 {
+		// Empty suffixes sort before non-empty suffixes.
+		return cmp.Compare(len(a), len(b))
+	}
+	// Here we are not using normalizeEngineKeyVersionForCompare for historical
+	// reasons, summarized in
+	// https://github.com/cockroachdb/cockroach/issues/130533.
+
+	// Check and strip off sentinel bytes.
+	if buildutil.CrdbTestBuild && len(a) != int(a[len(a)-1]) {
+		panic(errors.AssertionFailedf("malformed suffix: %x", a))
+	}
+	if buildutil.CrdbTestBuild && len(b) != int(b[len(b)-1]) {
+		panic(errors.AssertionFailedf("malformed suffix: %x", b))
+	}
+	return bytes.Compare(b[:len(b)-1], a[:len(a)-1])
+}
+
+// EnginePointSuffixCompare compares suffixes of Cockroach point keys (which are
+// composed of the version and a trailing version-length byte); the version can
+// be an MVCC timestamp or a lock key. EnginePointSuffixCompare differs from
+// EngineSuffixCompare, because EnginePointSuffixCompare normalizes the
+// suffixes. Ideally we'd have one function that implemented the semantics of
+// EnginePointSuffixCompare, but due to historical reasons, range key suffix
+// comparisons must not perform normalization.
+//
+// See https://github.com/cockroachdb/cockroach/issues/130533
+func EnginePointSuffixCompare(a, b []byte) int {
+	// NB: For performance, this routine manually splits the key into the
+	// user-key and version components rather than using DecodeEngineKey. In
+	// most situations, use DecodeEngineKey or GetKeyPartFromEngineKey or
+	// SplitMVCCKey instead of doing this.
+	if len(a) == 0 || len(b) == 0 {
+		// Empty suffixes sort before non-empty suffixes.
+		return cmp.Compare(len(a), len(b))
+	}
+	return bytes.Compare(
+		normalizeEngineSuffixForCompare(b),
+		normalizeEngineSuffixForCompare(a),
+	)
+}
+
+func checkEngineKey(k []byte) {
+	if len(k) == 0 {
+		panic(errors.AssertionFailedf("empty key"))
+	}
+	if int(k[len(k)-1]) >= len(k) {
+		panic(errors.AssertionFailedf("malformed key terminator byte: %x", k))
+	}
+	if k[len(k)-1] == 1 {
+		panic(errors.AssertionFailedf("invalid key terminator byte 1"))
+	}
+}
+
+// EngineKeySplit implements pebble.Compare.Split. It returns the length of the
+// prefix (the key without the version part).
+func EngineKeySplit(k []byte) int {
+	// TODO(radu): Pebble sometimes passes empty "keys" and we have to tolerate
+	// them until we fix that.
+	if len(k) == 0 {
+		return 0
+	}
+	// NB: For performance, this routine manually splits the key rather than using
+	// SplitMVCCKey. In most situations, use SplitMVCCKey instead of doing this.
+	if buildutil.CrdbTestBuild {
+		checkEngineKey(k)
+	}
+	// Pebble requires that keys generated via a split be comparable with
+	// normal encoded engine keys. Encoded engine keys have a suffix
+	// indicating the number of bytes of version data. Engine keys without a
+	// version have a suffix of 0. We're careful in EncodeKey to make sure
+	// that the user-key always has a trailing 0. If there is no version this
+	// falls out naturally. If there is a version we prepend a 0 to the
+	// encoded version data.
+	suffixLen := int(k[len(k)-1])
+	return len(k) - suffixLen
+}
+
+// EngineKeyCompare compares cockroach keys, including the version (which
+// could be MVCC timestamps).
+func EngineKeyCompare(a, b []byte) int {
+	if len(a) == 0 || len(b) == 0 {
+		return cmp.Compare(len(a), len(b))
+	}
+	// NB: For performance, this routine manually splits the key into the
+	// user-key and version components rather than using DecodeEngineKey. In
+	// most situations, use DecodeEngineKey or GetKeyPartFromEngineKey or
+	// SplitMVCCKey instead of doing this.
+	if buildutil.CrdbTestBuild {
+		checkEngineKey(a)
+		checkEngineKey(b)
+	}
+
+	aSuffixLen := int(a[len(a)-1])
+	aSuffixStart := len(a) - aSuffixLen
+	bSuffixLen := int(b[len(b)-1])
+	bSuffixStart := len(b) - bSuffixLen
+
+	// Compare the "user key" part of the key.
+	if c := bytes.Compare(a[:aSuffixStart], b[:bSuffixStart]); c != 0 {
+		return c
+	}
+	if aSuffixLen == 0 || bSuffixLen == 0 {
+		// Empty suffixes come before non-empty suffixes.
+		return cmp.Compare(aSuffixLen, bSuffixLen)
+	}
+
+	return bytes.Compare(
+		normalizeEngineSuffixForCompare(b[bSuffixStart:]),
+		normalizeEngineSuffixForCompare(a[aSuffixStart:]),
+	)
+}
+
+// EngineKeyEqual checks for equality of cockroach keys, including the version
+// (which could be MVCC timestamps).
+func EngineKeyEqual(a, b []byte) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return len(a) == len(b)
+	}
+	// NB: For performance, this routine manually splits the key into the
+	// user-key and version components rather than using DecodeEngineKey. In
+	// most situations, use DecodeEngineKey or GetKeyPartFromEngineKey or
+	// SplitMVCCKey instead of doing this.
+	if buildutil.CrdbTestBuild {
+		checkEngineKey(a)
+		checkEngineKey(b)
+	}
+
+	aSuffixLen := int(a[len(a)-1])
+	aSuffixStart := len(a) - aSuffixLen
+	bSuffixLen := int(b[len(b)-1])
+	bSuffixStart := len(b) - bSuffixLen
+
+	// Fast-path: normalizeEngineSuffixForCompare doesn't strip off bytes when the
+	// length is withWall or withLockTableLen. In this case, as well as cases with
+	// no prefix, we can check for byte equality immediately.
+	const withWall = mvccEncodedTimeSentinelLen + mvccEncodedTimeWallLen
+	const withLockTableLen = mvccEncodedTimeSentinelLen + engineKeyVersionLockTableLen
+	if (aSuffixLen <= withWall && bSuffixLen <= withWall) ||
+		(aSuffixLen == withLockTableLen && bSuffixLen == withLockTableLen) ||
+		aSuffixLen == 0 || bSuffixLen == 0 {
+		return bytes.Equal(a, b)
+	}
+
+	// Compare the "user key" part of the key.
+	if !bytes.Equal(a[:aSuffixStart], b[:bSuffixStart]) {
+		return false
+	}
+
+	return bytes.Equal(
+		normalizeEngineSuffixForCompare(a[aSuffixStart:]),
+		normalizeEngineSuffixForCompare(b[bSuffixStart:]),
+	)
+}
+
+var zeroLogical [mvccEncodedTimeLogicalLen]byte
+
+// normalizeEngineSuffixForCompare takes a non-empty key suffix (including the
+// trailing sentinel byte) and returns a prefix of the buffer that should be
+// used for byte-wise comparison. It trims the trailing suffix length byte and
+// any other trailing bytes that need to be ignored (like a synthetic bit or
+// zero logical component).
+//
+//gcassert:inline
+func normalizeEngineSuffixForCompare(a []byte) []byte {
+	// Check sentinel byte.
+	if buildutil.CrdbTestBuild && len(a) != int(a[len(a)-1]) {
+		panic(errors.AssertionFailedf("malformed suffix: %x", a))
+	}
+	// Strip off sentinel byte.
+	a = a[:len(a)-1]
+	switch len(a) {
+	case engineKeyVersionWallLogicalAndSyntheticTimeLen:
+		// Strip the synthetic bit component from the timestamp version. The
+		// presence of the synthetic bit does not affect key ordering or equality.
+		a = a[:engineKeyVersionWallAndLogicalTimeLen]
+		fallthrough
+	case engineKeyVersionWallAndLogicalTimeLen:
+		// If the timestamp version contains a logical timestamp component that is
+		// zero, strip the component. encodeMVCCTimestampToBuf will typically omit
+		// the entire logical component in these cases as an optimization, but it
+		// does not guarantee to never include a zero logical component.
+		// Additionally, we can fall into this case after stripping off other
+		// components of the key version earlier on in this function.
+		if bytes.Equal(a[engineKeyVersionWallTimeLen:], zeroLogical[:]) {
+			a = a[:engineKeyVersionWallTimeLen]
+		}
+		fallthrough
+	case engineKeyVersionWallTimeLen:
+		// Nothing to do.
+
+	case engineKeyVersionLockTableLen:
+		// We rely on engineKeyVersionLockTableLen being different from the other
+		// lengths above to ensure that we don't strip parts from a non-timestamp
+		// version.
+
+	default:
+		if buildutil.CrdbTestBuild {
+			panic(errors.AssertionFailedf("version with unexpected length: %x", a))
+		}
+	}
+	return a
+}
+
 // EngineComparer is a pebble.Comparer object that implements MVCC-specific
 // comparator settings for use with Pebble.
-var EngineComparer = func() pebble.Comparer {
-	// We use the pebble/cockroachkvs implementation, but we override the
-	// FormatKey method.
-	c := cockroachkvs.Comparer
+var EngineComparer = &pebble.Comparer{
+	Split:                EngineKeySplit,
+	CompareRangeSuffixes: EngineRangeSuffixCompare,
+	ComparePointSuffixes: EnginePointSuffixCompare,
+	Compare:              EngineKeyCompare,
+	Equal:                EngineKeyEqual,
 
-	c.FormatKey = func(k []byte) fmt.Formatter {
+	AbbreviatedKey: func(k []byte) uint64 {
+		key, ok := GetKeyPartFromEngineKey(k)
+		if !ok {
+			return 0
+		}
+		return pebble.DefaultComparer.AbbreviatedKey(key)
+	},
+
+	FormatKey: func(k []byte) fmt.Formatter {
 		decoded, ok := DecodeEngineKey(k)
 		if !ok {
 			return mvccKeyFormatter{err: errors.Errorf("invalid encoded engine key: %x", k)}
@@ -314,21 +570,69 @@ var EngineComparer = func() pebble.Comparer {
 			return mvccKeyFormatter{key: mvccKey}
 		}
 		return EngineKeyFormatter{key: decoded}
-	}
-	// TODO(jackson): Consider overriding ValidateKey and using the stricter
-	// EngineKey.Validate. Today some tests create lock-table keys without the
-	// lock table prefix and these test keys fail EngineKey.Validate.
-	return c
-}()
+	},
 
-// KeySchemas holds the set of KeySchemas understandable by CockroachDB.
-var KeySchemas = []*pebble.KeySchema{&cockroachkvs.KeySchema}
+	Separator: func(dst, a, b []byte) []byte {
+		aKey, ok := GetKeyPartFromEngineKey(a)
+		if !ok {
+			return append(dst, a...)
+		}
+		bKey, ok := GetKeyPartFromEngineKey(b)
+		if !ok {
+			return append(dst, a...)
+		}
+		// If the keys are the same just return a.
+		if bytes.Equal(aKey, bKey) {
+			return append(dst, a...)
+		}
+		// If the keys are the same or one is empty, just return a.
+		if bytes.Equal(aKey, bKey) || len(aKey) == 0 || len(bKey) == 0 {
+			return append(dst, a...)
+		}
+		n := len(dst)
+		// Engine key comparison uses bytes.Compare on the roachpb.Key, which is the same semantics as
+		// pebble.DefaultComparer, so reuse the latter's Separator implementation.
+		dst = pebble.DefaultComparer.Separator(dst, aKey, bKey)
+		// Did it pick a separator different than aKey -- if it did not we can't do better than a.
+		buf := dst[n:]
+		if bytes.Equal(aKey, buf) {
+			return append(dst[:n], a...)
+		}
+		// The separator is > aKey, so we only need to add the sentinel.
+		return append(dst, 0)
+	},
 
-// TODO(jackson): We need to rethink uses of DefaultKeySchema when we introduce
-// a new key schema.
+	Successor: func(dst, a []byte) []byte {
+		aKey, ok := GetKeyPartFromEngineKey(a)
+		if !ok {
+			return append(dst, a...)
+		}
+		n := len(dst)
+		// Engine key comparison uses bytes.Compare on the roachpb.Key, which is the same semantics as
+		// pebble.DefaultComparer, so reuse the latter's Successor implementation.
+		dst = pebble.DefaultComparer.Successor(dst, aKey)
+		// Did it pick a successor different than aKey -- if it did not we can't do better than a.
+		buf := dst[n:]
+		if bytes.Equal(aKey, buf) {
+			return append(dst[:n], a...)
+		}
+		// The successor is > aKey, so we only need to add the sentinel.
+		return append(dst, 0)
+	},
 
-// DefaultKeySchema is the name of the default key schema.
-var DefaultKeySchema = cockroachkvs.KeySchema.Name
+	ImmediateSuccessor: func(dst, a []byte) []byte {
+		// The key `a` is guaranteed to be a bare prefix: It's a
+		// `engineKeyNoVersion` key without a version—just a trailing 0-byte to
+		// signify the length of the version. For example the user key "foo" is
+		// encoded as: "foo\0". We need to encode the immediate successor to
+		// "foo", which in the natural byte ordering is "foo\0".  Append a
+		// single additional zero, to encode the user key "foo\0" with a
+		// zero-length version.
+		return append(append(dst, a...), 0)
+	},
+
+	Name: "cockroach_comparator",
+}
 
 // MVCCMerger is a pebble.Merger object that implements the merge operator used
 // by Cockroach.
@@ -344,7 +648,116 @@ var MVCCMerger = &pebble.Merger{
 	},
 }
 
+var _ sstable.BlockIntervalSuffixReplacer = MVCCBlockIntervalSuffixReplacer{}
+
+type MVCCBlockIntervalSuffixReplacer struct{}
+
+func (MVCCBlockIntervalSuffixReplacer) ApplySuffixReplacement(
+	interval sstable.BlockInterval, newSuffix []byte,
+) (sstable.BlockInterval, error) {
+	synthDecoded, err := DecodeMVCCTimestampSuffix(newSuffix)
+	if err != nil {
+		return sstable.BlockInterval{}, errors.AssertionFailedf("could not decode synthetic suffix")
+	}
+	synthDecodedWalltime := uint64(synthDecoded.WallTime)
+	// The returned bound includes the synthetic suffix, regardless of its logical
+	// component.
+	return sstable.BlockInterval{Lower: synthDecodedWalltime, Upper: synthDecodedWalltime + 1}, nil
+}
+
+type pebbleIntervalMapper struct{}
+
+var _ sstable.IntervalMapper = pebbleIntervalMapper{}
+
+// MapPointKey is part of the sstable.IntervalMapper interface.
+func (pebbleIntervalMapper) MapPointKey(
+	key pebble.InternalKey, value []byte,
+) (sstable.BlockInterval, error) {
+	return mapSuffixToInterval(key.UserKey)
+}
+
+// MapRangeKey is part of the sstable.IntervalMapper interface.
+func (pebbleIntervalMapper) MapRangeKeys(span sstable.Span) (sstable.BlockInterval, error) {
+	var res sstable.BlockInterval
+	for _, k := range span.Keys {
+		i, err := mapSuffixToInterval(k.Suffix)
+		if err != nil {
+			return sstable.BlockInterval{}, err
+		}
+		res.UnionWith(i)
+	}
+	return res, nil
+}
+
+// mapSuffixToInterval maps the suffix of a key to a timestamp interval.
+// The buffer can be an entire key or just the suffix.
+func mapSuffixToInterval(b []byte) (sstable.BlockInterval, error) {
+	if len(b) == 0 {
+		return sstable.BlockInterval{}, nil
+	}
+	// Last byte is the version length + 1 when there is a version,
+	// else it is 0.
+	versionLen := int(b[len(b)-1])
+	if versionLen == 0 {
+		// This is not an MVCC key that we can collect.
+		return sstable.BlockInterval{}, nil
+	}
+	// prefixPartEnd points to the sentinel byte, unless this is a bare suffix, in
+	// which case the index is -1.
+	prefixPartEnd := len(b) - 1 - versionLen
+	// Sanity check: the index should be >= -1. Additionally, if the index is >=
+	// 0, it should point to the sentinel byte, as this is a full EngineKey.
+	if prefixPartEnd < -1 || (prefixPartEnd >= 0 && b[prefixPartEnd] != sentinel) {
+		return sstable.BlockInterval{}, errors.Errorf("invalid key %s", roachpb.Key(b).String())
+	}
+	// We don't need the last byte (the version length).
+	versionLen--
+	// Only collect if this looks like an MVCC timestamp.
+	if versionLen == engineKeyVersionWallTimeLen ||
+		versionLen == engineKeyVersionWallAndLogicalTimeLen ||
+		versionLen == engineKeyVersionWallLogicalAndSyntheticTimeLen {
+		// INVARIANT: -1 <= prefixPartEnd < len(b) - 1.
+		// Version consists of the bytes after the sentinel and before the length.
+		ts := binary.BigEndian.Uint64(b[prefixPartEnd+1:])
+		return sstable.BlockInterval{Lower: ts, Upper: ts + 1}, nil
+	}
+	return sstable.BlockInterval{}, nil
+}
+
 const mvccWallTimeIntervalCollector = "MVCCTimeInterval"
+
+var _ pebble.BlockPropertyFilterMask = (*mvccWallTimeIntervalRangeKeyMask)(nil)
+
+type mvccWallTimeIntervalRangeKeyMask struct {
+	sstable.BlockIntervalFilter
+}
+
+// SetSuffix implements the pebble.BlockPropertyFilterMask interface.
+func (m *mvccWallTimeIntervalRangeKeyMask) SetSuffix(suffix []byte) error {
+	if len(suffix) == 0 {
+		// This is currently impossible, because the only range key Cockroach
+		// writes today is the MVCC Delete Range that's always suffixed.
+		return nil
+	}
+	ts, err := DecodeMVCCTimestampSuffix(suffix)
+	if err != nil {
+		return err
+	}
+	m.BlockIntervalFilter.SetInterval(uint64(ts.WallTime), math.MaxUint64)
+	return nil
+}
+
+// PebbleBlockPropertyCollectors is the list of functions to construct
+// BlockPropertyCollectors.
+var PebbleBlockPropertyCollectors = []func() pebble.BlockPropertyCollector{
+	func() pebble.BlockPropertyCollector {
+		return sstable.NewBlockIntervalCollector(
+			mvccWallTimeIntervalCollector,
+			pebbleIntervalMapper{},
+			MVCCBlockIntervalSuffixReplacer{},
+		)
+	},
+}
 
 // MinimumSupportedFormatVersion is the version that provides features that the
 // Cockroach code relies on unconditionally (like range keys). New stores are by
@@ -355,9 +768,9 @@ const MinimumSupportedFormatVersion = pebble.FormatColumnarBlocks
 // DefaultPebbleOptions returns the default pebble options.
 func DefaultPebbleOptions() *pebble.Options {
 	opts := &pebble.Options{
-		Comparer:   &EngineComparer,
+		Comparer:   EngineComparer,
 		FS:         vfs.Default,
-		KeySchema:  DefaultKeySchema,
+		KeySchema:  keySchema.Name,
 		KeySchemas: sstable.MakeKeySchemas(KeySchemas...),
 		// A value of 2 triggers a compaction when there is 1 sub-level.
 		L0CompactionThreshold: 2,
@@ -371,7 +784,7 @@ func DefaultPebbleOptions() *pebble.Options {
 		MemTableSize:                64 << 20, // 64 MB
 		MemTableStopWritesThreshold: 4,
 		Merger:                      MVCCMerger,
-		BlockPropertyCollectors:     cockroachkvs.BlockPropertyCollectors,
+		BlockPropertyCollectors:     PebbleBlockPropertyCollectors,
 		FormatMajorVersion:          MinimumSupportedFormatVersion,
 	}
 	opts.Experimental.L0CompactionConcurrency = l0SubLevelCompactionConcurrency
@@ -455,6 +868,11 @@ type engineConfig struct {
 	// ballastSize is the amount reserved by a ballast file for manual
 	// out-of-disk recovery.
 	ballastSize int64
+	// cacheSize is stored separately so that we can avoid constructing the
+	// PebbleConfig.Opts.Cache until the call to Open. A Cache is created with
+	// a ref count of 1, so creating the Cache during execution of
+	// ConfigOption makes it too easy to leak a cache.
+	cacheSize *int64
 	// env holds the initialized virtual filesystem that the Engine should use.
 	env *fs.Env
 	// maxSize is used for calculating free space and making rebalancing
@@ -556,7 +974,6 @@ type Pebble struct {
 	storeIDPebbleLog *base.StoreIDContainer
 	replayer         *replay.WorkloadCollector
 	diskSlowFunc     atomic.Pointer[func(vfs.DiskSlowInfo)]
-	lowDiskSpaceFunc atomic.Pointer[func(pebble.LowDiskSpaceInfo)]
 
 	singleDelLogEvery log.EveryN
 }
@@ -586,13 +1003,6 @@ func (p *Pebble) SetCompactionConcurrency(n uint64) uint64 {
 // registered per Pebble instance.
 func (p *Pebble) RegisterDiskSlowCallback(f func(vfs.DiskSlowInfo)) {
 	p.diskSlowFunc.Store(&f)
-}
-
-// RegisterLowDiskSpaceCallback registers a callback that will be run when a a
-// disk is running out of space. Only one handler can be registered per Pebble
-// instance.
-func (p *Pebble) RegisterLowDiskSpaceCallback(f func(info pebble.LowDiskSpaceInfo)) {
-	p.lowDiskSpaceFunc.Store(&f)
 }
 
 // AdjustCompactionConcurrency adjusts the compaction concurrency up or down by
@@ -1024,13 +1434,13 @@ func (p *Pebble) writePreventStartupFile(ctx context.Context, corruptionError er
 
 	preventStartupMsg := fmt.Sprintf(`ATTENTION:
 
-This node is terminating because of sstable corruption.
-Corruption may be a consequence of a hardware error.
-A file preventing this node from restarting was placed at:
-%s
+  this node is terminating because of sstable corruption.
+	Corruption may be a consequence of a hardware error.
 
-Error details: %s
-`, path, redact.Sprintf("%+v", corruptionError))
+	Error: %s
+
+  A file preventing this node from restarting was placed at:
+  %s`, corruptionError.Error(), path)
 
 	if err := fs.WriteFile(p.cfg.env.UnencryptedFS, path, []byte(preventStartupMsg), fs.UnspecifiedWriteCategory); err != nil {
 		log.Warningf(ctx, "%v", err)
@@ -1040,17 +1450,9 @@ Error details: %s
 func (p *Pebble) makeMetricEtcEventListener(ctx context.Context) pebble.EventListener {
 	return pebble.EventListener{
 		BackgroundError: func(err error) {
-			// These errors are already logged inside Pebble.
-			//
-			// TODO(radu): we should turn these into cluster events if they are
-			// persistent.
-		},
-		DataCorruption: func(info pebble.DataCorruptionInfo) {
-			if !info.IsRemote {
-				p.writePreventStartupFile(ctx, info.Details)
-				log.Fatalf(ctx, "local corruption detected: %+v", info.Details)
-			} else {
-				log.Errorf(ctx, "remote corruption detected: %+v", info.Details)
+			if errors.Is(err, pebble.ErrCorruption) {
+				p.writePreventStartupFile(ctx, err)
+				log.Fatalf(ctx, "local corruption detected: %v", err)
 			}
 		},
 		WriteStallBegin: func(info pebble.WriteStallBeginInfo) {
@@ -1125,11 +1527,6 @@ func (p *Pebble) makeMetricEtcEventListener(ctx context.Context) pebble.EventLis
 			p.mu.Unlock()
 			if cb != nil {
 				cb()
-			}
-		},
-		LowDiskSpace: func(info pebble.LowDiskSpaceInfo) {
-			if fn := p.lowDiskSpaceFunc.Load(); fn != nil {
-				(*fn)(info)
 			}
 		},
 		PossibleAPIMisuse: func(info pebble.PossibleAPIMisuseInfo) {
@@ -1439,7 +1836,7 @@ func (p *Pebble) ClearMVCCRangeKey(rangeKey MVCCRangeKey) error {
 			rangeKey.StartKey, rangeKey.EndKey, rangeKey.EncodedTimestampSuffix)
 	}
 	return p.ClearEngineRangeKey(
-		rangeKey.StartKey, rangeKey.EndKey, mvccencoding.EncodeMVCCTimestampSuffix(rangeKey.Timestamp))
+		rangeKey.StartKey, rangeKey.EndKey, EncodeMVCCTimestampSuffix(rangeKey.Timestamp))
 }
 
 // PutMVCCRangeKey implements the Engine interface.
@@ -1461,7 +1858,7 @@ func (p *Pebble) PutRawMVCCRangeKey(rangeKey MVCCRangeKey, value []byte) error {
 		return err
 	}
 	return p.PutEngineRangeKey(
-		rangeKey.StartKey, rangeKey.EndKey, mvccencoding.EncodeMVCCTimestampSuffix(rangeKey.Timestamp), value)
+		rangeKey.StartKey, rangeKey.EndKey, EncodeMVCCTimestampSuffix(rangeKey.Timestamp), value)
 }
 
 // Merge implements the Engine interface.
@@ -1780,8 +2177,8 @@ func (p *Pebble) GetEnvStats() (*fs.EnvStats, error) {
 	stats.TotalFiles += uint64(m.WAL.Files + m.Table.ZombieCount + m.WAL.ObsoleteFiles + m.Table.ObsoleteCount)
 	stats.TotalBytes = m.WAL.Size + m.Table.ZombieSize + m.Table.ObsoleteSize
 	for _, l := range m.Levels {
-		stats.TotalFiles += uint64(l.TablesCount)
-		stats.TotalBytes += uint64(l.TablesSize)
+		stats.TotalFiles += uint64(l.NumFiles)
+		stats.TotalBytes += uint64(l.Size)
 	}
 
 	sstSizes := make(map[pebble.FileNum]uint64)
@@ -1863,53 +2260,32 @@ func (p *Pebble) NewWriteBatch() WriteBatch {
 	return newWriteBatch(p.db, p.db.NewBatch(), p.cfg.settings, p, p)
 }
 
-var (
-	// universalKeyRanges holds the widest expressible roachpb.Span. It is used
-	// by NewSnapshot when no key ranges are provided, snapshotting the entirety
-	// of the Engine space. See universalEngineKeyRanges for this value mapped
-	// into the encoded EngineKey keyspace.
-	universalKeyRanges = []roachpb.Span{{Key: roachpb.KeyMin, EndKey: roachpb.KeyMax}}
-	// universalEngineKeyRanges is universalKeyRanges, encoded into the engine
-	// keyspace.
-	universalEngineKeyRanges = makeEngineKeyRanges(universalKeyRanges)
-)
-
-func makeEngineKeyRanges(spans []roachpb.Span) []pebble.KeyRange {
-	engineKeyRanges := make([]pebble.KeyRange, len(spans))
-	for i := range spans {
-		engineKeyRanges[i].Start = EngineKey{Key: spans[i].Key}.Encode()
-		engineKeyRanges[i].End = EngineKey{Key: spans[i].EndKey}.Encode()
+// NewSnapshot implements the Engine interface.
+func (p *Pebble) NewSnapshot() Reader {
+	return &pebbleSnapshot{
+		snapshot: p.db.NewSnapshot(),
+		parent:   p,
 	}
-	return engineKeyRanges
 }
 
-// NewSnapshot implements the Engine interface.
-func (p *Pebble) NewSnapshot(keyRanges ...roachpb.Span) Reader {
-	var engineKeyRanges []pebble.KeyRange
-	var universalSpan bool
-	if len(keyRanges) == 0 {
-		keyRanges = universalKeyRanges
-		engineKeyRanges = universalEngineKeyRanges
-		universalSpan = true
-	} else {
-		engineKeyRanges = makeEngineKeyRanges(keyRanges)
+// NewEventuallyFileOnlySnapshot implements the Engine interface.
+func (p *Pebble) NewEventuallyFileOnlySnapshot(keyRanges []roachpb.Span) EventuallyFileOnlyReader {
+	engineKeyRanges := make([]pebble.KeyRange, len(keyRanges))
+	for i := range keyRanges {
+		engineKeyRanges[i].Start = EngineKey{Key: keyRanges[i].Key}.Encode()
+		engineKeyRanges[i].End = EngineKey{Key: keyRanges[i].EndKey}.Encode()
 	}
 	efos := p.db.NewEventuallyFileOnlySnapshot(engineKeyRanges)
-	return &pebbleSnapshot{
-		efos:          efos,
-		parent:        p,
-		keyRanges:     keyRanges,
-		universalSpan: universalSpan,
+	return &pebbleEFOS{
+		efos:      efos,
+		parent:    p,
+		keyRanges: keyRanges,
 	}
 }
 
-// Excise implements the Engine interface.
-func (p *Pebble) Excise(ctx context.Context, span roachpb.Span) error {
-	rawSpan := pebble.KeyRange{
-		Start: EngineKey{Key: span.Key}.Encode(),
-		End:   EngineKey{Key: span.EndKey}.Encode(),
-	}
-	return p.db.Excise(ctx, rawSpan)
+// Type implements the Engine interface.
+func (p *Pebble) Type() enginepb.EngineType {
+	return enginepb.EngineTypePebble
 }
 
 // IngestLocalFiles implements the Engine interface.
@@ -1931,6 +2307,7 @@ func (p *Pebble) IngestAndExciseFiles(
 	shared []pebble.SharedSSTMeta,
 	external []pebble.ExternalFile,
 	exciseSpan roachpb.Span,
+	sstsContainExciseTombstone bool,
 ) (pebble.IngestOperationStats, error) {
 	rawSpan := pebble.KeyRange{
 		Start: EngineKey{Key: exciseSpan.Key}.Encode(),
@@ -2133,7 +2510,6 @@ func (p *Pebble) CreateCheckpoint(dir string, spans []roachpb.Span) error {
 // version associated with it, since they did so during the fence version.
 var pebbleFormatVersionMap = map[clusterversion.Key]pebble.FormatMajorVersion{
 	clusterversion.V24_3: pebble.FormatColumnarBlocks,
-	clusterversion.V25_2: pebble.FormatTableFormatV6,
 }
 
 // pebbleFormatVersionKeys contains the keys in the map above, in descending order.
@@ -2631,23 +3007,18 @@ func (p *pebbleReadOnly) BufferedSize() int {
 	panic("not implemented")
 }
 
-// pebbleSnapshot implements Reader, backed by a Pebble eventually file-only
-// snapshot created using NewEventuallyFileOnlySnapshot.
+// pebbleSnapshot represents a snapshot created using Pebble.NewSnapshot().
 type pebbleSnapshot struct {
-	efos      *pebble.EventuallyFileOnlySnapshot
-	parent    *Pebble
-	keyRanges []roachpb.Span
-	closed    bool
-	// universalSpan is true if the snapshot covers the entire keyspace.
-	universalSpan bool
+	snapshot *pebble.Snapshot
+	parent   *Pebble
+	closed   bool
 }
 
-// Assert that *pebbleSnapshot implements the Reader interface.
-var _ Reader = (*pebbleSnapshot)(nil)
+var _ Reader = &pebbleSnapshot{}
 
 // Close implements the Reader interface.
 func (p *pebbleSnapshot) Close() {
-	_ = p.efos.Close()
+	_ = p.snapshot.Close()
 	p.closed = true
 }
 
@@ -2679,30 +3050,128 @@ func (p *pebbleSnapshot) MVCCIterate(
 func (p *pebbleSnapshot) NewMVCCIterator(
 	ctx context.Context, iterKind MVCCIterKind, opts IterOptions,
 ) (MVCCIterator, error) {
-	// The snapshot only provides a consistent view of the snapshotted keyspace.
-	// If any bounds are provided, we require that they fall within the
-	// snapshot's keyRanges. Additionally, if the snapshot does not cover the
-	// entirety of the keyspace (!p.universalSpan), we require that the iterator
-	// specifies bounds. Prefix iterators don't have bounds and are exempt.
-	if !p.universalSpan {
-		// TODO(jackson): Enforce the snapshotted bounds on prefix iterators.
-		if !opts.Prefix && (opts.LowerBound == nil || opts.UpperBound == nil) {
-			return nil, errors.AssertionFailedf("cannot create iterators on snapshot without bounds")
+	if iterKind == MVCCKeyAndIntentsIterKind {
+		r := wrapReader(p)
+		// Doing defer r.Free() does not inline.
+		iter, err := r.NewMVCCIterator(ctx, iterKind, opts)
+		r.Free()
+		if err != nil {
+			return nil, err
 		}
-		// If the iterator specifies bounds, ensure they fall within the snapshot's
-		// keyRanges.
-		if opts.LowerBound != nil && opts.UpperBound != nil {
-			var found bool
-			boundSpan := roachpb.Span{Key: opts.LowerBound, EndKey: opts.UpperBound}
-			for i := range p.keyRanges {
-				if p.keyRanges[i].Contains(boundSpan) {
-					found = true
-					break
-				}
+		return maybeWrapInUnsafeIter(iter), nil
+	}
+
+	iter, err := newPebbleIterator(ctx, p.snapshot, opts, StandardDurability, p.parent)
+	if err != nil {
+		return nil, err
+	}
+	return maybeWrapInUnsafeIter(MVCCIterator(iter)), nil
+}
+
+// NewEngineIterator implements the Reader interface.
+func (p pebbleSnapshot) NewEngineIterator(
+	ctx context.Context, opts IterOptions,
+) (EngineIterator, error) {
+	return newPebbleIterator(ctx, p.snapshot, opts, StandardDurability, p.parent)
+}
+
+// ConsistentIterators implements the Reader interface.
+func (p pebbleSnapshot) ConsistentIterators() bool {
+	return true
+}
+
+// PinEngineStateForIterators implements the Reader interface.
+func (p *pebbleSnapshot) PinEngineStateForIterators(fs.ReadCategory) error {
+	// Snapshot already pins state, so nothing to do.
+	return nil
+}
+
+// ScanInternal implements the Reader interface.
+func (p *pebbleSnapshot) ScanInternal(
+	ctx context.Context,
+	lower, upper roachpb.Key,
+	visitPointKey func(key *pebble.InternalKey, value pebble.LazyValue, info pebble.IteratorLevel) error,
+	visitRangeDel func(start []byte, end []byte, seqNum pebble.SeqNum) error,
+	visitRangeKey func(start []byte, end []byte, keys []rangekey.Key) error,
+	visitSharedFile func(sst *pebble.SharedSSTMeta) error,
+	visitExternalFile func(sst *pebble.ExternalFile) error,
+) error {
+	rawLower := EngineKey{Key: lower}.Encode()
+	rawUpper := EngineKey{Key: upper}.Encode()
+	// TODO(sumeer): set category.
+	return p.snapshot.ScanInternal(ctx, block.CategoryUnknown, rawLower, rawUpper, visitPointKey,
+		visitRangeDel, visitRangeKey, visitSharedFile, visitExternalFile)
+}
+
+// pebbleEFOS represents an eventually file-only snapshot created using
+// NewEventuallyFileOnlySnapshot.
+type pebbleEFOS struct {
+	efos      *pebble.EventuallyFileOnlySnapshot
+	parent    *Pebble
+	keyRanges []roachpb.Span
+	closed    bool
+}
+
+var _ EventuallyFileOnlyReader = &pebbleEFOS{}
+
+// Close implements the Reader interface.
+func (p *pebbleEFOS) Close() {
+	_ = p.efos.Close()
+	p.closed = true
+}
+
+// Closed implements the Reader interface.
+func (p *pebbleEFOS) Closed() bool {
+	return p.closed
+}
+
+// MVCCIterate implements the Reader interface.
+func (p *pebbleEFOS) MVCCIterate(
+	ctx context.Context,
+	start, end roachpb.Key,
+	iterKind MVCCIterKind,
+	keyTypes IterKeyType,
+	readCategory fs.ReadCategory,
+	f func(MVCCKeyValue, MVCCRangeKeyStack) error,
+) error {
+	if iterKind == MVCCKeyAndIntentsIterKind {
+		r := wrapReader(p)
+		// Doing defer r.Free() does not inline.
+		err := iterateOnReader(ctx, r, start, end, iterKind, keyTypes, readCategory, f)
+		r.Free()
+		return err
+	}
+	return iterateOnReader(ctx, p, start, end, iterKind, keyTypes, readCategory, f)
+}
+
+// WaitForFileOnly implements the EventuallyFileOnlyReader interface.
+func (p *pebbleEFOS) WaitForFileOnly(
+	ctx context.Context, gracePeriodBeforeFlush time.Duration,
+) error {
+	return p.efos.WaitForFileOnlySnapshot(ctx, gracePeriodBeforeFlush)
+}
+
+// NewMVCCIterator implements the Reader interface.
+func (p *pebbleEFOS) NewMVCCIterator(
+	ctx context.Context, iterKind MVCCIterKind, opts IterOptions,
+) (MVCCIterator, error) {
+	// Check if the bounds fall within the EFOS' keyRanges. We can only do this
+	// check for non-prefix iterators as prefix iterators often don't specify
+	// any bounds.
+	if !opts.Prefix {
+		if opts.LowerBound == nil || opts.UpperBound == nil {
+			return nil, errors.AssertionFailedf("cannot create iterators on EFOS without bounds")
+		}
+		var found bool
+		boundSpan := roachpb.Span{Key: opts.LowerBound, EndKey: opts.UpperBound}
+		for i := range p.keyRanges {
+			if p.keyRanges[i].Contains(boundSpan) {
+				found = true
+				break
 			}
-			if !found {
-				return nil, errors.AssertionFailedf("iterator bounds exceed snapshot key ranges: %s", boundSpan.String())
-			}
+		}
+		if !found {
+			return nil, errors.AssertionFailedf("iterator bounds exceed eventually-file-only-snapshot key ranges: %s", boundSpan.String())
 		}
 	}
 	if iterKind == MVCCKeyAndIntentsIterKind {
@@ -2724,25 +3193,25 @@ func (p *pebbleSnapshot) NewMVCCIterator(
 }
 
 // NewEngineIterator implements the Reader interface.
-func (p *pebbleSnapshot) NewEngineIterator(
+func (p *pebbleEFOS) NewEngineIterator(
 	ctx context.Context, opts IterOptions,
 ) (EngineIterator, error) {
 	return newPebbleIterator(ctx, p.efos, opts, StandardDurability, p.parent)
 }
 
 // ConsistentIterators implements the Reader interface.
-func (p *pebbleSnapshot) ConsistentIterators() bool {
+func (p *pebbleEFOS) ConsistentIterators() bool {
 	return true
 }
 
 // PinEngineStateForIterators implements the Reader interface.
-func (p *pebbleSnapshot) PinEngineStateForIterators(fs.ReadCategory) error {
+func (p *pebbleEFOS) PinEngineStateForIterators(fs.ReadCategory) error {
 	// Snapshot already pins state, so nothing to do.
 	return nil
 }
 
 // ScanInternal implements the Reader interface.
-func (p *pebbleSnapshot) ScanInternal(
+func (p *pebbleEFOS) ScanInternal(
 	ctx context.Context,
 	lower, upper roachpb.Key,
 	visitPointKey func(key *pebble.InternalKey, value pebble.LazyValue, info pebble.IteratorLevel) error,

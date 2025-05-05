@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RaduBerinde/btree" // TODO(#144504): switch to the newer btree
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
@@ -22,6 +21,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
+	"github.com/google/btree"
 )
 
 func makeAmbCtx() log.AmbientContext {
