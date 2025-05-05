@@ -51,7 +51,9 @@ go_test(
         "entry_test.go",
         "main_test.go",
     ],
+    args = ["-test.timeout=895s"],
     embed = [":tenant"],
+    tags = ["ccl_test"],
     deps = [
         "//pkg/base",
         "//pkg/ccl",
@@ -73,7 +75,7 @@ go_test(
         "//pkg/util/timeutil",
         "@com_github_cockroachdb_errors//:errors",
         "@com_github_stretchr_testify//require",
-        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//:go_default_library",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
     ],

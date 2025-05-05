@@ -607,6 +607,7 @@ var ignoredErrorPatterns = []string{
 	"index .* in the middle of being added",
 	"could not mark job .* as succeeded",
 	"failed to read backup descriptor",
+	"AS OF SYSTEM TIME: cannot specify timestamp in the future",
 	"AS OF SYSTEM TIME: timestamp before 1970-01-01T00:00:00Z is invalid",
 	"BACKUP for requested time  needs option 'revision_history'",
 	"RESTORE timestamp: supplied backups do not cover requested time",
@@ -665,6 +666,7 @@ var ignoredErrorPatterns = []string{
 	"cannot call json_object_keys on an array",
 	"cannot set path in scalar",
 	"cannot delete path in scalar",
+	"unable to encode table key: \\*tree\\.DJSON",
 	"path element at position .* is null",
 	"path element is not an integer",
 	"cannot delete from object using integer index",
@@ -810,7 +812,7 @@ func TestRandomDatumRoundtrip(t *testing.T) {
 		}
 		serializedGen := tree.Serialize(generated)
 
-		sema := tree.MakeSemaContext(nil /* resolver */)
+		sema := tree.MakeSemaContext()
 		// We don't care about errors below because they are often
 		// caused by sqlsmith generating bogus queries. We're just
 		// looking for datums that don't match.
@@ -845,9 +847,7 @@ func TestRandomDatumRoundtrip(t *testing.T) {
 		if serialized1 != serialized2 {
 			panic(errors.Errorf("serialized didn't match:\nexpr: %s\nfirst: %s\nsecond: %s", generated, serialized1, serialized2))
 		}
-		if cmp, err := datum1.Compare(ctx, &ec, datum2); err != nil {
-			panic(err)
-		} else if cmp != 0 {
+		if datum1.Compare(&ec, datum2) != 0 {
 			panic(errors.Errorf("%s [%[1]T] != %s [%[2]T] (original expr: %s)", serialized1, serialized2, serializedGen))
 		}
 		return nil

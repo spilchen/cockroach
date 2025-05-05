@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RaduBerinde/btree" // TODO(#144504): switch to the newer btree
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
@@ -22,6 +21,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
+	"github.com/google/btree"
 )
 
 func makeAmbCtx() log.AmbientContext {
@@ -48,13 +48,13 @@ func newTestRangeSet(count int, t *testing.T) *testRangeSet {
 		repl := &Replica{
 			RangeID: desc.RangeID,
 		}
-		repl.shMu.state.Stats = &enginepb.MVCCStats{
+		repl.mu.state.Stats = &enginepb.MVCCStats{
 			KeyBytes:  1,
 			ValBytes:  2,
 			KeyCount:  1,
 			LiveCount: 1,
 		}
-		repl.shMu.state.Desc = desc
+		repl.mu.state.Desc = desc
 		repl.startKey = desc.StartKey // actually used by replicasByKey
 		if exRngItem := rs.replicasByKey.ReplaceOrInsert((*btreeReplica)(repl)); exRngItem != nil {
 			t.Fatalf("failed to insert range %s", repl)

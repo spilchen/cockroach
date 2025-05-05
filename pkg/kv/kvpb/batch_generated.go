@@ -9,6 +9,80 @@ import (
 	"strings"
 )
 
+// GetInner returns the error contained in the union.
+func (ru ErrorDetail) GetInner() error {
+	switch t := ru.GetValue().(type) {
+	case *ErrorDetail_NotLeaseHolder:
+		return t.NotLeaseHolder
+	case *ErrorDetail_RangeNotFound:
+		return t.RangeNotFound
+	case *ErrorDetail_RangeKeyMismatch:
+		return t.RangeKeyMismatch
+	case *ErrorDetail_ReadWithinUncertaintyInterval:
+		return t.ReadWithinUncertaintyInterval
+	case *ErrorDetail_TransactionAborted:
+		return t.TransactionAborted
+	case *ErrorDetail_TransactionPush:
+		return t.TransactionPush
+	case *ErrorDetail_TransactionRetry:
+		return t.TransactionRetry
+	case *ErrorDetail_TransactionStatus:
+		return t.TransactionStatus
+	case *ErrorDetail_LockConflict:
+		return t.LockConflict
+	case *ErrorDetail_WriteTooOld:
+		return t.WriteTooOld
+	case *ErrorDetail_OpRequiresTxn:
+		return t.OpRequiresTxn
+	case *ErrorDetail_ConditionFailed:
+		return t.ConditionFailed
+	case *ErrorDetail_LeaseRejected:
+		return t.LeaseRejected
+	case *ErrorDetail_NodeUnavailable:
+		return t.NodeUnavailable
+	case *ErrorDetail_RaftGroupDeleted:
+		return t.RaftGroupDeleted
+	case *ErrorDetail_ReplicaCorruption:
+		return t.ReplicaCorruption
+	case *ErrorDetail_ReplicaTooOld:
+		return t.ReplicaTooOld
+	case *ErrorDetail_AmbiguousResult:
+		return t.AmbiguousResult
+	case *ErrorDetail_StoreNotFound:
+		return t.StoreNotFound
+	case *ErrorDetail_TransactionRetryWithProtoRefresh:
+		return t.TransactionRetryWithProtoRefresh
+	case *ErrorDetail_IntegerOverflow:
+		return t.IntegerOverflow
+	case *ErrorDetail_UnsupportedRequest:
+		return t.UnsupportedRequest
+	case *ErrorDetail_TimestampBefore:
+		return t.TimestampBefore
+	case *ErrorDetail_TxnAlreadyEncounteredError:
+		return t.TxnAlreadyEncounteredError
+	case *ErrorDetail_IntentMissing:
+		return t.IntentMissing
+	case *ErrorDetail_MergeInProgress:
+		return t.MergeInProgress
+	case *ErrorDetail_RangefeedRetry:
+		return t.RangefeedRetry
+	case *ErrorDetail_IndeterminateCommit:
+		return t.IndeterminateCommit
+	case *ErrorDetail_InvalidLeaseError:
+		return t.InvalidLeaseError
+	case *ErrorDetail_OptimisticEvalConflicts:
+		return t.OptimisticEvalConflicts
+	case *ErrorDetail_MinTimestampBoundUnsatisfiable:
+		return t.MinTimestampBoundUnsatisfiable
+	case *ErrorDetail_RefreshFailedError:
+		return t.RefreshFailedError
+	case *ErrorDetail_MVCCHistoryMutation:
+		return t.MVCCHistoryMutation
+	default:
+		return nil
+	}
+}
+
 // GetInner returns the Request contained in the union.
 func (ru RequestUnion) GetInner() Request {
 	switch t := ru.GetValue().(type) {
@@ -108,10 +182,6 @@ func (ru RequestUnion) GetInner() Request {
 		return t.Probe
 	case *RequestUnion_IsSpanEmpty:
 		return t.IsSpanEmpty
-	case *RequestUnion_LinkExternalSstable:
-		return t.LinkExternalSstable
-	case *RequestUnion_Excise:
-		return t.Excise
 	default:
 		return nil
 	}
@@ -214,13 +284,86 @@ func (ru ResponseUnion) GetInner() Response {
 		return t.Probe
 	case *ResponseUnion_IsSpanEmpty:
 		return t.IsSpanEmpty
-	case *ResponseUnion_LinkExternalSstable:
-		return t.LinkExternalSstable
-	case *ResponseUnion_Excise:
-		return t.Excise
 	default:
 		return nil
 	}
+}
+
+// MustSetInner sets the error in the union.
+func (ru *ErrorDetail) MustSetInner(r error) {
+	ru.Reset()
+	var union isErrorDetail_Value
+	switch t := r.(type) {
+	case *NotLeaseHolderError:
+		union = &ErrorDetail_NotLeaseHolder{t}
+	case *RangeNotFoundError:
+		union = &ErrorDetail_RangeNotFound{t}
+	case *RangeKeyMismatchError:
+		union = &ErrorDetail_RangeKeyMismatch{t}
+	case *ReadWithinUncertaintyIntervalError:
+		union = &ErrorDetail_ReadWithinUncertaintyInterval{t}
+	case *TransactionAbortedError:
+		union = &ErrorDetail_TransactionAborted{t}
+	case *TransactionPushError:
+		union = &ErrorDetail_TransactionPush{t}
+	case *TransactionRetryError:
+		union = &ErrorDetail_TransactionRetry{t}
+	case *TransactionStatusError:
+		union = &ErrorDetail_TransactionStatus{t}
+	case *LockConflictError:
+		union = &ErrorDetail_LockConflict{t}
+	case *WriteTooOldError:
+		union = &ErrorDetail_WriteTooOld{t}
+	case *OpRequiresTxnError:
+		union = &ErrorDetail_OpRequiresTxn{t}
+	case *ConditionFailedError:
+		union = &ErrorDetail_ConditionFailed{t}
+	case *LeaseRejectedError:
+		union = &ErrorDetail_LeaseRejected{t}
+	case *NodeUnavailableError:
+		union = &ErrorDetail_NodeUnavailable{t}
+	case *RaftGroupDeletedError:
+		union = &ErrorDetail_RaftGroupDeleted{t}
+	case *ReplicaCorruptionError:
+		union = &ErrorDetail_ReplicaCorruption{t}
+	case *ReplicaTooOldError:
+		union = &ErrorDetail_ReplicaTooOld{t}
+	case *AmbiguousResultError:
+		union = &ErrorDetail_AmbiguousResult{t}
+	case *StoreNotFoundError:
+		union = &ErrorDetail_StoreNotFound{t}
+	case *TransactionRetryWithProtoRefreshError:
+		union = &ErrorDetail_TransactionRetryWithProtoRefresh{t}
+	case *IntegerOverflowError:
+		union = &ErrorDetail_IntegerOverflow{t}
+	case *UnsupportedRequestError:
+		union = &ErrorDetail_UnsupportedRequest{t}
+	case *BatchTimestampBeforeGCError:
+		union = &ErrorDetail_TimestampBefore{t}
+	case *TxnAlreadyEncounteredErrorError:
+		union = &ErrorDetail_TxnAlreadyEncounteredError{t}
+	case *IntentMissingError:
+		union = &ErrorDetail_IntentMissing{t}
+	case *MergeInProgressError:
+		union = &ErrorDetail_MergeInProgress{t}
+	case *RangeFeedRetryError:
+		union = &ErrorDetail_RangefeedRetry{t}
+	case *IndeterminateCommitError:
+		union = &ErrorDetail_IndeterminateCommit{t}
+	case *InvalidLeaseError:
+		union = &ErrorDetail_InvalidLeaseError{t}
+	case *OptimisticEvalConflictsError:
+		union = &ErrorDetail_OptimisticEvalConflicts{t}
+	case *MinTimestampBoundUnsatisfiableError:
+		union = &ErrorDetail_MinTimestampBoundUnsatisfiable{t}
+	case *RefreshFailedError:
+		union = &ErrorDetail_RefreshFailedError{t}
+	case *MVCCHistoryMutationError:
+		union = &ErrorDetail_MVCCHistoryMutation{t}
+	default:
+		panic(fmt.Sprintf("unsupported type %T for %T", r, ru))
+	}
+	ru.Value = union
 }
 
 // MustSetInner sets the Request in the union.
@@ -324,10 +467,6 @@ func (ru *RequestUnion) MustSetInner(r Request) {
 		union = &RequestUnion_Probe{t}
 	case *IsSpanEmptyRequest:
 		union = &RequestUnion_IsSpanEmpty{t}
-	case *LinkExternalSSTableRequest:
-		union = &RequestUnion_LinkExternalSstable{t}
-	case *ExciseRequest:
-		union = &RequestUnion_Excise{t}
 	default:
 		panic(fmt.Sprintf("unsupported type %T for %T", r, ru))
 	}
@@ -433,17 +572,13 @@ func (ru *ResponseUnion) MustSetInner(r Response) {
 		union = &ResponseUnion_Probe{t}
 	case *IsSpanEmptyResponse:
 		union = &ResponseUnion_IsSpanEmpty{t}
-	case *LinkExternalSSTableResponse:
-		union = &ResponseUnion_LinkExternalSstable{t}
-	case *ExciseResponse:
-		union = &ResponseUnion_Excise{t}
 	default:
 		panic(fmt.Sprintf("unsupported type %T for %T", r, ru))
 	}
 	ru.Value = union
 }
 
-type reqCounts [50]int32
+type reqCounts [48]int32
 
 // getReqCounts returns the number of times each
 // request type appears in the batch.
@@ -547,10 +682,6 @@ func (ba *BatchRequest) getReqCounts() reqCounts {
 			counts[46]++
 		case *RequestUnion_IsSpanEmpty:
 			counts[47]++
-		case *RequestUnion_LinkExternalSstable:
-			counts[48]++
-		case *RequestUnion_Excise:
-			counts[49]++
 		default:
 			panic(fmt.Sprintf("unsupported request: %+v", ru))
 		}
@@ -607,8 +738,6 @@ var requestNames = []string{
 	"Barrier",
 	"Probe",
 	"IsSpanEmpty",
-	"LinkExternalSstable",
-	"Excise",
 }
 
 // Summary prints a short summary of the requests in a batch.
@@ -836,55 +965,13 @@ type isSpanEmptyResponseAlloc struct {
 	union ResponseUnion_IsSpanEmpty
 	resp  IsSpanEmptyResponse
 }
-type linkExternalSSTableResponseAlloc struct {
-	union ResponseUnion_LinkExternalSstable
-	resp  LinkExternalSSTableResponse
-}
-type exciseResponseAlloc struct {
-	union ResponseUnion_Excise
-	resp  ExciseResponse
-}
-
-func allocBatchResponse(nResps int) *BatchResponse {
-	if nResps <= 1 {
-		alloc := new(struct {
-			br    BatchResponse
-			resps [1]ResponseUnion
-		})
-		alloc.br.Responses = alloc.resps[:nResps]
-		return &alloc.br
-	} else if nResps <= 2 {
-		alloc := new(struct {
-			br    BatchResponse
-			resps [2]ResponseUnion
-		})
-		alloc.br.Responses = alloc.resps[:nResps]
-		return &alloc.br
-	} else if nResps <= 4 {
-		alloc := new(struct {
-			br    BatchResponse
-			resps [4]ResponseUnion
-		})
-		alloc.br.Responses = alloc.resps[:nResps]
-		return &alloc.br
-	} else if nResps <= 8 {
-		alloc := new(struct {
-			br    BatchResponse
-			resps [8]ResponseUnion
-		})
-		alloc.br.Responses = alloc.resps[:nResps]
-		return &alloc.br
-	}
-	br := &BatchResponse{}
-	br.Responses = make([]ResponseUnion, nResps)
-	return br
-}
 
 // CreateReply creates replies for each of the contained requests, wrapped in a
 // BatchResponse. The response objects are batch allocated to minimize
 // allocation overhead.
 func (ba *BatchRequest) CreateReply() *BatchResponse {
-	br := allocBatchResponse(len(ba.Requests))
+	br := &BatchResponse{}
+	br.Responses = make([]ResponseUnion, len(ba.Requests))
 
 	counts := ba.getReqCounts()
 
@@ -936,8 +1023,6 @@ func (ba *BatchRequest) CreateReply() *BatchResponse {
 	var buf45 []barrierResponseAlloc
 	var buf46 []probeResponseAlloc
 	var buf47 []isSpanEmptyResponseAlloc
-	var buf48 []linkExternalSSTableResponseAlloc
-	var buf49 []exciseResponseAlloc
 
 	for i, r := range ba.Requests {
 		switch r.GetValue().(type) {
@@ -1277,20 +1362,6 @@ func (ba *BatchRequest) CreateReply() *BatchResponse {
 			buf47[0].union.IsSpanEmpty = &buf47[0].resp
 			br.Responses[i].Value = &buf47[0].union
 			buf47 = buf47[1:]
-		case *RequestUnion_LinkExternalSstable:
-			if buf48 == nil {
-				buf48 = make([]linkExternalSSTableResponseAlloc, counts[48])
-			}
-			buf48[0].union.LinkExternalSstable = &buf48[0].resp
-			br.Responses[i].Value = &buf48[0].union
-			buf48 = buf48[1:]
-		case *RequestUnion_Excise:
-			if buf49 == nil {
-				buf49 = make([]exciseResponseAlloc, counts[49])
-			}
-			buf49[0].union.Excise = &buf49[0].resp
-			br.Responses[i].Value = &buf49[0].union
-			buf49 = buf49[1:]
 		default:
 			panic(fmt.Sprintf("unsupported request: %+v", r))
 		}
@@ -1397,10 +1468,6 @@ func CreateRequest(method Method) Request {
 		return &ProbeRequest{}
 	case IsSpanEmpty:
 		return &IsSpanEmptyRequest{}
-	case LinkExternalSSTable:
-		return &LinkExternalSSTableRequest{}
-	case Excise:
-		return &ExciseRequest{}
 	default:
 		panic(fmt.Sprintf("unsupported method: %+v", method))
 	}

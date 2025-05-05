@@ -73,7 +73,7 @@ func NewEntryDecoderWithFormat(
 		}
 		in = io.MultiReader(read, in)
 	}
-	f, ok := FormatParsers[format]
+	f, ok := formatParsers[format]
 	if !ok {
 		return nil, errors.Newf("unknown log file format: %s", format)
 	}
@@ -165,5 +165,3 @@ func getLogFormat(data []byte) (string, error) {
 	}
 	return "", errors.New("failed to extract log file format from the log")
 }
-
-var ErrMalformedLogEntry = errors.New("malformed log entry")

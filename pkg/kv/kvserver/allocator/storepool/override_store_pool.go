@@ -13,7 +13,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/liveness/livenesspb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
-	"github.com/cockroachdb/redact"
 )
 
 // OverrideStorePool is an implementation of AllocatorStorePool that allows
@@ -88,12 +87,7 @@ func NewOverrideStorePool(
 }
 
 func (o *OverrideStorePool) String() string {
-	return redact.StringWithoutMarkers(o)
-}
-
-// SafeFormat implements the redact.SafeFormatter interface.
-func (o *OverrideStorePool) SafeFormat(w redact.SafePrinter, _ rune) {
-	w.Print(o.sp.statusString(o.overrideNodeLivenessFn))
+	return o.sp.statusString(o.overrideNodeLivenessFn)
 }
 
 // IsStoreReadyForRoutineReplicaTransfer implements the AllocatorStorePool interface.

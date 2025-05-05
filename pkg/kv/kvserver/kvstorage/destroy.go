@@ -66,11 +66,7 @@ type ClearRangeDataOptions struct {
 // "CRDB Range" and "storage.ClearRange" context in the setting of this method could
 // be confusing.
 func ClearRangeData(
-	ctx context.Context,
-	rangeID roachpb.RangeID,
-	reader storage.Reader,
-	writer storage.Writer,
-	opts ClearRangeDataOptions,
+	rangeID roachpb.RangeID, reader storage.Reader, writer storage.Writer, opts ClearRangeDataOptions,
 ) error {
 	keySpans := rditer.Select(rangeID, rditer.SelectOpts{
 		ReplicatedBySpan:      opts.ClearReplicatedBySpan,
@@ -85,7 +81,7 @@ func ClearRangeData(
 
 	for _, keySpan := range keySpans {
 		if err := storage.ClearRangeWithHeuristic(
-			ctx, reader, writer, keySpan.Key, keySpan.EndKey, pointKeyThreshold, rangeKeyThreshold,
+			reader, writer, keySpan.Key, keySpan.EndKey, pointKeyThreshold, rangeKeyThreshold,
 		); err != nil {
 			return err
 		}
@@ -116,7 +112,7 @@ func DestroyReplica(
 	if diskReplicaID.ReplicaID >= nextReplicaID {
 		return errors.AssertionFailedf("replica r%d/%d must not survive its own tombstone", rangeID, diskReplicaID)
 	}
-	if err := ClearRangeData(ctx, rangeID, reader, writer, opts); err != nil {
+	if err := ClearRangeData(rangeID, reader, writer, opts); err != nil {
 		return err
 	}
 

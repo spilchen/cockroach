@@ -56,7 +56,7 @@ func registerNodeJSPostgres(r registry.Registry) {
 		// can use npm to reduce the potential of trying to add another nodesource key
 		// (preventing gpg: dearmoring failed: File exists) errors.
 		err = c.RunE(
-			ctx, option.WithNodes(node), `sudo npm i -g npm`,
+			ctx, node, `sudo npm i -g npm`,
 		)
 
 		if err != nil {
@@ -132,7 +132,7 @@ echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.co
 		require.NoError(t, err)
 
 		t.Status("running node-postgres tests")
-		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), option.WithNodes(node),
+		result, err := c.RunWithDetailsSingleNode(ctx, t.L(), node,
 			fmt.Sprintf(
 				`cd /mnt/data1/node-postgres/ && sudo \
 PGPORT={pgport:1} PGUSER=%[1]s PGPASSWORD=%[2]s PGSSLMODE=require PGDATABASE=postgres_node_test \
@@ -150,22 +150,14 @@ PGSSLCERT=$HOME/certs/client.%[1]s.crt PGSSLKEY=$HOME/certs/client.%[1]s.key PGS
 		rawResultsStr := result.Stdout + result.Stderr
 		t.L().Printf("Test Results: %s", rawResultsStr)
 		if err != nil {
-			// Check for expected test failures. We allow:
-			// 1. One failing test that is "pool size of 1"
-			// 2. One failing test that is "events"
-			// 3. Two failing tests that are exactly "events" and "pool size of 1"
-			if strings.Contains(rawResultsStr, "1 failing") {
-				// Single test failure case
-				if strings.Contains(rawResultsStr, "1) pool size of 1") ||
-					strings.Contains(rawResultsStr, "1) events") {
-					err = nil
-				}
-			} else if strings.Contains(rawResultsStr, "2 failing") {
-				// Two test failures case - must be exactly events and pool size of 1
-				if strings.Contains(rawResultsStr, "1) events") &&
-					strings.Contains(rawResultsStr, "2) pool size of 1") {
-					err = nil
-				}
+			// The one failing test is `pool size of 1` which
+			// fails because it does SELECT count(*) FROM pg_stat_activity which is
+			// not implemented in CRDB.
+			if strings.Contains(rawResultsStr, "1 failing") &&
+				// Failing tests are listed numerically, we only expect one.
+				// The one failing test should be "pool size of 1".
+				strings.Contains(rawResultsStr, "1) pool size of 1") {
+				err = nil
 			}
 			if err != nil {
 				t.Fatal(err)

@@ -1,3 +1,5 @@
+# LogicTest: default-configs
+
 statement ok
 CREATE TYPE t AS (a INT, b INT)
 
@@ -62,7 +64,7 @@ query TT
 SHOW CREATE TABLE atyp
 ----
 atyp  CREATE TABLE public.atyp (
-        a public.t[] NULL,
+        a T[] NULL,
         rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
         CONSTRAINT atyp_pkey PRIMARY KEY (rowid ASC)
       )
@@ -179,17 +181,13 @@ CREATE TABLE a (a INT DEFAULT (((1, 'hi')::t).a))
 statement error cannot drop type \"t\" because other objects .* still depend on it
 DROP TYPE t
 
-skipif config local-legacy-schema-changer
-statement ok
-ALTER TABLE a ALTER COLUMN a SET DEFAULT 3
-
-skipif config local-legacy-schema-changer
-statement ok
-DROP TYPE t
-
-skipif config local-legacy-schema-changer
-statement ok
-CREATE TYPE t AS (a INT, b TEXT)
+# Re-enable when #91972 is resolved.
+#statement ok
+#ALTER TABLE a ALTER COLUMN a SET DEFAULT 3
+#
+#statement ok
+#DROP TYPE t;
+#CREATE TYPE t AS (a INT, b TEXT);
 
 statement ok
 DROP TABLE a;
@@ -198,38 +196,28 @@ CREATE TABLE a (a INT ON UPDATE (((1, 'hi')::t).a))
 statement error cannot drop type \"t\" because other objects .* still depend on it
 DROP TYPE t
 
-skipif config local-legacy-schema-changer
-statement ok
-ALTER TABLE a ALTER COLUMN a SET ON UPDATE 3
-
-skipif config local-legacy-schema-changer
-statement ok
-DROP TYPE t
-
-skipif config local-legacy-schema-changer
-statement ok
-CREATE TYPE t AS (a INT, b TEXT)
+# Re-enable when #91972 is resolved.
+#statement ok
+#ALTER TABLE a ALTER COLUMN a SET ON UPDATE 3
+#
+#statement ok
+#DROP TYPE t;
+#CREATE TYPE t AS (a INT, b TEXT);
 
 statement ok
-DROP TABLE a
-
-statement ok
+DROP TABLE a;
 CREATE TABLE a (a INT AS (((1, 'hi')::t).a) STORED)
 
 statement error cannot drop type \"t\" because other objects .* still depend on it
 DROP TYPE t
 
-skipif config local-legacy-schema-changer
-statement ok
-ALTER TABLE a ALTER COLUMN a DROP STORED
-
-skipif config local-legacy-schema-changer
-statement ok
-DROP TYPE t
-
-skipif config local-legacy-schema-changer
-statement ok
-CREATE TYPE t AS (a INT, b TEXT)
+# Re-enable when #91972 is resolved.
+#statement ok
+#ALTER TABLE a ALTER COLUMN a DROP STORED
+#
+#statement ok
+#DROP TYPE t;
+#CREATE TYPE t AS (a INT, b TEXT);
 
 statement ok
 DROP TABLE a;

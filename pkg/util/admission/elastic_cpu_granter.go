@@ -105,6 +105,7 @@ type elasticCPUGranter struct {
 		syncutil.Mutex
 		tb               *tokenbucket.TokenBucket
 		tbLastReset      time.Time
+		tbReset          *util.EveryN
 		utilizationLimit float64
 	}
 	requester requester
