@@ -222,6 +222,16 @@ func dropColumn(
 				)
 			}
 			dropCascadeDescriptor(b, e.FunctionID)
+		case *scpb.TriggerDeps:
+			if behavior != tree.DropCascade {
+				_, _, fnName := scpb.FindFunctionName(b.QueryByID(e.TableID))
+				panic(sqlerrors.NewDependentObjectErrorf(
+					"cannot drop column %q because function %q depends on it",
+					cn.Name, fnName.Name),
+				)
+			}
+			// SPILLY - how do we support cascade? Do we drop the trigger?
+			//dropCascadeDescriptor(b, e.FunctionID)
 		case *scpb.UniqueWithoutIndexConstraint:
 			constraintElems := b.QueryByID(e.TableID).Filter(hasConstraintIDAttrFilter(e.ConstraintID))
 			_, _, constraintName := scpb.FindConstraintWithoutIndexName(constraintElems.Filter(publicTargetFilter))

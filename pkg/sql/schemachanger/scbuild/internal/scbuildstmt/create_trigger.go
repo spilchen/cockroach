@@ -7,6 +7,7 @@ package scbuildstmt
 
 import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
@@ -131,19 +132,50 @@ func CreateTrigger(b BuildCtx, n *tree.CreateTrigger) {
 	// It is possible for the trigger function to reference the table on which the
 	// trigger is defined. In that case, we need to remove the table from the list
 	// of referenced relations to avoid a circular dependency.
-	relIDs := refProvider.ReferencedRelationIDs().Ordered()
-	for i, id := range relIDs {
-		if id == tableID {
-			relIDs = append(relIDs[:i], relIDs[i+1:]...)
-			break
-		}
+	// SPILLY - i need to understand this scenario more
+	//relIDs := refProvider.ReferencedRelationIDs().Ordered()
+	//for i, id := range relIDs {
+	//	if id == tableID {
+	//		relIDs = append(relIDs[:i], relIDs[i+1:]...)
+	//		break
+	//	}
+	//}
+	// SPILLY - add a comment
+	deps := &scpb.TriggerDeps{
+		TableID:        tableID,
+		TriggerID:      triggerID,
+		UsesRelations:  make([]scpb.TriggerDeps_RelationReference, 0),
+		UsesTypeIDs:    refProvider.ReferencedTypes().Ordered(),
+		UsesRoutineIDs: refProvider.ReferencedRoutines().Ordered(),
 	}
-	b.Add(&scpb.TriggerDeps{
-		TableID:         tableID,
-		TriggerID:       triggerID,
-		UsesRelationIDs: relIDs,
-		UsesTypeIDs:     refProvider.ReferencedTypes().Ordered(),
-		UsesRoutineIDs:  refProvider.ReferencedRoutines().Ordered(),
+	err = refProvider.ForEachTableReference(func(tblID descpb.ID, idxID descpb.IndexID, colIDs descpb.ColumnIDs) error {
+		deps.UsesRelations = append(deps.UsesRelations, scpb.TriggerDeps_RelationReference{
+			ID:        tblID,
+			IndexID:   idxID,
+			ColumnIDs: colIDs,
+		})
+		return nil
 	})
+	if err != nil {
+		panic(err)
+	}
+	err = refProvider.ForEachViewReference(func(viewID descpb.ID, colIDs descpb.ColumnIDs) error {
+		deps.UsesRelations = append(deps.UsesRelations, scpb.TriggerDeps_RelationReference{
+			ID:        viewID,
+			ColumnIDs: colIDs,
+		})
+		return nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	seqIDs := refProvider.ReferencedSequences().Ordered()
+	for _, seqID := range seqIDs {
+		deps.UsesRelations = append(deps.UsesRelations, scpb.TriggerDeps_RelationReference{
+			ID: seqID,
+		})
+	}
+
+	b.Add(deps)
 	b.LogEventForExistingTarget(trigger)
 }

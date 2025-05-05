@@ -877,12 +877,37 @@ func (w *walkCtx) walkTrigger(tbl catalog.TableDescriptor, t *descpb.TriggerDesc
 		FuncBody:  t.FuncBody,
 		FuncArgs:  t.FuncArgs,
 	})
+
+	usesRelations := make([]scpb.TriggerDeps_RelationReference, len(t.DependsOn))
+	for i, id := range t.DependsOn {
+		foundRelation := false
+		to := w.lookupFn(id)
+		toDesc, err := catalog.AsTableDescriptor(to)
+		if err != nil {
+			panic(err)
+		}
+		_ = toDesc.ForeachDependedOnBy(func(dep *descpb.TableDescriptor_Reference) error {
+			if dep.ID != tbl.GetID() {
+				return nil
+			}
+			usesRelations[i] = scpb.TriggerDeps_RelationReference{
+				ID:        id,
+				IndexID:   dep.IndexID,
+				ColumnIDs: dep.ColumnIDs,
+			}
+			foundRelation = true
+			return nil
+		})
+		if !foundRelation {
+			panic(errors.AssertionFailedf("could not find back-reference to relation %d", id))
+		}
+	}
 	w.ev(scpb.Status_PUBLIC, &scpb.TriggerDeps{
-		TableID:         tbl.GetID(),
-		TriggerID:       t.ID,
-		UsesRelationIDs: t.DependsOn,
-		UsesTypeIDs:     t.DependsOnTypes,
-		UsesRoutineIDs:  t.DependsOnRoutines,
+		TableID:        tbl.GetID(),
+		TriggerID:      t.ID,
+		UsesRelations:  usesRelations,
+		UsesTypeIDs:    t.DependsOnTypes,
+		UsesRoutineIDs: t.DependsOnRoutines,
 	})
 }
 
