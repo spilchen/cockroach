@@ -132,7 +132,6 @@ func CreateTrigger(b BuildCtx, n *tree.CreateTrigger) {
 	// It is possible for the trigger function to reference the table on which the
 	// trigger is defined. In that case, we need to remove the table from the list
 	// of referenced relations to avoid a circular dependency.
-	// SPILLY - i need to understand this scenario more
 	//relIDs := refProvider.ReferencedRelationIDs().Ordered()
 	//for i, id := range relIDs {
 	//	if id == tableID {
@@ -149,6 +148,22 @@ func CreateTrigger(b BuildCtx, n *tree.CreateTrigger) {
 		UsesRoutineIDs: refProvider.ReferencedRoutines().Ordered(),
 	}
 	err = refProvider.ForEachTableReference(func(tblID descpb.ID, idxID descpb.IndexID, colIDs descpb.ColumnIDs) error {
+		// SPILLY - avoid a circular dependency by not adding the table to the list of
+		// SPILLY - this poses a problem. We don't build up the complex dependency.
+		// We think
+		// SPILLY - add a comment
+		if tblID == tableID {
+			return nil
+		}
+		// SPILLY - use a map
+		// SPILLY - likely needs a better solution than this
+		// SPILLY - don't add duplicate relations. Descriptor validations only allow
+		// a single reference.
+		for i := range deps.UsesRelations {
+			if deps.UsesRelations[i].ID == tblID {
+				return nil
+			}
+		}
 		deps.UsesRelations = append(deps.UsesRelations, scpb.TriggerDeps_RelationReference{
 			ID:        tblID,
 			IndexID:   idxID,

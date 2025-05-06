@@ -4298,3 +4298,68 @@ statement ok
 DROP FUNCTION g;
 
 subtest end
+
+subtest dependency_142370
+
+statement ok
+create table t1(n int primary key, j int, k int);
+
+statement ok
+create index i1 on t1(k);
+
+statement ok
+CREATE FUNCTION f1 ()
+RETURNS VOID
+LANGUAGE SQL
+AS $$
+  SELECT 1
+$$;
+
+statement ok
+CREATE TYPE e AS ENUM('a');
+
+#                                SELECT f1();
+#                                SELECT *, 'a'::e FROM t1@i1 WHERE j=32;
+statement ok
+CREATE OR REPLACE FUNCTION audit_changes()
+                                RETURNS TRIGGER AS $$
+                                BEGIN
+                                 SELECT j FROM t1;
+                                 RETURN NULL;
+                                END;
+                                $$ LANGUAGE PLpgSQL;
+
+statement ok
+CREATE TRIGGER audit_trigger AFTER INSERT OR UPDATE OR DELETE ON t1 FOR EACH ROW EXECUTE FUNCTION audit_changes();
+
+statement ok
+alter table t1 drop column j;
+
+statement ok
+drop index t1@i1;
+
+statement ok
+insert into t1(n) values(1);
+
+statement error pq: cannot drop function "f1" because other objects \(\[test.public.t1, test.public.audit_changes\]\) still depend on it
+DROP FUNCTION f1;
+
+statement error pq: cannot drop type "e" because other objects \(\[movr.public.audit_changes\]\) still depend on it
+DROP TYPE e;
+
+statement ok
+DROP TRIGGER audit_trigger ON t1;
+
+statement ok
+DROP FUNCTION audit_changes;
+
+statement ok
+DROP TYPE e;
+
+statement ok
+DROP FUNCTION f1;
+
+statement ok
+DROP TABLE t1;
+
+subtest end
