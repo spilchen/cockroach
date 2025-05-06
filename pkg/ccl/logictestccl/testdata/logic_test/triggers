@@ -4332,7 +4332,7 @@ CREATE OR REPLACE FUNCTION audit_changes()
 statement ok
 CREATE TRIGGER audit_trigger AFTER INSERT OR UPDATE OR DELETE ON t1 FOR EACH ROW EXECUTE FUNCTION audit_changes();
 
-statement ok
+statement error pq: cannot drop column "j" because trigger "audit_trigger" on table "t1" depends on it
 alter table t1 drop column j;
 
 statement ok
