@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/cdcutils"
-	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/checkpoint"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/kvevent"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/schemafeed"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/timers"
@@ -98,8 +97,6 @@ type AggMetrics struct {
 	// TODO(#130358): This doesn't really belong here, but is easier than
 	// threading the NetMetrics through all the other places.
 	NetMetrics *cidr.NetMetrics
-
-	CheckpointMetrics *checkpoint.AggMetrics
 }
 
 const (
@@ -181,8 +178,6 @@ type sliMetrics struct {
 		checkpoint map[int64]hlc.Timestamp
 	}
 	NetMetrics *cidr.NetMetrics
-
-	CheckpointMetrics *checkpoint.Metrics
 }
 
 // closeId unregisters an id. The id can still be used after its closed, but
@@ -1101,11 +1096,10 @@ func newAggregateMetrics(histogramWindow time.Duration, lookup *cidr.Lookup) *Ag
 			SigFigs:      2,
 			BucketConfig: metric.ChangefeedBatchLatencyBuckets,
 		}),
-		SinkErrors:        b.Counter(metaSinkErrors),
-		MaxBehindNanos:    b.FunctionalGauge(metaChangefeedMaxBehindNanos, functionalGaugeMaxFn),
-		Timers:            timers.New(histogramWindow),
-		NetMetrics:        lookup.MakeNetMetrics(metaNetworkBytesOut, metaNetworkBytesIn, "sink"),
-		CheckpointMetrics: checkpoint.NewAggMetrics(b),
+		SinkErrors:     b.Counter(metaSinkErrors),
+		MaxBehindNanos: b.FunctionalGauge(metaChangefeedMaxBehindNanos, functionalGaugeMaxFn),
+		Timers:         timers.New(histogramWindow),
+		NetMetrics:     lookup.MakeNetMetrics(metaNetworkBytesOut, metaNetworkBytesIn, "sink"),
 	}
 	a.mu.sliMetrics = make(map[string]*sliMetrics)
 	_, err := a.getOrCreateScope(defaultSLIScope)
@@ -1181,8 +1175,6 @@ func (a *AggMetrics) getOrCreateScope(scope string) (*sliMetrics, error) {
 		// TODO(#130358): Again, this doesn't belong here, but it's the most
 		// convenient way to feed this metric to changefeeds.
 		NetMetrics: a.NetMetrics,
-
-		CheckpointMetrics: a.CheckpointMetrics.AddChild(scope),
 	}
 	sm.mu.resolved = make(map[int64]hlc.Timestamp)
 	sm.mu.checkpoint = make(map[int64]hlc.Timestamp)

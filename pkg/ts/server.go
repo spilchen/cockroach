@@ -185,13 +185,13 @@ func MakeServer(
 		stopper:        stopper,
 		nodeCountFn:    nodeCountFn,
 		workerMemMonitor: mon.NewMonitorInheritWithLimit(
-			mon.MakeName("timeseries-workers"),
+			"timeseries-workers",
 			queryMemoryMax*2,
 			memoryMonitor,
 			true, /* longLiving */
 		),
 		resultMemMonitor: mon.NewMonitorInheritWithLimit(
-			mon.MakeName("timeseries-results"),
+			"timeseries-results",
 			math.MaxInt64,
 			memoryMonitor,
 			true, /* longLiving */
@@ -386,20 +386,6 @@ func (s *Server) Dump(req *tspb.DumpRequest, stream tspb.TimeSeries_DumpServer) 
 func (s *Server) DumpRaw(req *tspb.DumpRequest, stream tspb.TimeSeries_DumpRawServer) error {
 	d := rawDumper{stream}.Dump
 	return dumpImpl(stream.Context(), s.db.db, req, d)
-}
-
-func (s *TenantServer) DumpRaw(_ *tspb.DumpRequest, _ tspb.TimeSeries_DumpRawServer) error {
-	return status.Errorf(codes.Unimplemented, "DumpRaw is not implemented for virtual clusters. "+
-		"If you are attempting to take a tsdump, please connect to the system virtual cluster, "+
-		"not an application virtual cluster. System virtual clusters will dump all persisted "+
-		"metrics from all virtual clusters.")
-}
-
-func (s *TenantServer) Dump(_ *tspb.DumpRequest, _ tspb.TimeSeries_DumpServer) error {
-	return status.Errorf(codes.Unimplemented, "Dump is not implemented for virtual clusters. "+
-		"If you are attempting to take a tsdump, please connect to the system virtual cluster, "+
-		"not an application virtual cluster. System virtual clusters will dump all persisted "+
-		"metrics from all virtual clusters.")
 }
 
 func dumpImpl(

@@ -97,6 +97,7 @@ var EnqueueProblemRangeInReplicateQueueInterval = settings.RegisterDurationSetti
 		"one which is underreplicated or has a replica on a decommissioning store, "+
 		"disabled when set to 0",
 	0,
+	settings.NonNegativeDuration,
 )
 
 var (
@@ -571,6 +572,7 @@ func newReplicateQueue(store *Store, allocator allocatorimpl.Allocator) *replica
 			processTimeoutFunc: makeRateLimitedTimeoutFunc(rebalanceSnapshotRate),
 			successes:          store.metrics.ReplicateQueueSuccesses,
 			failures:           store.metrics.ReplicateQueueFailures,
+			storeFailures:      store.metrics.StoreFailures,
 			pending:            store.metrics.ReplicateQueuePending,
 			processingNanos:    store.metrics.ReplicateQueueProcessingNanos,
 			purgatory:          store.metrics.ReplicateQueuePurgatory,

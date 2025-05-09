@@ -642,7 +642,7 @@ func readPostgresStmt(
 			Name:             stmt.Name,
 			Columns:          stmt.Columns,
 			Storing:          stmt.Storing,
-			Type:             stmt.Type,
+			Inverted:         stmt.Inverted,
 			PartitionByIndex: stmt.PartitionByIndex,
 			StorageParams:    stmt.StorageParams,
 			// Postgres doesn't support NotVisible Index, so NotVisible is not populated here.
@@ -757,9 +757,6 @@ func readPostgresStmt(
 			return unsupportedStmtLogger.log(stmt.String(), false /* isParseError */)
 		}
 		return wrapErrorWithUnsupportedHint(errors.Errorf("unsupported statement: %s", stmt))
-	case *tree.AlterTableSetLogged:
-		// No-op: CockroachDB does not support unlogged tables, tables are logged by default
-		return nil
 	case *tree.CreateSequence:
 		schemaQualifiedTableName, err := getSchemaAndTableName(&stmt.Name)
 		if err != nil {

@@ -1465,7 +1465,7 @@ func makeTransferLeaseFn(key string, current []roachpb.ReplicationTarget) opGenF
 }
 
 func setLeaseType(_ *generator, rng *rand.Rand) Operation {
-	leaseTypes := roachpb.TestingAllLeaseTypes()
+	leaseTypes := roachpb.LeaseTypes()
 	leaseType := leaseTypes[rng.Intn(len(leaseTypes))]
 	op := changeSetting(ChangeSettingType_SetLeaseType)
 	op.ChangeSetting.LeaseType = leaseType

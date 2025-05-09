@@ -59,7 +59,7 @@ func (b *Builder) expandStar(
 ) (aliases []string, exprs []tree.TypedExpr) {
 	switch t := expr.(type) {
 	case *tree.TupleStar:
-		texpr := inScope.resolveType(t.Expr, types.AnyElement)
+		texpr := inScope.resolveType(t.Expr, types.Any)
 		typ := texpr.ResolvedType()
 		if typ.Family() != types.TupleFamily {
 			panic(tree.NewTypeIsNotCompositeError(typ))
@@ -171,7 +171,7 @@ func (b *Builder) expandStarAndResolveType(
 		return b.expandStarAndResolveType(vn, inScope)
 
 	default:
-		texpr := inScope.resolveType(t, types.AnyElement)
+		texpr := inScope.resolveType(t, types.Any)
 		exprs = []tree.TypedExpr{texpr}
 	}
 
@@ -445,7 +445,6 @@ func (b *Builder) resolveAndBuildScalar(
 	context exprKind,
 	flags tree.SemaRejectFlags,
 	inScope *scope,
-	colRefs *opt.ColSet,
 ) opt.ScalarExpr {
 	// We need to save and restore the previous value of the field in
 	// semaCtx in case we are recursively called within a subquery
@@ -455,7 +454,7 @@ func (b *Builder) resolveAndBuildScalar(
 
 	inScope.context = context
 	texpr := inScope.resolveAndRequireType(expr, requiredType)
-	return b.buildScalar(texpr, inScope, nil, nil, colRefs)
+	return b.buildScalar(texpr, inScope, nil, nil, nil)
 }
 
 // In Postgres, qualifying an object name with pg_temp is equivalent to explicitly

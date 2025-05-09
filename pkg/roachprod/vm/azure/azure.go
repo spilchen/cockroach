@@ -21,7 +21,6 @@ import (
 	"github.com/Azure/azure-sdk-for-go/profiles/latest/network/mgmt/network"
 	"github.com/Azure/azure-sdk-for-go/profiles/latest/resources/mgmt/resources"
 	"github.com/Azure/azure-sdk-for-go/profiles/latest/resources/mgmt/subscriptions"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/monitor/armmonitor"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/config"
@@ -112,75 +111,6 @@ func (p *Provider) GetHostErrorVMs(
 	l *logger.Logger, vms vm.List, since time.Time,
 ) ([]string, error) {
 	return nil, nil
-}
-
-func (p *Provider) GetLiveMigrationVMs(
-	l *logger.Logger, vms vm.List, since time.Time,
-) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), p.OperationTimeout)
-	defer cancel()
-	sub, err := p.getSubscription(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// Azure expects this exact format for --start-time.
-	startTime := since.Format("2006-01-02 15:04:05.999999999 -0700")
-
-	// Azure lets us query by either resourceID or resourceGroup. We don't keep track
-	// of either but can more easily reconstruct the latter through availability zones.
-	// Find all unique resourceGroups among the VMs; we will send a query to each.
-	resourceGroups := make(map[string]struct{})
-	for _, vm := range vms {
-		// Trim the trailing z we added to mock an availability zone.
-		zone := vm.Zone[:len(vm.Zone)-1]
-		clusterName, err := vm.ClusterName()
-		if err != nil {
-			return nil, err
-		}
-		resourceGroups[fmt.Sprintf("%s-%s", clusterName, zone)] = struct{}{}
-	}
-
-	var liveMigrationVMs []string
-	for group := range resourceGroups {
-		// Query for live migrations through the az CLI. The azure sdk does support an
-		// `armmonitor.NewActivityLogsClient`, but it does not appear to support JMESPath querying
-		// to filter for only migration events. Instead, examples suggest that such filtering should
-		// be done on the client side, so lets just use the CLI tool.
-		//
-		// One caveat is that the CLI does not directly support parallel calls, so we have to
-		// do our querying sequentially. This does not appear to be an issue so far, as a CLI call
-		// takes roughly < 1 second to return, but is something to reconsider if we see this stalling.
-		cmd := exec.CommandContext(ctx, "az", "monitor", "activity-log", "list",
-			"--start-time", startTime,
-			"--namespace", "Microsoft.Compute",
-			"--subscription", sub,
-			"--resource-group", group,
-			// Max number of events to return after filtering for resource group but _before_
-			// querying, i.e. we can't just set it to one to the find the latest migration, but we
-			// can set it to an arbitrarily high number to exhaustively search all events since
-			// one resource group isn't expected to have that many events.
-			"--max-events", "1000000",
-			"--query", "[?contains(to_string(properties.title), 'Migration')]",
-		)
-		res, err := cmd.Output()
-		if err != nil {
-			return nil, err
-		}
-		var resJson []*armmonitor.EventData
-		if err := json.Unmarshal(res, &resJson); err != nil {
-			return nil, err
-		}
-		for _, event := range resJson {
-			// The activity log does not have a vm name field so we have to parse it out from the ResourceID
-			_, vmName, found := strings.Cut(*event.ResourceID, "VIRTUALMACHINES/")
-			if !found {
-				l.Printf("GetLiveMigrationVMs: could not parse VM name from resource ID %s", *event.ResourceID)
-				vmName = *event.ResourceID
-			}
-			liveMigrationVMs = append(liveMigrationVMs, vmName)
-		}
-	}
-	return liveMigrationVMs, nil
 }
 
 func (p *Provider) GetVMSpecs(
@@ -369,7 +299,11 @@ func parseZones(opts vm.CreateOpts, providerOpts *ProviderOpts) ([]Zone, error) 
 	}
 
 	if len(zonesFlag) == 0 {
-		zonesFlag = DefaultZones(opts.GeoDistributed)
+		if opts.GeoDistributed {
+			zonesFlag = DefaultZones
+		} else {
+			zonesFlag = []string{DefaultZones[0]}
+		}
 	}
 
 	var zones []Zone
@@ -386,13 +320,6 @@ func parseZones(opts vm.CreateOpts, providerOpts *ProviderOpts) ([]Zone, error) 
 		zones = append(zones, Zone{Location: parts[0], AvailabilityZone: parts[1]})
 	}
 	return zones, nil
-}
-
-func DefaultZones(geoDistributed bool) []string {
-	if geoDistributed {
-		return defaultZones
-	}
-	return []string{defaultZones[0]}
 }
 
 // Create implements vm.Provider.
@@ -512,21 +439,14 @@ func (p *Provider) computeVirtualMachineToVM(cvm compute.VirtualMachine) (*vm.VM
 	for key, value := range cvm.Tags {
 		tags[key] = *value
 	}
-	// cvm.ID is of the form "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}"
-	// which encodes the subscription id.
-	azureSubscription := ""
-	if *cvm.ID != "" {
-		azureSubscription = strings.Split(strings.TrimPrefix(*cvm.ID, "/subscriptions/"), "/")[0]
-	}
 
 	m := &vm.VM{
-		Name:              *cvm.Name,
-		Labels:            tags,
-		Provider:          ProviderName,
-		ProviderID:        *cvm.ID,
-		ProviderAccountID: azureSubscription,
-		RemoteUser:        remoteUser,
-		VPC:               "global",
+		Name:       *cvm.Name,
+		Labels:     tags,
+		Provider:   ProviderName,
+		ProviderID: *cvm.ID,
+		RemoteUser: remoteUser,
+		VPC:        "global",
 		// We add a fake availability-zone suffix since other roachprod
 		// code assumes particular formats. For example, "eastus2z".
 		Zone: *cvm.Location + "z",
@@ -885,14 +805,11 @@ func (p *Provider) createVM(
 	opts vm.CreateOpts,
 	providerOpts ProviderOpts,
 ) (machine compute.VirtualMachine, err error) {
-
 	startupArgs := azureStartupArgs{
-		StartupArgs: vm.DefaultStartupArgs(
-			vm.WithVMName(name),
-			vm.WithSharedUser(remoteUser),
-		),
-		DiskControllerNVMe: false,
-		AttachedDiskLun:    nil,
+		RemoteUser:           remoteUser,
+		DisksInitializedFile: vm.DisksInitializedFile,
+		OSInitializedFile:    vm.OSInitializedFile,
+		StartupLogs:          vm.StartupLogs,
 	}
 	useNVMe := MachineSupportsNVMe(providerOpts.MachineType)
 	if useNVMe {

@@ -12,20 +12,17 @@ import (
 	"sort"
 	"time"
 
-	"github.com/cockroachdb/cockroach/pkg/backup/backupresolver"
+	"github.com/cockroachdb/cockroach/pkg/ccl/backupccl/backupresolver"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/cdceval"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/changefeedbase"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/changefeedvalidators"
-	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/checkpoint"
 	"github.com/cockroachdb/cockroach/pkg/ccl/utilccl"
 	"github.com/cockroachdb/cockroach/pkg/cloud"
-	"github.com/cockroachdb/cockroach/pkg/cloud/externalconn"
 	"github.com/cockroachdb/cockroach/pkg/docs"
 	"github.com/cockroachdb/cockroach/pkg/featureflag"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/kv"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/protectedts"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/protectedts/ptpb"
@@ -48,7 +45,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondatapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
-	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/log/eventpb"
@@ -133,56 +129,13 @@ func changefeedTypeCheck(
 	return true, withSinkHeader, nil
 }
 
-func maybeShowCursorAgeWarning(
-	ctx context.Context, p sql.PlanHookState, opts changefeedbase.StatementOptions,
-) error {
-	st, err := opts.GetInitialScanType()
-	if err != nil {
-		return err
-	}
-
-	if !opts.HasStartCursor() || st == changefeedbase.OnlyInitialScan {
-		return nil
-	}
-	statementTS := p.ExtendedEvalContext().GetStmtTimestamp().UnixNano()
-	cursorTS, err := evalCursor(ctx, p, hlc.Timestamp{WallTime: statementTS}, opts.GetCursor())
-	if err != nil {
-		return err
-	}
-
-	warningAge := int64(5 * time.Hour)
-	cursorAge := func() int64 {
-		knobs, _ := p.ExecCfg().DistSQLSrv.TestingKnobs.Changefeed.(*TestingKnobs)
-		if knobs != nil && knobs.OverrideCursorAge != nil {
-			return knobs.OverrideCursorAge()
-		}
-		return statementTS - cursorTS.WallTime
-	}()
-
-	if cursorAge > warningAge {
-		err = p.SendClientNotice(ctx,
-			pgnotice.Newf(
-				`the provided cursor is %d hours old; `+
-					`older cursors can result in increased changefeed latency`,
-				cursorAge/int64(time.Hour),
-			),
-			true,
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 // changefeedPlanHook implements sql.planHookFn.
 func changefeedPlanHook(
 	ctx context.Context, stmt tree.Statement, p sql.PlanHookState,
-) (sql.PlanHookRowFn, colinfo.ResultColumns, bool, error) {
+) (sql.PlanHookRowFn, colinfo.ResultColumns, []sql.PlanNode, bool, error) {
 	changefeedStmt := getChangefeedStatement(stmt)
 	if changefeedStmt == nil {
-		return nil, nil, false, nil
+		return nil, nil, nil, false, nil
 	}
 
 	exprEval := p.ExprEvaluator("CREATE CHANGEFEED")
@@ -204,11 +157,11 @@ func changefeedPlanHook(
 		var err error
 		sinkURI, err = exprEval.String(ctx, changefeedStmt.SinkURI)
 		if err != nil {
-			return nil, nil, false, changefeedbase.MarkTaggedError(err, changefeedbase.UserInput)
+			return nil, nil, nil, false, changefeedbase.MarkTaggedError(err, changefeedbase.UserInput)
 		}
 		if sinkURI == `` {
 			// Error if someone specifies an INTO with the empty string.
-			return nil, nil, false, errors.New(`omit the SINK clause for inline results`)
+			return nil, nil, nil, false, errors.New(`omit the SINK clause for inline results`)
 		}
 		header = withSinkHeader
 	}
@@ -217,17 +170,17 @@ func changefeedPlanHook(
 		ctx, changefeedStmt.Options, changefeedvalidators.CreateOptionValidations,
 	)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, false, err
 	}
 	opts := changefeedbase.MakeStatementOptions(rawOpts)
 
 	description, err := makeChangefeedDescription(ctx, changefeedStmt.CreateChangefeed, sinkURI, opts)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, false, err
 	}
 
 	// rowFn implements sql.PlanHookRowFn.
-	rowFn := func(ctx context.Context, resultsCh chan<- tree.Datums) error {
+	rowFn := func(ctx context.Context, _ []sql.PlanNode, resultsCh chan<- tree.Datums) error {
 		ctx, span := tracing.ChildSpan(ctx, stmt.StatementTag())
 		defer span.Finish()
 		st, err := opts.GetInitialScanType()
@@ -272,11 +225,8 @@ func changefeedPlanHook(
 
 			telemetry.Count(`changefeed.create.core`)
 			logChangefeedCreateTelemetry(ctx, jr, changefeedStmt.Select != nil)
-			if err := maybeShowCursorAgeWarning(ctx, p, opts); err != nil {
-				return err
-			}
 
-			err := coreChangefeed(ctx, p, details, description, progress, resultsCh)
+			err := coreChangefeed(ctx, p, details, progress, resultsCh)
 			// TODO(yevgeniy): This seems wrong -- core changefeeds always terminate
 			// with an error.  Perhaps rename this telemetry to indicate number of
 			// completed feeds.
@@ -360,10 +310,6 @@ func changefeedPlanHook(
 			return err
 		}
 
-		if err := maybeShowCursorAgeWarning(ctx, p, opts); err != nil {
-			return err
-		}
-
 		logChangefeedCreateTelemetry(ctx, jr, changefeedStmt.Select != nil)
 
 		select {
@@ -376,29 +322,20 @@ func changefeedPlanHook(
 		}
 	}
 
-	rowFnLogErrors := func(ctx context.Context, resultsCh chan<- tree.Datums) error {
-		err := rowFn(ctx, resultsCh)
+	rowFnLogErrors := func(ctx context.Context, pn []sql.PlanNode, resultsCh chan<- tree.Datums) error {
+		err := rowFn(ctx, pn, resultsCh)
 		if err != nil {
 			logChangefeedFailedTelemetryDuringStartup(ctx, description, failureTypeForStartupError(err))
-			var e *kvpb.BatchTimestampBeforeGCError
-			if errors.As(err, &e) && opts.HasStartCursor() {
-				err = errors.Wrapf(err,
-					"could not create changefeed: cursor %s is older than the GC threshold %d",
-					opts.GetCursor(), e.Threshold.WallTime)
-				err = errors.WithHint(err,
-					"use a more recent cursor")
-			}
 		}
 		return err
 	}
-	return rowFnLogErrors, header, avoidBuffering, nil
+	return rowFnLogErrors, header, nil, avoidBuffering, nil
 }
 
 func coreChangefeed(
 	ctx context.Context,
 	p sql.PlanHookState,
 	details jobspb.ChangefeedDetails,
-	description string,
 	progress jobspb.Progress,
 	resultsCh chan<- tree.Datums,
 ) error {
@@ -417,7 +354,7 @@ func coreChangefeed(
 			knobs.BeforeDistChangefeed()
 		}
 
-		err := distChangefeedFlow(ctx, p, 0 /* jobID */, details, description, localState, resultsCh)
+		err := distChangefeedFlow(ctx, p, 0 /* jobID */, details, localState, resultsCh)
 		if err == nil {
 			log.Infof(ctx, "core changefeed completed with no error")
 			return nil
@@ -436,22 +373,6 @@ func coreChangefeed(
 		// information which is saved in the localState.
 		log.Infof(ctx, "core changefeed retrying due to transient error: %s", err)
 	}
-}
-
-func evalCursor(
-	ctx context.Context, p sql.PlanHookState, statementTime hlc.Timestamp, timeString string,
-) (hlc.Timestamp, error) {
-	if knobs, ok := p.ExecCfg().DistSQLSrv.TestingKnobs.Changefeed.(*TestingKnobs); ok {
-		if knobs != nil && knobs.OverrideCursor != nil {
-			timeString = knobs.OverrideCursor(&statementTime)
-		}
-	}
-	asOfClause := tree.AsOfClause{Expr: tree.NewStrVal(timeString)}
-	asOf, err := p.EvalAsOfTimestamp(ctx, asOfClause)
-	if err != nil {
-		return hlc.Timestamp{}, err
-	}
-	return asOf.Timestamp, nil
 }
 
 func createChangefeedJobRecord(
@@ -474,10 +395,22 @@ func createChangefeedJobRecord(
 		WallTime: p.ExtendedEvalContext().GetStmtTimestamp().UnixNano(),
 	}
 	var initialHighWater hlc.Timestamp
-
+	evalTimestamp := func(s string) (hlc.Timestamp, error) {
+		if knobs, ok := p.ExecCfg().DistSQLSrv.TestingKnobs.Changefeed.(*TestingKnobs); ok {
+			if knobs != nil && knobs.OverrideCursor != nil {
+				s = knobs.OverrideCursor(&statementTime)
+			}
+		}
+		asOfClause := tree.AsOfClause{Expr: tree.NewStrVal(s)}
+		asOf, err := p.EvalAsOfTimestamp(ctx, asOfClause)
+		if err != nil {
+			return hlc.Timestamp{}, err
+		}
+		return asOf.Timestamp, nil
+	}
 	if opts.HasStartCursor() {
 		var err error
-		initialHighWater, err = evalCursor(ctx, p, statementTime, opts.GetCursor())
+		initialHighWater, err = evalTimestamp(opts.GetCursor())
 		if err != nil {
 			return nil, err
 		}
@@ -661,18 +594,13 @@ func createChangefeedJobRecord(
 		return nil, err
 	}
 
-	// Validate the encoder. We can pass an empty slimetrics struct and source provider
-	// here since the encoder will not be used.
+	// Validate the encoder. We can pass an empty slimetrics struct here since the encoder will not be used.
 	encodingOpts, err := opts.GetEncodingOptions()
 	if err != nil {
 		return nil, err
 	}
-	sourceProvider, err := newEnrichedSourceProvider(encodingOpts, enrichedSourceData{})
-	if err != nil {
-		return nil, err
-	}
 	if _, err := getEncoder(ctx, encodingOpts, AllTargets(details), details.Select != "",
-		makeExternalConnectionProvider(ctx, p.ExecCfg().InternalDB), nil, sourceProvider); err != nil {
+		makeExternalConnectionProvider(ctx, p.ExecCfg().InternalDB), nil); err != nil {
 		return nil, err
 	}
 
@@ -785,31 +713,6 @@ func createChangefeedJobRecord(
 		if _, err := p.DistSQLPlanner().GetAllInstancesByLocality(ctx, executionLocality); err != nil {
 			return nil, err
 		}
-	}
-	resolvedOpt, emit, err := opts.GetResolvedTimestampInterval()
-	if err != nil {
-		return nil, err
-	}
-	var resolved time.Duration
-	resolvedStr := " by default"
-	if resolvedOpt != nil {
-		resolved = *resolvedOpt
-		resolvedStr = ""
-	}
-	freqOpt, err := opts.GetMinCheckpointFrequency()
-	if err != nil {
-		return nil, err
-	}
-	freq := changefeedbase.DefaultMinCheckpointFrequency
-	freqStr := "default"
-	if freqOpt != nil {
-		freq = *freqOpt
-		freqStr = "configured"
-	}
-	if emit && (resolved < freq) {
-		p.BufferClientNotice(ctx, pgnotice.Newf("resolved (%s%s) messages will not be emitted "+
-			"more frequently than the %s min_checkpoint_frequency (%s), but may be emitted "+
-			"less frequently", resolved, resolvedStr, freqStr, freq))
 	}
 
 	ptsExpiration, err := opts.GetPTSExpiration()
@@ -1031,29 +934,9 @@ func validateSink(
 	if err != nil {
 		return err
 	}
-	sinkTy := canarySink.getConcreteType()
 	if err := canarySink.Close(); err != nil {
 		return err
 	}
-
-	// envelope=enriched is only allowed for non-query feeds and certain sinks.
-	if details.Opts[changefeedbase.OptEnvelope] == string(changefeedbase.OptEnvelopeEnriched) {
-		if details.Select != `` {
-			return errors.Newf("envelope=%s is incompatible with SELECT statement", changefeedbase.OptEnvelopeEnriched)
-		}
-		allowedSinkTypes := map[sinkType]struct{}{
-			sinkTypeNull:           {},
-			sinkTypePubsub:         {},
-			sinkTypeKafka:          {},
-			sinkTypeWebhook:        {},
-			sinkTypeSinklessBuffer: {},
-			sinkTypeCloudstorage:   {},
-		}
-		if _, ok := allowedSinkTypes[sinkTy]; !ok {
-			return errors.Newf("envelope=%s is incompatible with %s sink", changefeedbase.OptEnvelopeEnriched, sinkTy)
-		}
-	}
-
 	// If there's no projection we may need to force some options to ensure messages
 	// have enough information.
 	if details.Select == `` {
@@ -1135,7 +1018,6 @@ func makeChangefeedDescription(
 	}); err != nil {
 		return "", err
 	}
-
 	sort.Slice(c.Options, func(i, j int) bool { return c.Options[i].Key < c.Options[j].Key })
 
 	return tree.AsStringWithFlags(c, tree.FmtShowFullURIs), nil
@@ -1214,16 +1096,16 @@ type changefeedResumer struct {
 	job *jobs.Job
 }
 
-func (b *changefeedResumer) setJobStatusMessage(
+func (b *changefeedResumer) setJobRunningStatus(
 	ctx context.Context, lastUpdate time.Time, fmtOrMsg string, args ...interface{},
 ) time.Time {
 	if timeutil.Since(lastUpdate) < runStatusUpdateFrequency {
 		return lastUpdate
 	}
 
-	status := jobs.StatusMessage(fmt.Sprintf(fmtOrMsg, args...))
-	if err := b.job.NoTxn().UpdateStatusMessage(ctx, status); err != nil {
-		log.Warningf(ctx, "failed to set status: %v", err)
+	status := jobs.RunningStatus(fmt.Sprintf(fmtOrMsg, args...))
+	if err := b.job.NoTxn().RunningStatus(ctx, status); err != nil {
+		log.Warningf(ctx, "failed to set running status: %v", err)
 	}
 
 	return timeutil.Now()
@@ -1236,13 +1118,12 @@ func (b *changefeedResumer) Resume(ctx context.Context, execCtx interface{}) err
 	jobID := b.job.ID()
 	details := b.job.Details().(jobspb.ChangefeedDetails)
 	progress := b.job.Progress()
-	description := b.job.Payload().Description
 
 	if err := b.ensureClusterIDMatches(ctx, jobExec.ExtendedEvalContext().ClusterID); err != nil {
 		return err
 	}
 
-	err := b.resumeWithRetries(ctx, jobExec, jobID, details, description, progress, execCfg)
+	err := b.resumeWithRetries(ctx, jobExec, jobID, details, progress, execCfg)
 	if err != nil {
 		return b.handleChangefeedError(ctx, err, details, jobExec)
 	}
@@ -1345,7 +1226,7 @@ func (b *changefeedResumer) handleChangefeedError(
 			changefeedbase.OptOnError, changefeedbase.OptOnErrorPause)
 		return b.job.NoTxn().PauseRequestedWithFunc(ctx, func(ctx context.Context, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
 			// directly update running status to avoid the running/reverted job status check
-			md.Progress.StatusMessage = errorMessage
+			md.Progress.RunningStatus = errorMessage
 			ju.UpdateProgress(md.Progress)
 			log.Warningf(ctx, errorFmt, changefeedErr, changefeedbase.OptOnError, changefeedbase.OptOnErrorPause)
 			return nil
@@ -1357,14 +1238,11 @@ func (b *changefeedResumer) handleChangefeedError(
 	}
 }
 
-var replanErr = errors.New("replan due to detail change")
-
 func (b *changefeedResumer) resumeWithRetries(
 	ctx context.Context,
 	jobExec sql.JobExecContext,
 	jobID jobspb.JobID,
 	details jobspb.ChangefeedDetails,
-	description string,
 	initialProgress jobspb.Progress,
 	execCfg *sql.ExecutorConfig,
 ) error {
@@ -1401,11 +1279,6 @@ func (b *changefeedResumer) resumeWithRetries(
 	jobExec.ExtendedEvalContext().ChangefeedState = localState
 	knobs, _ := execCfg.DistSQLSrv.TestingKnobs.Changefeed.(*TestingKnobs)
 
-	resolvedDest, err := resolveDest(ctx, execCfg, details.SinkURI)
-	if err != nil {
-		log.Warningf(ctx, "failed to resolve destination details for change monitoring: %v", err)
-	}
-
 	for r := getRetry(ctx); r.Next(); {
 		flowErr := maybeUpgradePreProductionReadyExpression(ctx, jobID, details, jobExec)
 
@@ -1419,42 +1292,9 @@ func (b *changefeedResumer) resumeWithRetries(
 				knobs.BeforeDistChangefeed()
 			}
 
-			confPoller := make(chan struct{})
-			g := ctxgroup.WithContext(ctx)
-			g.GoCtx(func(ctx context.Context) error {
-				defer close(confPoller)
-				return distChangefeedFlow(ctx, jobExec, jobID, details, description, localState, startedCh)
-			})
-			g.GoCtx(func(ctx context.Context) error {
-				t := time.NewTicker(15 * time.Second)
-				defer t.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					case <-confPoller:
-						return nil
-					case <-t.C:
-						newDest, err := reloadDest(ctx, jobID, execCfg)
-						if err != nil {
-							log.Warningf(ctx, "failed to check for updated configuration: %v", err)
-						} else if newDest != resolvedDest {
-							resolvedDest = newDest
-							return replanErr
-						}
-					}
-				}
-			})
-
-			flowErr = g.Wait()
-
+			flowErr = distChangefeedFlow(ctx, jobExec, jobID, details, localState, startedCh)
 			if flowErr == nil {
 				return nil // Changefeed completed -- e.g. due to initial_scan=only mode.
-			}
-
-			if errors.Is(flowErr, replanErr) {
-				log.Infof(ctx, "restarting changefeed due to updated configuration")
-				continue
 			}
 
 			if knobs != nil && knobs.HandleDistChangefeedError != nil {
@@ -1468,7 +1308,7 @@ func (b *changefeedResumer) resumeWithRetries(
 			// Best effort -- update job status to make it clear why changefeed shut down.
 			// This won't always work if this node is being shutdown/drained.
 			if ctx.Err() == nil {
-				b.setJobStatusMessage(ctx, time.Time{}, "shutdown due to %s", err)
+				b.setJobRunningStatus(ctx, time.Time{}, "shutdown due to %s", err)
 			}
 			return err
 		}
@@ -1476,7 +1316,7 @@ func (b *changefeedResumer) resumeWithRetries(
 		// All other errors retry.
 		log.Warningf(ctx, `Changefeed job %d encountered transient error: %v (attempt %d)`,
 			jobID, flowErr, 1+r.CurrentAttempt())
-		lastRunStatusUpdate = b.setJobStatusMessage(ctx, lastRunStatusUpdate, "transient error: %s", flowErr)
+		lastRunStatusUpdate = b.setJobRunningStatus(ctx, lastRunStatusUpdate, "transient error: %s", flowErr)
 
 		if metrics, ok := execCfg.JobRegistry.MetricsStruct().Changefeed.(*Metrics); ok {
 			sli, err := metrics.getSLIMetrics(details.Opts[changefeedbase.OptMetricsScope])
@@ -1517,35 +1357,6 @@ func (b *changefeedResumer) resumeWithRetries(
 	return errors.Wrap(ctx.Err(), `ran out of retries`)
 }
 
-func resolveDest(ctx context.Context, execCfg *sql.ExecutorConfig, sinkURI string) (string, error) {
-	u, err := url.Parse(sinkURI)
-	if err != nil {
-		return "", err
-	}
-	if u.Scheme != changefeedbase.SinkSchemeExternalConnection {
-		return sinkURI, nil
-	}
-	resolved := ""
-	err = execCfg.InternalDB.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
-		conn, err := externalconn.LoadExternalConnection(ctx, u.Host, txn)
-		if err != nil {
-			return err
-		}
-		resolved = conn.UnredactedConnectionStatement()
-		return nil
-	})
-	return resolved, err
-}
-
-func reloadDest(ctx context.Context, id jobspb.JobID, execCfg *sql.ExecutorConfig) (string, error) {
-	reloadedJob, err := execCfg.JobRegistry.LoadJob(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	newDetails := reloadedJob.Details().(jobspb.ChangefeedDetails)
-	return resolveDest(ctx, execCfg, newDetails.SinkURI)
-}
-
 // reconcileJobStateWithLocalState ensures that the job progress information
 // is consistent with the state present in the local state.
 func reconcileJobStateWithLocalState(
@@ -1584,30 +1395,29 @@ func reconcileJobStateWithLocalState(
 		return err
 	}
 	// Advance frontier based on the information received from the aggregators.
-	for sp, ts := range localState.AggregatorFrontierSpans() {
-		_, err := sf.Forward(sp, ts)
+	for _, s := range localState.aggregatorFrontier {
+		_, err := sf.Forward(s.Span, s.Timestamp)
 		if err != nil {
 			return err
 		}
 	}
 
-	maxBytes := changefeedbase.SpanCheckpointMaxBytes.Get(&execCfg.Settings.SV)
-	checkpoint := checkpoint.Make(
-		sf.Frontier(),
-		localState.AggregatorFrontierSpans(),
-		maxBytes,
-		nil, /* metrics */
-	)
+	maxBytes := changefeedbase.FrontierCheckpointMaxBytes.Get(&execCfg.Settings.SV)
+	checkpointSpans, checkpointTS := getCheckpointSpans(sf.Frontier(), func(forEachSpan span.Operation) {
+		for _, fs := range localState.aggregatorFrontier {
+			forEachSpan(fs.Span, fs.Timestamp)
+		}
+	}, maxBytes)
 
 	// Update checkpoint.
 	updateHW := highWater.Less(sf.Frontier())
-	updateSpanCheckpoint := !checkpoint.IsEmpty()
+	updateSpanCheckpoint := len(checkpointSpans) > 0
 
 	if updateHW || updateSpanCheckpoint {
 		if updateHW {
 			localState.SetHighwater(sf.Frontier())
 		}
-		localState.SetCheckpoint(checkpoint)
+		localState.SetCheckpoint(checkpointSpans, checkpointTS)
 		if log.V(1) {
 			log.Infof(ctx, "Applying checkpoint to job record:  hw=%v, cf=%v",
 				localState.progress.GetHighWater(), localState.progress.GetChangefeed())
@@ -1645,7 +1455,6 @@ func (b *changefeedResumer) OnFailOrCancel(
 		errors.DecodeError(ctx, *b.job.Payload().FinalResumeError),
 	) {
 		telemetry.Count(`changefeed.enterprise.cancel`)
-		logChangefeedCanceledTelemetry(ctx, b.job)
 	} else {
 		telemetry.Count(`changefeed.enterprise.fail`)
 		exec.ExecCfg().JobRegistry.MetricsStruct().Changefeed.(*Metrics).Failures.Inc(1)
@@ -1765,19 +1574,6 @@ func logChangefeedFailedTelemetryDuringStartup(
 	}
 
 	log.StructuredEvent(ctx, severity.INFO, changefeedFailedEvent)
-}
-
-func logChangefeedCanceledTelemetry(ctx context.Context, job *jobs.Job) {
-	var changefeedEventDetails eventpb.CommonChangefeedEventDetails
-	if job != nil {
-		changefeedDetails := job.Details().(jobspb.ChangefeedDetails)
-		changefeedEventDetails = makeCommonChangefeedEventDetails(ctx, changefeedDetails, job.Payload().Description, job.ID())
-	}
-
-	changefeedCanceled := &eventpb.ChangefeedCanceled{
-		CommonChangefeedEventDetails: changefeedEventDetails,
-	}
-	log.StructuredEvent(ctx, severity.INFO, changefeedCanceled)
 }
 
 func makeCommonChangefeedEventDetails(

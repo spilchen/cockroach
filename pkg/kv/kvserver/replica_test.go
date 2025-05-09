@@ -73,7 +73,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
-	"github.com/cockroachdb/cockroach/pkg/util/tracing/tracingpb"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/logtags"
@@ -2873,20 +2872,7 @@ func TestReplicaLatchingOptimisticEvaluationKeyLimit(t *testing.T) {
 				baReadCopy := baRead.ShallowCopy()
 				baReadCopy.MaxSpanRequestKeys = test.limit
 				go func() {
-					// Timeout the test in 30 seconds instead of letting it hang
-					// indefinitely. Moreover, set up tracing, to ensure visibility into
-					// the failure if there is one.
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					ctx, sp := tracing.EnsureChildSpan(
-						ctx, tc.store.cfg.AmbientCtx.Tracer, "read-req", tracing.WithForceRealSpan(),
-					)
-					sp.SetRecordingType(tracingpb.RecordingVerbose)
-					_, pErr := tc.Sender().Send(ctx, baReadCopy)
-					if pErr != nil {
-						rec := sp.FinishAndGetConfiguredRecording()
-						t.Log(rec)
-					}
+					_, pErr := tc.Sender().Send(context.Background(), baReadCopy)
 					errCh <- pErr
 				}()
 				if test.interferes {
@@ -3031,7 +3017,7 @@ func TestReplicaLatchingOptimisticEvaluationSkipLocked(t *testing.T) {
 						resp := br.Responses[i]
 						if err := kvpb.ResponseKeyIterate(req.GetInner(), resp.GetInner(), func(k roachpb.Key) {
 							respKeys = append(respKeys, k)
-						}, false /* includeLockedNonExisting */); err != nil {
+						}); err != nil {
 							return kvpb.NewError(err)
 						}
 					}
@@ -7190,11 +7176,9 @@ func TestReplicaDestroy(t *testing.T) {
 	func() {
 		tc.repl.raftMu.Lock()
 		defer tc.repl.raftMu.Unlock()
-		_, err := tc.store.removeInitializedReplicaRaftMuLocked(
-			ctx, tc.repl, repl.Desc().NextReplicaID, redact.SafeString(t.Name()),
-			RemoveOptions{
-				DestroyData: true,
-			})
+		_, err := tc.store.removeInitializedReplicaRaftMuLocked(ctx, tc.repl, repl.Desc().NextReplicaID, RemoveOptions{
+			DestroyData: true,
+		})
 		require.NoError(t, err)
 	}()
 
@@ -7374,11 +7358,9 @@ func TestQuotaPoolAccessOnDestroyedReplica(t *testing.T) {
 	func() {
 		tc.repl.raftMu.Lock()
 		defer tc.repl.raftMu.Unlock()
-		if _, err := tc.store.removeInitializedReplicaRaftMuLocked(
-			ctx, repl, repl.Desc().NextReplicaID, redact.SafeString(t.Name()),
-			RemoveOptions{
-				DestroyData: true,
-			}); err != nil {
+		if _, err := tc.store.removeInitializedReplicaRaftMuLocked(ctx, repl, repl.Desc().NextReplicaID, RemoveOptions{
+			DestroyData: true,
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}()
@@ -7502,7 +7484,7 @@ func TestEntries(t *testing.T) {
 			// Case 19: lo and hi are available, but entry cache evicted.
 			{lo: indexes[5], hi: indexes[9], expResultCount: 4, expCacheCount: 0, setup: func() {
 				// Manually evict cache for the first 10 log entries.
-				repl.store.raftEntryCache.Clear(rangeID, indexes[9])
+				repl.store.raftEntryCache.Clear(rangeID, indexes[9]+1)
 				indexes = append(indexes, populateLogs(10, 40)...)
 			}},
 			// Case 20: lo and hi are available, entry cache evicted and hi available in cache.
@@ -7551,7 +7533,6 @@ func TestEntries(t *testing.T) {
 	})
 }
 
-// TODO(pav-kv): this test belongs to logstore. And requires a cleanup.
 func TestTerm(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -7592,25 +7573,26 @@ func TestTerm(t *testing.T) {
 		repl.mu.Lock()
 		defer repl.mu.Unlock()
 
-		firstIndex := repl.raftCompactedIndexRLocked() + 1
+		firstIndex := repl.raftFirstIndexRLocked()
 		if firstIndex != indexes[5] {
 			t.Fatalf("expected firstIndex %d to be %d", firstIndex, indexes[4])
 		}
 
 		// Truncated logs should return an ErrCompacted error.
-		if _, err := tc.repl.raftTermShMuLocked(indexes[1]); !errors.Is(err, raft.ErrCompacted) {
+		if _, err := tc.repl.raftTermLocked(indexes[1]); !errors.Is(err, raft.ErrCompacted) {
 			t.Errorf("expected ErrCompacted, got %s", err)
 		}
-		if _, err := tc.repl.raftTermShMuLocked(indexes[3]); !errors.Is(err, raft.ErrCompacted) {
+		if _, err := tc.repl.raftTermLocked(indexes[3]); !errors.Is(err, raft.ErrCompacted) {
 			t.Errorf("expected ErrCompacted, got %s", err)
 		}
 
-		firstIndexTerm, err := tc.repl.raftTermShMuLocked(firstIndex)
+		// FirstIndex-1 should return the term of firstIndex.
+		firstIndexTerm, err := tc.repl.raftTermLocked(firstIndex)
 		if err != nil {
 			t.Errorf("expect no error, got %s", err)
 		}
 
-		term, err := tc.repl.raftTermShMuLocked(indexes[4])
+		term, err := tc.repl.raftTermLocked(indexes[4])
 		if err != nil {
 			t.Errorf("expect no error, got %s", err)
 		}
@@ -7621,15 +7603,15 @@ func TestTerm(t *testing.T) {
 		lastIndex := repl.raftLastIndexRLocked()
 
 		// Last index should return correctly.
-		if _, err := tc.repl.raftTermShMuLocked(lastIndex); err != nil {
+		if _, err := tc.repl.raftTermLocked(lastIndex); err != nil {
 			t.Errorf("expected no error, got %s", err)
 		}
 
 		// Terms for after the last index should return ErrUnavailable.
-		if _, err := tc.repl.raftTermShMuLocked(lastIndex + 1); !errors.Is(err, raft.ErrUnavailable) {
+		if _, err := tc.repl.raftTermLocked(lastIndex + 1); !errors.Is(err, raft.ErrUnavailable) {
 			t.Errorf("expected ErrUnavailable, got %s", err)
 		}
-		if _, err := tc.repl.raftTermShMuLocked(indexes[9] + 1000); !errors.Is(err, raft.ErrUnavailable) {
+		if _, err := tc.repl.raftTermLocked(indexes[9] + 1000); !errors.Is(err, raft.ErrUnavailable) {
 			t.Errorf("expected ErrUnavailable, got %s", err)
 		}
 	})
@@ -8163,12 +8145,6 @@ func TestReplicaRefreshPendingCommandsTicks(t *testing.T) {
 	cfg := TestStoreConfig(nil)
 	// Disable ticks which would interfere with the manual ticking in this test.
 	cfg.RaftTickInterval = time.Hour
-	// Disable pre-campaign store liveness checks because we're disabling ticking
-	// above, and we don't want the first election attempt to guaranteed fail.
-	cfg.TestingKnobs.RaftTestingKnobs = &raft.TestingKnobs{
-		DisablePreCampaignStoreLivenessCheck: true,
-	}
-
 	stopper := stop.NewStopper()
 	defer stopper.Stop(ctx)
 	tc.StartWithStoreConfig(ctx, t, stopper, cfg)
@@ -8213,7 +8189,7 @@ func TestReplicaRefreshPendingCommandsTicks(t *testing.T) {
 	r.mu.Unlock()
 
 	// We tick the replica 3*RaftReproposalTimeoutTicks.
-	for i := int64(0); i < 3*reproposalTicks; i++ {
+	for i := 0; i < 3*reproposalTicks; i++ {
 		// Add another pending command on each iteration.
 		id := fmt.Sprintf("%08d", i)
 		ba := &kvpb.BatchRequest{}
@@ -8269,7 +8245,7 @@ func TestReplicaRefreshPendingCommandsTicks(t *testing.T) {
 		// time, this will be 1 reproposal (the one at ticks=0 for the reproposal at
 		// ticks=reproposalTicks), then +reproposalTicks reproposals each time.
 		if (ticks % reproposalTicks) == 0 {
-			if exp := i + 2 - reproposalTicks; int64(len(reproposed)) != exp { // +1 to offset i, +1 for inclusive
+			if exp := i + 2 - reproposalTicks; len(reproposed) != exp { // +1 to offset i, +1 for inclusive
 				t.Fatalf("%d: expected %d reproposed commands, but found %d", i, exp, len(reproposed))
 			}
 		} else {
@@ -9023,8 +8999,7 @@ func TestReplicaMetrics(t *testing.T) {
 		return m
 	}
 
-	status := func(lead raftpb.PeerID, progress map[raftpb.PeerID]tracker.Progress,
-		leadSupportUntil hlc.Timestamp) *raft.SparseStatus {
+	status := func(lead raftpb.PeerID, progress map[raftpb.PeerID]tracker.Progress) *raft.SparseStatus {
 		status := &raft.SparseStatus{
 			Progress: progress,
 		}
@@ -9037,7 +9012,6 @@ func TestReplicaMetrics(t *testing.T) {
 			status.SoftState.RaftState = raftpb.StateFollower
 		}
 		status.HardState.Lead = lead
-		status.BasicStatus.LeadSupportUntil = leadSupportUntil
 		return status
 	}
 	desc := func(ids ...int) roachpb.RangeDescriptor {
@@ -9072,51 +9046,47 @@ func TestReplicaMetrics(t *testing.T) {
 		expected    ReplicaMetrics
 	}{
 		// The leader of a 1-replica range is up.
-		{1, 1, desc(1), status(1, progress(2), hlc.Timestamp{}), live(1), 0,
+		{1, 1, desc(1), status(1, progress(2)), live(1), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         false,
 				Underreplicated:     false,
 				BehindCount:         10,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{1, 0, 0},
 			}},
 		// The leader of a 2-replica range is up (only 1 replica present).
-		{2, 1, desc(1), status(1, progress(2), hlc.Timestamp{}), live(1), 0,
+		{2, 1, desc(1), status(1, progress(2)), live(1), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         false,
 				Underreplicated:     true,
 				BehindCount:         10,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{1, 0, 0},
 			}},
 		// The leader of a 2-replica range is up.
-		{2, 1, desc(1, 2), status(1, progress(2), hlc.Timestamp{}), live(1), 0,
+		{2, 1, desc(1, 2), status(1, progress(2)), live(1), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         true,
 				Underreplicated:     true,
 				BehindCount:         10,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{1, 0, 0},
 			}},
 		// Both replicas of a 2-replica range are up to date.
-		{2, 1, desc(1, 2), status(1, progress(2, 2), hlc.Timestamp{}), live(1, 2), 0,
+		{2, 1, desc(1, 2), status(1, progress(2, 2)), live(1, 2), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         false,
 				Underreplicated:     false,
 				BehindCount:         20,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{2, 0, 0},
 			}},
 		// Both replicas of a 2-replica range are up to date (local replica is not leader)
-		{2, 2, desc(1, 2), status(2, progress(2, 2), hlc.Timestamp{}), live(1, 2), 0,
+		{2, 2, desc(1, 2), status(2, progress(2, 2)), live(1, 2), 0,
 			ReplicaMetrics{
 				Leader:              false,
 				RangeCounter:        false,
@@ -9125,108 +9095,99 @@ func TestReplicaMetrics(t *testing.T) {
 				RaftFlowStateCounts: [3]int64{0, 0, 0},
 			}},
 		// Both replicas of a 2-replica range are live, but follower is behind.
-		{2, 1, desc(1, 2), status(1, progress(2, 1), hlc.Timestamp{}), live(1, 2), 0,
+		{2, 1, desc(1, 2), status(1, progress(2, 1)), live(1, 2), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         false,
 				Underreplicated:     false,
 				BehindCount:         21,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{2, 0, 0},
 			}},
 		// Both replicas of a 2-replica range are up to date, but follower is dead.
-		{2, 1, desc(1, 2), status(1, progress(2, 2), hlc.Timestamp{}), live(1), 0,
+		{2, 1, desc(1, 2), status(1, progress(2, 2)), live(1), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         true,
 				Underreplicated:     true,
 				BehindCount:         20,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{2, 0, 0},
 			}},
 		// The leader of a 3-replica range is up.
-		{3, 1, desc(1, 2, 3), status(1, progress(1), hlc.Timestamp{}), live(1), 0,
+		{3, 1, desc(1, 2, 3), status(1, progress(1)), live(1), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         true,
 				Underreplicated:     true,
 				BehindCount:         11,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{1, 0, 0},
 			}},
 		// All replicas of a 3-replica range are up to date.
-		{3, 1, desc(1, 2, 3), status(1, progress(2, 2, 2), hlc.Timestamp{}), live(1, 2, 3), 0,
+		{3, 1, desc(1, 2, 3), status(1, progress(2, 2, 2)), live(1, 2, 3), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         false,
 				Underreplicated:     false,
 				BehindCount:         30,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{3, 0, 0},
 			}},
 		// All replicas of a 3-replica range are up to date (match = 0 is
 		// considered up to date).
-		{3, 1, desc(1, 2, 3), status(1, progress(2, 2, 0), hlc.Timestamp{}), live(1, 2, 3), 0,
+		{3, 1, desc(1, 2, 3), status(1, progress(2, 2, 0)), live(1, 2, 3), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         false,
 				Underreplicated:     false,
 				BehindCount:         20,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{3, 0, 0},
 			}},
 		// All replicas of a 3-replica range are live but one replica is behind.
-		{3, 1, desc(1, 2, 3), status(1, progress(2, 2, 1), hlc.Timestamp{}), live(1, 2, 3), 0,
+		{3, 1, desc(1, 2, 3), status(1, progress(2, 2, 1)), live(1, 2, 3), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         false,
 				Underreplicated:     false,
 				BehindCount:         31,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{3, 0, 0},
 			}},
 		// All replicas of a 3-replica range are live but two replicas are behind.
-		{3, 1, desc(1, 2, 3), status(1, progress(2, 1, 1), hlc.Timestamp{}), live(1, 2, 3), 0,
+		{3, 1, desc(1, 2, 3), status(1, progress(2, 1, 1)), live(1, 2, 3), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         false,
 				Underreplicated:     false,
 				BehindCount:         32,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{3, 0, 0},
 			}},
 		// All replicas of a 3-replica range are up to date, but one replica is dead.
-		{3, 1, desc(1, 2, 3), status(1, progress(2, 2, 2), hlc.Timestamp{}), live(1, 2), 0,
+		{3, 1, desc(1, 2, 3), status(1, progress(2, 2, 2)), live(1, 2), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         false,
 				Underreplicated:     true,
 				BehindCount:         30,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{3, 0, 0},
 			}},
 		// All replicas of a 3-replica range are up to date, but two replicas are dead.
-		{3, 1, desc(1, 2, 3), status(1, progress(2, 2, 2), hlc.Timestamp{}), live(1), 0,
+		{3, 1, desc(1, 2, 3), status(1, progress(2, 2, 2)), live(1), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         true,
 				Underreplicated:     true,
 				BehindCount:         30,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{3, 0, 0},
 			}},
 		// All replicas of a 3-replica range are up to date, but two replicas are
 		// dead, including the leader.
-		{3, 2, desc(1, 2, 3), status(0, progress(2, 2, 2), hlc.Timestamp{}), live(2), 0,
+		{3, 2, desc(1, 2, 3), status(0, progress(2, 2, 2)), live(2), 0,
 			ReplicaMetrics{
 				Leader:              false,
 				RangeCounter:        true,
@@ -9236,7 +9197,7 @@ func TestReplicaMetrics(t *testing.T) {
 				RaftFlowStateCounts: [3]int64{0, 0, 0},
 			}},
 		// Range has no leader, local replica is the range counter.
-		{3, 1, desc(1, 2, 3), status(0, progress(2, 2, 2), hlc.Timestamp{}), live(1, 2, 3), 0,
+		{3, 1, desc(1, 2, 3), status(0, progress(2, 2, 2)), live(1, 2, 3), 0,
 			ReplicaMetrics{
 				Leader:              false,
 				RangeCounter:        true,
@@ -9245,7 +9206,7 @@ func TestReplicaMetrics(t *testing.T) {
 				RaftFlowStateCounts: [3]int64{0, 0, 0},
 			}},
 		// Range has no leader, local replica is the range counter.
-		{3, 3, desc(3, 2, 1), status(0, progress(2, 2, 2), hlc.Timestamp{}), live(1, 2, 3), 0,
+		{3, 3, desc(3, 2, 1), status(0, progress(2, 2, 2)), live(1, 2, 3), 0,
 			ReplicaMetrics{
 				Leader:              false,
 				RangeCounter:        true,
@@ -9254,7 +9215,7 @@ func TestReplicaMetrics(t *testing.T) {
 				RaftFlowStateCounts: [3]int64{0, 0, 0},
 			}},
 		// Range has no leader, local replica is not the range counter.
-		{3, 2, desc(1, 2, 3), status(0, progress(2, 2, 2), hlc.Timestamp{}), live(1, 2, 3), 0,
+		{3, 2, desc(1, 2, 3), status(0, progress(2, 2, 2)), live(1, 2, 3), 0,
 			ReplicaMetrics{
 				Leader:              false,
 				RangeCounter:        false,
@@ -9263,7 +9224,7 @@ func TestReplicaMetrics(t *testing.T) {
 				RaftFlowStateCounts: [3]int64{0, 0, 0},
 			}},
 		// Range has no leader, local replica is not the range counter.
-		{3, 3, desc(1, 2, 3), status(0, progress(2, 2, 2), hlc.Timestamp{}), live(1, 2, 3), 0,
+		{3, 3, desc(1, 2, 3), status(0, progress(2, 2, 2)), live(1, 2, 3), 0,
 			ReplicaMetrics{
 				Leader:              false,
 				RangeCounter:        false,
@@ -9272,7 +9233,7 @@ func TestReplicaMetrics(t *testing.T) {
 				RaftFlowStateCounts: [3]int64{0, 0, 0},
 			}},
 		// The leader of a 1-replica range is up and raft log is too large.
-		{1, 1, desc(1), status(1, progress(2), hlc.Timestamp{}), live(1), 5 * cfg.RaftLogTruncationThreshold,
+		{1, 1, desc(1), status(1, progress(2)), live(1), 5 * cfg.RaftLogTruncationThreshold,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
@@ -9281,42 +9242,18 @@ func TestReplicaMetrics(t *testing.T) {
 				BehindCount:         10,
 				RaftLogSize:         5 * cfg.RaftLogTruncationThreshold,
 				RaftLogTooLarge:     true,
-				LeaderNotFortified:  true,
-				RaftFlowStateCounts: [3]int64{1, 0, 0},
-			}},
-		// The leader of a 1-replica range is up, and the leader support expired.
-		{1, 1, desc(1), status(1, progress(2), hlc.MinTimestamp), live(1), 0,
-			ReplicaMetrics{
-				Leader:              true,
-				RangeCounter:        true,
-				Unavailable:         false,
-				Underreplicated:     false,
-				BehindCount:         10,
-				LeaderNotFortified:  true, // the support expired
-				RaftFlowStateCounts: [3]int64{1, 0, 0},
-			}},
-		// The leader of a 1-replica range is up, and the support hasn't expired.
-		{1, 1, desc(1), status(1, progress(2), hlc.MaxTimestamp), live(1), 0,
-			ReplicaMetrics{
-				Leader:              true,
-				RangeCounter:        true,
-				Unavailable:         false,
-				Underreplicated:     false,
-				BehindCount:         10,
-				LeaderNotFortified:  false, // The support hasn't expired yet
 				RaftFlowStateCounts: [3]int64{1, 0, 0},
 			}},
 		// 2 replicas are in StateReplicate, and one in StateSnapshot.
 		{3, 1, desc(1, 2, 3), status(1, withStates(progress(2, 1, 1),
 			tracker.StateReplicate, tracker.StateReplicate, tracker.StateSnapshot,
-		), hlc.Timestamp{}), live(1, 2, 3), 0,
+		)), live(1, 2, 3), 0,
 			ReplicaMetrics{
 				Leader:              true,
 				RangeCounter:        true,
 				Unavailable:         false,
 				Underreplicated:     false,
 				BehindCount:         32,
-				LeaderNotFortified:  true,
 				RaftFlowStateCounts: [3]int64{0, 2, 1}, // 2 replicate, 1 snapshot
 			}},
 	}
@@ -9326,11 +9263,10 @@ func TestReplicaMetrics(t *testing.T) {
 			spanConfig := cfg.DefaultSpanConfig
 			spanConfig.NumReplicas = c.replicas
 
-			// Alternate between quiescent/asleep and non-quiescent/awake replicas to
-			// test the quiescent metric.
+			// Alternate between quiescent and non-quiescent replicas to test the
+			// quiescent metric.
 			c.expected.Quiescent = i%2 == 0
-			c.expected.Asleep = i%3 == 0
-			c.expected.Ticking = !c.expected.Quiescent && !c.expected.Asleep
+			c.expected.Ticking = !c.expected.Quiescent
 			metrics := calcReplicaMetrics(calcReplicaMetricsInput{
 				raftCfg:            &cfg.RaftConfig,
 				conf:               spanConfig,
@@ -9339,11 +9275,9 @@ func TestReplicaMetrics(t *testing.T) {
 				raftStatus:         c.raftStatus,
 				storeID:            c.storeID,
 				quiescent:          c.expected.Quiescent,
-				asleep:             c.expected.Asleep,
 				ticking:            c.expected.Ticking,
 				raftLogSize:        c.raftLogSize,
 				raftLogSizeTrusted: true,
-				now:                tc.Clock().NowAsClockTimestamp(),
 			})
 			require.Equal(t, c.expected, metrics)
 		})
@@ -9415,7 +9349,8 @@ func TestCancelPendingCommands(t *testing.T) {
 		t.Fatalf("command finished earlier than expected with error %v", pErr)
 	default:
 	}
-	require.NoError(t, tc.store.RemoveReplica(ctx, tc.repl, tc.repl.Desc().NextReplicaID, redact.SafeString(t.Name()), RemoveOptions{DestroyData: true}))
+	require.NoError(t, tc.store.RemoveReplica(ctx, tc.repl, tc.repl.Desc().NextReplicaID,
+		RemoveOptions{DestroyData: true}))
 	pErr := <-errChan
 	if _, ok := pErr.GetDetail().(*kvpb.AmbiguousResultError); !ok {
 		t.Errorf("expected AmbiguousResultError, got %v", pErr)
@@ -9970,7 +9905,7 @@ type testQuiescer struct {
 	numProposals           int
 	pendingQuota           bool
 	sendTokens             bool
-	ticksSinceLastProposal int64
+	ticksSinceLastProposal int
 	status                 *raft.SparseStatus
 	lastIndex              kvpb.RaftIndex
 	raftReady              bool
@@ -10027,7 +9962,7 @@ func (q *testQuiescer) hasSendTokensRaftMuLockedReplicaMuLocked() bool {
 	return q.sendTokens
 }
 
-func (q *testQuiescer) ticksSinceLastProposalRLocked() int64 {
+func (q *testQuiescer) ticksSinceLastProposalRLocked() int {
 	return q.ticksSinceLastProposal
 }
 
@@ -11942,8 +11877,7 @@ func TestReplicaShouldTransferRaftLeadershipToLeaseholder(t *testing.T) {
 	defer log.Scope(t).Close(t)
 
 	type params struct {
-		raftStatus              raft.BasicStatus
-		progress                *tracker.Progress
+		raftStatus              raft.SparseStatus
 		leaseStatus             kvserverpb.LeaseStatus
 		leaseAcquisitionPending bool
 		storeID                 roachpb.StoreID
@@ -11956,19 +11890,23 @@ func TestReplicaShouldTransferRaftLeadershipToLeaseholder(t *testing.T) {
 	const localID = 1
 	const remoteID = 2
 	base := params{
-		raftStatus: raft.BasicStatus{
-			SoftState: raft.SoftState{
-				RaftState: raftpb.StateLeader,
+		raftStatus: raft.SparseStatus{
+			BasicStatus: raft.BasicStatus{
+				SoftState: raft.SoftState{
+					RaftState: raftpb.StateLeader,
+				},
+				HardState: raftpb.HardState{
+					Lead:   localID,
+					Commit: 10,
+				},
 			},
-			HardState: raftpb.HardState{
-				Lead:   localID,
-				Commit: 10,
+			Progress: map[raftpb.PeerID]tracker.Progress{
+				remoteID: {Match: 10},
 			},
 		},
-		progress: &tracker.Progress{Match: 10},
 		leaseStatus: kvserverpb.LeaseStatus{
 			Lease: roachpb.Lease{Replica: roachpb.ReplicaDescriptor{
-				StoreID: remoteID,
+				ReplicaID: remoteID,
 			}},
 			State: kvserverpb.LeaseState_VALID,
 		},
@@ -12000,23 +11938,23 @@ func TestReplicaShouldTransferRaftLeadershipToLeaseholder(t *testing.T) {
 			p.leaseStatus.State = kvserverpb.LeaseState_EXPIRED
 		}},
 		"local lease": {false, func(p *params) {
-			p.leaseStatus.Lease.Replica.StoreID = localID
+			p.leaseStatus.Lease.Replica.ReplicaID = localID
 		}},
 		"lease request pending": {false, func(p *params) {
 			p.leaseAcquisitionPending = true
 		}},
 		"no progress": {false, func(p *params) {
-			p.progress = nil
+			p.raftStatus.Progress = map[raftpb.PeerID]tracker.Progress{}
 		}},
 		"insufficient progress": {false, func(p *params) {
-			p.progress = &tracker.Progress{Match: 9}
+			p.raftStatus.Progress = map[raftpb.PeerID]tracker.Progress{remoteID: {Match: 9}}
 		}},
 		"no progress, draining": {true, func(p *params) {
-			p.progress = nil
+			p.raftStatus.Progress = map[raftpb.PeerID]tracker.Progress{}
 			p.draining = true
 		}},
 		"insufficient progress, draining": {true, func(p *params) {
-			p.progress = &tracker.Progress{Match: 9}
+			p.raftStatus.Progress = map[raftpb.PeerID]tracker.Progress{remoteID: {Match: 9}}
 			p.draining = true
 		}},
 	}
@@ -12026,7 +11964,7 @@ func TestReplicaShouldTransferRaftLeadershipToLeaseholder(t *testing.T) {
 			p := base
 			tc.modify(&p)
 			require.Equal(t, tc.expect, shouldTransferRaftLeadershipToLeaseholderLocked(
-				p.raftStatus, p.progress, p.leaseStatus, p.leaseAcquisitionPending, p.storeID, p.draining))
+				p.raftStatus, p.leaseStatus, p.leaseAcquisitionPending, p.storeID, p.draining))
 		})
 	}
 }
@@ -12169,15 +12107,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 			expTxn: noTxnRecord,
 		},
 		{
-			name: "end transaction (prepare)",
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			expTxn: txnWithStatus(roachpb.PREPARED),
-		},
-		{
 			name: "push transaction (timestamp)",
 			run: func(tc testContext, txn *roachpb.Transaction, now hlc.Timestamp) error {
 				pt := pushTxnArgs(getTestPusher(tc), txn, kvpb.PUSH_TIMESTAMP)
@@ -12297,19 +12226,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 			},
 			// The transaction record will be eagerly GC-ed.
 			expTxn: noTxnRecord,
-		},
-		{
-			name: "end transaction (prepare) after heartbeat transaction",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				hb, hbH := heartbeatArgs(txn, txn.MinTimestamp)
-				return sendWrappedWithErr(tc, hbH, &hb)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			expTxn: txnWithStatus(roachpb.PREPARED),
 		},
 		{
 			name: "push transaction (timestamp) after heartbeat transaction",
@@ -12691,22 +12607,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 			expTxn:   noTxnRecord,
 		},
 		{
-			// This case shouldn't happen in practice given a well-functioning
-			// transaction coordinator, but is handled correctly nevertheless.
-			name: "end transaction (prepare) after end transaction (abort)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, false /* commit */)
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			expError: "TransactionAbortedError(ABORT_REASON_RECORD_ALREADY_WRITTEN_POSSIBLE_REPLAY)",
-			expTxn:   noTxnRecord,
-		},
-		{
 			name: "push transaction (timestamp) after end transaction (abort)",
 			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
 				et, etH := endTxnArgs(txn, false /* commit */)
@@ -12788,20 +12688,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 			expTxn:   noTxnRecord,
 		},
 		{
-			name: "end transaction (prepare) after end transaction (commit)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			expError: "TransactionAbortedError(ABORT_REASON_RECORD_ALREADY_WRITTEN_POSSIBLE_REPLAY)",
-			expTxn:   noTxnRecord,
-		},
-		{
 			name: "push transaction (timestamp) after end transaction (commit)",
 			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
 				et, etH := endTxnArgs(txn, true /* commit */)
@@ -12825,109 +12711,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 				return sendWrappedWithErr(tc, kvpb.Header{}, &pt)
 			},
 			expTxn: noTxnRecord,
-		},
-		{
-			name: "heartbeat transaction after end transaction (prepare)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, now hlc.Timestamp) error {
-				hb, hbH := heartbeatArgs(txn, now)
-				return sendWrappedWithErr(tc, hbH, &hb)
-			},
-			expTxn: func(tc testContext, txn *roachpb.Transaction, hbTs hlc.Timestamp) roachpb.TransactionRecord {
-				record := txnWithStatus(roachpb.PREPARED)(tc, txn, hbTs)
-				record.LastHeartbeat.Forward(hbTs)
-				return record
-			},
-		},
-		{
-			name: "end transaction (stage) after end transaction (prepare)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.InFlightWrites = inFlightWrites
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			expError: "cannot parallel commit a prepared transaction",
-			expTxn:   txnWithStatus(roachpb.PREPARED),
-		},
-		{
-			name: "end transaction (abort) after end transaction (prepare)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, false /* commit */)
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			// The transaction record will be eagerly GC-ed.
-			expTxn: noTxnRecord,
-		},
-		{
-			name: "end transaction (commit) after end transaction (prepare)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			// The transaction record will be eagerly GC-ed.
-			expTxn: noTxnRecord,
-		},
-		{
-			name: "end transaction (prepare) after end transaction (prepare)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			expTxn: txnWithStatus(roachpb.PREPARED),
-		},
-		{
-			name: "push transaction (timestamp) after end transaction (prepare)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, now hlc.Timestamp) error {
-				pt := pushTxnArgs(getTestPusher(tc), txn, kvpb.PUSH_TIMESTAMP)
-				pt.PushTo = now
-				return sendWrappedWithErr(tc, kvpb.Header{}, &pt)
-			},
-			expError: "failed to push",
-			expTxn:   txnWithStatus(roachpb.PREPARED),
-		},
-		{
-			name: "push transaction (abort) after end transaction (prepare)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				pt := pushTxnArgs(getTestPusher(tc), txn, kvpb.PUSH_ABORT)
-				return sendWrappedWithErr(tc, kvpb.Header{}, &pt)
-			},
-			expError: "failed to push",
-			expTxn:   txnWithStatus(roachpb.PREPARED),
 		},
 		{
 			name: "heartbeat transaction after push transaction (timestamp)",
@@ -12992,23 +12775,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 			},
 			expError: "TransactionRetryError: retry txn (RETRY_SERIALIZABLE)",
 			// The end transaction (commit) does not write a transaction record
-			// if it hits a serializable retry error.
-			expTxn: noTxnRecord,
-		},
-		{
-			name: "end transaction (prepare) after push transaction (timestamp)",
-			setup: func(tc testContext, txn *roachpb.Transaction, now hlc.Timestamp) error {
-				pt := pushTxnArgs(getTestPusher(tc), txn, kvpb.PUSH_TIMESTAMP)
-				pt.PushTo = now
-				return sendWrappedWithErr(tc, kvpb.Header{}, &pt)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			expError: "TransactionRetryError: retry txn (RETRY_SERIALIZABLE)",
-			// The end transaction (prepare) does not write a transaction record
 			// if it hits a serializable retry error.
 			expTxn: noTxnRecord,
 		},
@@ -13153,20 +12919,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 			expTxn:   noTxnRecord,
 		},
 		{
-			name: "end transaction (prepare) after push transaction (abort)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				pt := pushTxnArgs(getTestPusher(tc), txn, kvpb.PUSH_ABORT)
-				return sendWrappedWithErr(tc, kvpb.Header{}, &pt)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			expError: "TransactionAbortedError(ABORT_REASON_ABORTED_RECORD_FOUND)",
-			expTxn:   noTxnRecord,
-		},
-		{
 			// Should not be possible.
 			name: "recover transaction (implicitly committed) after heartbeat transaction",
 			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
@@ -13272,21 +13024,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 				return sendWrappedWithErr(tc, kvpb.Header{}, &rt)
 			},
 			expTxn: noTxnRecord,
-		},
-		{
-			// Should not be possible.
-			name: "recover transaction (implicitly committed) after end transaction (prepare)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				rt := recoverTxnArgs(txn, true /* implicitlyCommitted */)
-				return sendWrappedWithErr(tc, kvpb.Header{}, &rt)
-			},
-			expError: "found PREPARED record for implicitly committed transaction",
-			expTxn:   txnWithStatus(roachpb.PREPARED),
 		},
 		{
 			// Should not be possible.
@@ -13421,21 +13158,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 			// The transaction record was cleaned up, so RecoverTxn can't perform
 			// the same assertion that it does in the case without eager gc.
 			expTxn: noTxnRecord,
-		},
-		{
-			// Should not be possible.
-			name: "recover transaction (not implicitly committed) after end transaction (prepare)",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				rt := recoverTxnArgs(txn, false /* implicitlyCommitted */)
-				return sendWrappedWithErr(tc, kvpb.Header{}, &rt)
-			},
-			expError: "cannot recover PREPARED transaction in same epoch",
-			expTxn:   txnWithStatus(roachpb.PREPARED),
 		},
 	}
 	testsWithoutEagerGC := []testCase{
@@ -13573,22 +13295,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 			expTxn:   txnWithStatus(roachpb.ABORTED),
 		},
 		{
-			// This case shouldn't happen in practice given a well-functioning
-			// transaction coordinator, but is handled correctly nevertheless.
-			name: "end transaction (prepare) after end transaction (abort) without eager gc",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, false /* commit */)
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			expError: "TransactionAbortedError(ABORT_REASON_ABORTED_RECORD_FOUND)",
-			expTxn:   txnWithStatus(roachpb.ABORTED),
-		},
-		{
 			name: "push transaction (timestamp) after end transaction (abort) without eager gc",
 			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
 				et, etH := endTxnArgs(txn, false /* commit */)
@@ -13668,22 +13374,6 @@ func TestTxnRecordLifecycleTransitions(t *testing.T) {
 			},
 			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
 				et, etH := endTxnArgs(txn, true /* commit */)
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			expError: "TransactionStatusError: already committed (REASON_TXN_COMMITTED)",
-			expTxn:   txnWithStatus(roachpb.COMMITTED),
-		},
-		{
-			// This case shouldn't happen in practice given a well-functioning
-			// transaction coordinator, but is handled correctly nevertheless.
-			name: "end transaction (prepare) after end transaction (commit) without eager gc",
-			setup: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				return sendWrappedWithErr(tc, etH, &et)
-			},
-			run: func(tc testContext, txn *roachpb.Transaction, _ hlc.Timestamp) error {
-				et, etH := endTxnArgs(txn, true /* commit */)
-				et.Prepare = true
 				return sendWrappedWithErr(tc, etH, &et)
 			},
 			expError: "TransactionStatusError: already committed (REASON_TXN_COMMITTED)",
@@ -15403,44 +15093,4 @@ func TestLockAcquisitions1PCInteractions(t *testing.T) {
 			})
 		})
 	})
-}
-
-// TestLeaderlessWatcherInit tests that the leaderless watcher is initialized
-// correctly.
-func TestLeaderlessWatcherInit(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-	ctx := context.Background()
-	tc := testContext{}
-	stopper := stop.NewStopper()
-	defer stopper.Stop(ctx)
-
-	// Set the leaderless threshold to 10 second.
-	tsc := TestStoreConfig(nil /* clock */)
-	ReplicaLeaderlessUnavailableThreshold.Override(ctx, &tsc.Settings.SV, 10*time.Second)
-	tc.StartWithStoreConfig(ctx, t, stopper, tsc)
-
-	repl, err := tc.store.GetReplica(1)
-	require.NoError(t, err)
-
-	repl.LeaderlessWatcher.mu.RLock()
-	defer repl.LeaderlessWatcher.mu.RUnlock()
-
-	// Initially, the leaderWatcher doesn't consider the replica as unavailable.
-	require.False(t, repl.LeaderlessWatcher.mu.unavailable)
-
-	// The leaderless timestamp is not set.
-	require.Equal(t, time.Time{}, repl.LeaderlessWatcher.mu.leaderlessTimestamp)
-
-	// The error is nilled out.
-	require.Nil(t, repl.LeaderlessWatcher.mu.err)
-
-	// The channel is closed.
-	c := repl.LeaderlessWatcher.C()
-	select {
-	case <-c:
-		// Channel is closed, which is expected
-	default:
-		t.Fatalf("expected LeaderlessWatcher channel to be closed")
-	}
 }

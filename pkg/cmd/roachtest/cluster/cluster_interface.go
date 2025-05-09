@@ -9,7 +9,6 @@ import (
 	"context"
 	gosql "database/sql"
 	"os"
-	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachprod/grafana"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
@@ -158,7 +157,6 @@ type Cluster interface {
 	Install(
 		ctx context.Context, l *logger.Logger, nodes option.NodeListOption, software ...string,
 	) error
-	PopulateEtcHosts(ctx context.Context, l *logger.Logger) error
 
 	// Methods whose inclusion on this interface is purely historical.
 	// These should be removed over time.
@@ -209,9 +207,4 @@ type Cluster interface {
 
 	// GetPreemptedVMs gets any VMs that were part of the cluster but preempted by cloud vendor.
 	GetPreemptedVMs(ctx context.Context, l *logger.Logger) ([]vm.PreemptedVM, error)
-
-	// CaptureSideEyeSnapshot triggers a side-eye snapshot if side-eye is enabled in the enviroment.
-	CaptureSideEyeSnapshot(ctx context.Context) string
-
-	RegisterClusterHook(hookName string, hookType option.ClusterHookType, timeout time.Duration, hook func(context.Context) error)
 }

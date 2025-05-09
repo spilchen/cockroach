@@ -720,19 +720,6 @@ func (r *IsSpanEmptyResponse) combine(_ context.Context, c combinable, _ *BatchR
 
 var _ combinable = &IsSpanEmptyResponse{}
 
-// combine implements the combinable interface.
-func (r *ExciseResponse) combine(_ context.Context, c combinable, _ *BatchRequest) error {
-	otherDR := c.(*ExciseResponse)
-	if r != nil {
-		if err := r.ResponseHeader.combine(otherDR.Header()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-var _ combinable = &ExciseResponse{}
-
 // Header implements the Request interface.
 func (rh RequestHeader) Header() RequestHeader {
 	return rh
@@ -982,9 +969,6 @@ func (*AddSSTableRequest) Method() Method { return AddSSTable }
 
 // Method implements the Request interface.
 func (*LinkExternalSSTableRequest) Method() Method { return LinkExternalSSTable }
-
-// Method implements the Request interface.
-func (*ExciseRequest) Method() Method { return Excise }
 
 // Method implements the Request interface.
 func (*MigrateRequest) Method() Method { return Migrate }
@@ -1248,12 +1232,6 @@ func (r *AddSSTableRequest) ShallowCopy() Request {
 
 // ShallowCopy implements the Request interface.
 func (r *LinkExternalSSTableRequest) ShallowCopy() Request {
-	shallowCopy := *r
-	return &shallowCopy
-}
-
-// ShallowCopy implements the Request interface.
-func (r *ExciseRequest) ShallowCopy() Request {
 	shallowCopy := *r
 	return &shallowCopy
 }
@@ -1551,12 +1529,6 @@ func (r *LinkExternalSSTableResponse) ShallowCopy() Response {
 }
 
 // ShallowCopy implements the Response interface.
-func (r *ExciseResponse) ShallowCopy() Response {
-	shallowCopy := *r
-	return &shallowCopy
-}
-
-// ShallowCopy implements the Response interface.
 func (r *MigrateResponse) ShallowCopy() Response {
 	shallowCopy := *r
 	return &shallowCopy
@@ -1677,19 +1649,6 @@ func NewPutInline(key roachpb.Key, value roachpb.Value) Request {
 	}
 }
 
-// NewPutMustAcquireExclusiveLock returns a Request initialized to put the value
-// at key. It also sets the MustAcquireExclusiveLock flag.
-func NewPutMustAcquireExclusiveLock(key roachpb.Key, value roachpb.Value) Request {
-	value.InitChecksum(key)
-	return &PutRequest{
-		RequestHeader: RequestHeader{
-			Key: key,
-		},
-		Value:                    value,
-		MustAcquireExclusiveLock: true,
-	}
-}
-
 // NewConditionalPut returns a Request initialized to put value at key if the
 // existing value at key equals expValue.
 //
@@ -1731,13 +1690,28 @@ func NewConditionalPutInline(
 	}
 }
 
+// NewInitPut returns a Request initialized to put the value at key, as long as
+// the key doesn't exist, returning a ConditionFailedError if the key exists and
+// the existing value is different from value. If failOnTombstones is set to
+// true, tombstones count as mismatched values and will cause a
+// ConditionFailedError.
+func NewInitPut(key roachpb.Key, value roachpb.Value, failOnTombstones bool) Request {
+	value.InitChecksum(key)
+	return &InitPutRequest{
+		RequestHeader: RequestHeader{
+			Key: key,
+		},
+		Value:            value,
+		FailOnTombstones: failOnTombstones,
+	}
+}
+
 // NewDelete returns a Request initialized to delete the value at key.
-func NewDelete(key roachpb.Key, mustAcquireExclusiveLock bool) Request {
+func NewDelete(key roachpb.Key) Request {
 	return &DeleteRequest{
 		RequestHeader: RequestHeader{
 			Key: key,
 		},
-		MustAcquireExclusiveLock: mustAcquireExclusiveLock,
 	}
 }
 
@@ -2128,11 +2102,6 @@ func (r *LinkExternalSSTableRequest) flags() flag {
 	}
 	return flags
 }
-
-func (r *ExciseRequest) flags() flag {
-	return isWrite | isRange | isAlone | bypassesReplicaCircuitBreaker
-}
-
 func (*MigrateRequest) flags() flag { return isWrite | isRange | isAlone }
 
 // RefreshRequest and RefreshRangeRequest both determine which timestamp cache
@@ -2144,7 +2113,7 @@ func (r *RefreshRangeRequest) flags() flag {
 	return isRead | isTxn | isRange | updatesTSCache
 }
 
-func (*SubsumeRequest) flags() flag    { return isWrite | isAlone | updatesTSCache }
+func (*SubsumeRequest) flags() flag    { return isRead | isAlone | updatesTSCache }
 func (*RangeStatsRequest) flags() flag { return isRead }
 func (*QueryResolvedTimestampRequest) flags() flag {
 	return isRead | isRange | requiresClosedTSOlderThanStorageSnapshot
@@ -2382,13 +2351,7 @@ func (r *IsSpanEmptyResponse) IsEmpty() bool {
 
 // SafeFormat implements redact.SafeFormatter.
 func (c *ContentionEvent) SafeFormat(w redact.SafePrinter, _ rune) {
-	prefix := redact.SafeString("conflicted")
-	if c.IsLatch {
-		prefix = "latch conflict"
-	}
-	w.Printf("%s with %s on %s for %.3fs",
-		prefix, c.TxnMeta.ID, c.Key, c.Duration.Seconds(),
-	)
+	w.Printf("conflicted with %s on %s for %.3fs", c.TxnMeta.ID, c.Key, c.Duration.Seconds())
 }
 
 // String implements fmt.Stringer.
@@ -2557,6 +2520,8 @@ func (s *ScanStats) String() string {
 
 // RangeFeedEventSink is an interface for sending a single rangefeed event.
 type RangeFeedEventSink interface {
+	// Context returns the context for this stream.
+	Context() context.Context
 	// SendUnbuffered blocks until it sends the RangeFeedEvent, the stream is
 	// done, or the stream breaks. Send must be safe to call on the same stream in
 	// different goroutines.

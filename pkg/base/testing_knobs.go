@@ -54,8 +54,7 @@ type TestingKnobs struct {
 	KeyVisualizer                  ModuleTestingKnobs
 	TenantCapabilitiesTestingKnobs ModuleTestingKnobs
 	TableStatsKnobs                ModuleTestingKnobs
+	Insights                       ModuleTestingKnobs
 	TableMetadata                  ModuleTestingKnobs
 	LicenseTestingKnobs            ModuleTestingKnobs
-	VecIndexTestingKnobs           ModuleTestingKnobs
-	PolicyRefresherTestingKnobs    ModuleTestingKnobs
 }

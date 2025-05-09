@@ -17,7 +17,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/mixedversion"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/task"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -27,6 +26,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -102,6 +102,15 @@ func registerRebalanceLoad(r registry.Registry) {
 				mixedversion.ClusterSettingOption(
 					install.ClusterSettingsOption(settings.ClusterSettings),
 				),
+				// This test does not currently work with shared-process
+				// deployments (#129389), so we do not run it in
+				// separate-process mode either to reduce noise. We should
+				// reevaluate once the test works in shared-process.
+				mixedversion.EnabledDeploymentModes(
+					mixedversion.SystemOnlyDeployment,
+					mixedversion.SharedProcessDeployment,
+				),
+
 				// Only use the latest version of each release to work around #127029.
 				mixedversion.AlwaysUseLatestPredecessors,
 				mixedversion.MinimumSupportedVersion("v23.2.0"),
@@ -147,13 +156,11 @@ func registerRebalanceLoad(r registry.Registry) {
 	)
 	r.Add(
 		registry.TestSpec{
-			Name:    `rebalance/by-load/leases/mixed-version`,
-			Owner:   registry.OwnerKV,
-			Cluster: r.MakeClusterSpec(4), // the last node is just used to generate load
-			// Disabled on IBM because s390x is only built on master and mixed-version
-			// is impossible to test as of 05/2025.
-			CompatibleClouds: registry.AllClouds.NoAWS().NoIBM(),
-			Suites:           registry.Suites(registry.MixedVersion, registry.Nightly),
+			Name:             `rebalance/by-load/leases/mixed-version`,
+			Owner:            registry.OwnerKV,
+			Cluster:          r.MakeClusterSpec(4), // the last node is just used to generate load
+			CompatibleClouds: registry.AllExceptAWS,
+			Suites:           registry.Suites(registry.Nightly),
 			Randomized:       true,
 			Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 				if c.IsLocal() {
@@ -185,13 +192,11 @@ func registerRebalanceLoad(r registry.Registry) {
 	)
 	r.Add(
 		registry.TestSpec{
-			Name:    `rebalance/by-load/replicas/mixed-version`,
-			Owner:   registry.OwnerKV,
-			Cluster: r.MakeClusterSpec(7), // the last node is just used to generate load
-			// Disabled on IBM because s390x is only built on master and mixed-version
-			// is impossible to test as of 05/2025.
-			CompatibleClouds: registry.AllClouds.NoAWS().NoIBM(),
-			Suites:           registry.Suites(registry.MixedVersion, registry.Nightly),
+			Name:             `rebalance/by-load/replicas/mixed-version`,
+			Owner:            registry.OwnerKV,
+			Cluster:          r.MakeClusterSpec(7), // the last node is just used to generate load
+			CompatibleClouds: registry.AllExceptAWS,
+			Suites:           registry.Suites(registry.Nightly),
 			Randomized:       true,
 			Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 				if c.IsLocal() {
@@ -255,13 +260,15 @@ func rebalanceByLoad(
 
 	require.NoError(t, roachtestutil.WaitFor3XReplication(ctx, l, db))
 
+	var m *errgroup.Group
+	m, ctx = errgroup.WithContext(ctx)
+
 	// Enable us to exit out of workload early when we achieve the desired CPU
 	// balance. This drastically shortens the duration of the test in the
 	// common case.
 	ctx, cancel := context.WithCancel(ctx)
-	m := t.NewErrorGroup(task.WithContext(ctx))
 
-	m.Go(func(ctx context.Context, l *logger.Logger) error {
+	m.Go(func() error {
 		l.Printf("starting load generator")
 		err := c.RunE(ctx, option.WithNodes(appNode), fmt.Sprintf(
 			"./cockroach workload run kv --read-percent=95 --tolerate-errors --concurrency=%d "+
@@ -274,9 +281,9 @@ func rebalanceByLoad(
 			return nil
 		}
 		return err
-	}, task.Name("load-generator"))
+	})
 
-	m.Go(func(ctx context.Context, l *logger.Logger) error {
+	m.Go(func() error {
 		l.Printf("checking for CPU balance")
 
 		storeCPUFn, err := makeStoreCPUFn(ctx, t, l, c, numNodes, numStores)
@@ -316,8 +323,8 @@ func rebalanceByLoad(
 			}
 		}
 		return errors.Errorf("CPU not evenly balanced after timeout: %s", reason)
-	}, task.Name("cpu-balance"))
-	return m.WaitE()
+	})
+	return m.Wait()
 }
 
 // makeStoreCPUFn returns a function which can be called to gather the CPU of
@@ -326,7 +333,7 @@ func rebalanceByLoad(
 func makeStoreCPUFn(
 	ctx context.Context, t test.Test, l *logger.Logger, c cluster.Cluster, numNodes, numStores int,
 ) (func(ctx context.Context) ([]float64, error), error) {
-	adminURLs, err := c.ExternalAdminUIAddr(ctx, l, c.Node(1), option.VirtualClusterName(install.SystemInterfaceName))
+	adminURLs, err := c.ExternalAdminUIAddr(ctx, l, c.Node(1))
 	if err != nil {
 		return nil, err
 	}

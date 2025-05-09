@@ -12,15 +12,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvflowcontrol/kvflowcontrolpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvflowcontrol/kvflowinspectpb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/util/admission/admissionpb"
-	"github.com/cockroachdb/cockroach/pkg/util/ctxutil"
 	"github.com/cockroachdb/cockroach/pkg/util/humanizeutil"
-	"github.com/cockroachdb/cockroach/pkg/util/metamorphic"
 	"github.com/cockroachdb/redact"
 )
 
@@ -42,11 +41,7 @@ var Mode = settings.RegisterEnumSetting(
 	settings.SystemOnly,
 	"kvadmission.flow_control.mode",
 	"determines the 'mode' of flow control we use for replication traffic in KV, if enabled",
-	metamorphic.ConstantWithTestChoice(
-		"kvadmission.flow_control.mode",
-		modeDict[ApplyToAll],     /* default value */
-		modeDict[ApplyToElastic], /* other value */
-	),
+	modeDict[ApplyToElastic], /* default value */
 	modeDict,
 )
 
@@ -173,8 +168,16 @@ func GetV2EnabledWhenLeaderLevel(
 	if knobs != nil && knobs.OverrideV2EnabledWhenLeaderLevel != nil {
 		return knobs.OverrideV2EnabledWhenLeaderLevel()
 	}
-	// Full RACv2 can be enabled: RACv2 protocol with V2 entry encoding.
-	return V2EnabledWhenLeaderV2Encoding
+	if st.Version.IsActive(ctx, clusterversion.V24_3_UseRACV2Full) {
+		// Full RACv2 can be enabled: RACv2 protocol with V2 entry encoding.
+		return V2EnabledWhenLeaderV2Encoding
+	}
+	if st.Version.IsActive(ctx, clusterversion.V24_3_UseRACV2WithV1EntryEncoding) {
+		// Partial RACv2 can be enabled: RACv2 protocol with V1 entry encoding.
+		return V2EnabledWhenLeaderV1Encoding
+	}
+	// RACv2 is not enabled.
+	return V2NotEnabledWhenLeader
 }
 
 // Stream models the stream over which we replicate data traffic, the
@@ -441,7 +444,7 @@ func (s Stream) SafeFormat(p redact.SafePrinter, _ rune) {
 	p.Printf("t%s/s%s", redact.SafeString(tenantSt), s.StoreID)
 }
 
-var raftAdmissionMetaKey = ctxutil.RegisterFastValueKey()
+type raftAdmissionMetaKey struct{}
 
 // ContextWithMeta returns a Context wrapping the supplied raft admission meta,
 // if any.
@@ -450,7 +453,7 @@ var raftAdmissionMetaKey = ctxutil.RegisterFastValueKey()
 // #104154.
 func ContextWithMeta(ctx context.Context, meta *kvflowcontrolpb.RaftAdmissionMeta) context.Context {
 	if meta != nil {
-		ctx = ctxutil.WithFastValue(ctx, raftAdmissionMetaKey, meta)
+		ctx = context.WithValue(ctx, raftAdmissionMetaKey{}, meta)
 	}
 	return ctx
 }
@@ -458,7 +461,7 @@ func ContextWithMeta(ctx context.Context, meta *kvflowcontrolpb.RaftAdmissionMet
 // MetaFromContext returns the raft admission meta embedded in the Context, if
 // any.
 func MetaFromContext(ctx context.Context) *kvflowcontrolpb.RaftAdmissionMeta {
-	val := ctxutil.FastValue(ctx, raftAdmissionMetaKey)
+	val := ctx.Value(raftAdmissionMetaKey{})
 	h, ok := val.(*kvflowcontrolpb.RaftAdmissionMeta)
 	if !ok {
 		return nil

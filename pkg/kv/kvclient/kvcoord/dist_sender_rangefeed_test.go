@@ -25,7 +25,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/server"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/desctestutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/testcluster"
 	"github.com/cockroachdb/cockroach/pkg/util"
@@ -135,7 +134,7 @@ func rangeFeed(
 
 	g := ctxgroup.WithContext(ctx)
 	g.GoCtx(func(ctx context.Context) (err error) {
-		return ds.RangeFeed(ctx, []kvcoord.SpanTimePair{{Span: sp, StartAfter: startFrom}}, events, opts...)
+		return ds.RangeFeed(ctx, []roachpb.Span{sp}, startFrom, events, opts...)
 	})
 	g.GoCtx(func(ctx context.Context) error {
 		for {
@@ -310,8 +309,6 @@ func TestMuxRangeCatchupScanQuotaReleased(t *testing.T) {
 func TestMuxRangeFeedDoesNotStallOnError(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
-
-	skip.UnderDuress(t, "slow test")
 
 	ctx := context.Background()
 

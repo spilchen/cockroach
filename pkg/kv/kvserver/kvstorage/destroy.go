@@ -31,6 +31,11 @@ const (
 	// perhaps we should fix Pebble to handle large numbers of range tombstones in
 	// an sstable better.
 	ClearRangeThresholdPointKeys = 64
+
+	// ClearRangeThresholdRangeKeys is the threshold (as number of range keys)
+	// beyond which we'll clear range data using a single RANGEKEYDEL across the
+	// span rather than clearing individual range keys.
+	ClearRangeThresholdRangeKeys = 8
 )
 
 // ClearRangeDataOptions specify which parts of a Replica are to be destroyed.
@@ -73,14 +78,14 @@ func ClearRangeData(
 		UnreplicatedByRangeID: opts.ClearUnreplicatedByRangeID,
 	})
 
-	pointKeyThreshold := ClearRangeThresholdPointKeys
+	pointKeyThreshold, rangeKeyThreshold := ClearRangeThresholdPointKeys, ClearRangeThresholdRangeKeys
 	if opts.MustUseClearRange {
-		pointKeyThreshold = 1
+		pointKeyThreshold, rangeKeyThreshold = 1, 1
 	}
 
 	for _, keySpan := range keySpans {
 		if err := storage.ClearRangeWithHeuristic(
-			ctx, reader, writer, keySpan.Key, keySpan.EndKey, pointKeyThreshold,
+			ctx, reader, writer, keySpan.Key, keySpan.EndKey, pointKeyThreshold, rangeKeyThreshold,
 		); err != nil {
 			return err
 		}

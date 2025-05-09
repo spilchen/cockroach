@@ -40,9 +40,8 @@ func Wrap(f func(cmd *cobra.Command, args []string) error) func(cmd *cobra.Comma
 	}
 }
 
-// ExecuteCmdWithPrefix runs a shell command with the given arguments and streams the output.
-// it also adds the specified prefixes
-func ExecuteCmdWithPrefix(ctx context.Context, logPrefix string, cmd string, args ...string) error {
+// ExecuteCmd runs a shell command with the given arguments and streams the output.
+func ExecuteCmd(ctx context.Context, logPrefix string, cmd string, args ...string) error {
 	// Create a command with the given context and arguments.
 	c := exec.CommandContext(ctx, cmd, args...)
 
@@ -52,6 +51,12 @@ func ExecuteCmdWithPrefix(ctx context.Context, logPrefix string, cmd string, arg
 		return err
 	}
 	stderr, err := c.StderrPipe()
+	if err != nil {
+		return err
+	}
+
+	// Start the command execution
+	err = c.Start()
 	if err != nil {
 		return err
 	}
@@ -77,5 +82,5 @@ func ExecuteCmdWithPrefix(ctx context.Context, logPrefix string, cmd string, arg
 	}()
 
 	// Wait for the command to complete and return any errors encountered.
-	return c.Run()
+	return c.Wait()
 }

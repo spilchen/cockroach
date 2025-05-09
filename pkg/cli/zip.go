@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -35,7 +34,7 @@ import (
 	tracezipper "github.com/cockroachdb/cockroach/pkg/util/tracing/zipper"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgconn"
 	"github.com/marusama/semaphore"
 	"github.com/spf13/cobra"
 )
@@ -291,7 +290,7 @@ func runDebugZip(cmd *cobra.Command, args []string) (retErr error) {
 
 			zr.sqlOutputFilenameExtension = computeSQLOutputFilenameExtension(sqlExecCtx.TableDisplayFormat)
 
-			sqlConn, err := makeTenantSQLClient(ctx, catconstants.InternalAppNamePrefix+" cockroach zip", useSystemDb, tenant.TenantName)
+			sqlConn, err := makeTenantSQLClient(ctx, "cockroach zip", useSystemDb, tenant.TenantName)
 			// The zip output is sent directly into a text file, so the results should
 			// be scanned into strings.
 			_ = sqlConn.SetAlwaysInferResultTypes(false)
@@ -518,13 +517,8 @@ func (zc *debugZipContext) dumpTableDataForZip(
 	zr *zipReporter, conn clisqlclient.Conn, base, table string, tableQuery TableQuery,
 ) error {
 	ctx := context.Background()
-	fileName := sanitizeFilename(table)
-	baseName := path.Join(base, fileName)
-	fileNameWithExtension := fileName + "." + zc.clusterPrinter.sqlOutputFilenameExtension
-	if !zipCtx.files.shouldIncludeFile(fileNameWithExtension) {
-		zr.info("skipping table data for %s due to file filters", table)
-		return nil
-	}
+	baseName := base + "/" + sanitizeFilename(table)
+
 	s := zr.start(redact.Sprintf("retrieving SQL data for %s", table))
 	const maxRetries = 5
 	suffix := ""
