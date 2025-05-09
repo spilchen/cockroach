@@ -152,7 +152,7 @@ func (r *Replica) updateTimestampCache(
 			//  [Get("a"), Get("c")]
 			if err := kvpb.ResponseKeyIterate(req, resp, func(key roachpb.Key) {
 				addToTSCache(key, nil, ts, txnID)
-			}, false /* includeLockedNonExisting */); err != nil {
+			}); err != nil {
 				log.Errorf(ctx, "error iterating over response keys while "+
 					"updating timestamp cache for ba=%v, br=%v: %v", ba, br, err)
 			}
@@ -223,23 +223,14 @@ func (r *Replica) updateTimestampCache(
 				tombstone = false
 			case roachpb.ABORTED:
 				tombstone = true
-			case roachpb.COMMITTED:
-				// No need to update the timestamp cache. It was already updated by the
-				// corresponding EndTxn request.
-				continue
 			case roachpb.STAGING:
-				// Staging transactions cannot have their timestamp pushed. They can be
-				// aborted, but then they will be in the ABORTED state. So this must
-				// have been a no-op push where the PushTo timestamp was already below
-				// the staging transaction's timestamp.
+				// No need to update the timestamp cache. If a transaction
+				// is in this state then it must have a transaction record.
 				continue
-			case roachpb.PREPARED:
-				// Prepared transactions are not allowed to be pushed, regardless of the
-				// push type. So this must have been a no-op push where the PushTo
-				// timestamp was already below the prepared transaction's timestamp.
+			case roachpb.COMMITTED:
+				// No need to update the timestamp cache. It was already
+				// updated by the corresponding EndTxn request.
 				continue
-			default:
-				log.Fatalf(ctx, "unexpected transaction status: %v", pushee.Status)
 			}
 
 			var key roachpb.Key
@@ -255,8 +246,6 @@ func (r *Replica) updateTimestampCache(
 				// if we were to bump the timestamp cache to the WriteTimestamp,
 				// we could risk adding an entry at a time in advance of the
 				// local clock.
-				// TODO(nvanbenschoten): confirm that this restriction is still
-				// true, now that we ship the timestamp cache on lease transfers.
 				key = transactionTombstoneMarker(start, pushee.ID)
 				pushTS = pushee.MinTimestamp
 			} else {
@@ -463,7 +452,7 @@ func (r *Replica) applyTimestampCache(
 		} else {
 			conflictMsg := "conflicting txn unknown"
 			if conflictingTxn != uuid.Nil {
-				conflictMsg = "conflicting txn: " + conflictingTxn.Short().String()
+				conflictMsg = "conflicting txn: " + conflictingTxn.Short()
 			}
 			log.VEventf(ctx, 2, "bumped write timestamp to %s; %s", bumpedTS, redact.Safe(conflictMsg))
 		}

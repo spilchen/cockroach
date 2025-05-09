@@ -16,7 +16,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/clusterupgrade"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
@@ -55,6 +54,7 @@ type roundTripSpecs struct {
 }
 
 func registerBackupRestoreRoundTrip(r registry.Registry) {
+
 	for _, sp := range []roundTripSpecs{
 		{
 			name:                 "backup-restore/round-trip",
@@ -77,14 +77,14 @@ func registerBackupRestoreRoundTrip(r registry.Registry) {
 	} {
 		sp := sp
 		r.Add(registry.TestSpec{
-			Name:              sp.name,
-			Timeout:           4 * time.Hour,
-			Owner:             registry.OwnerDisasterRecovery,
-			Cluster:           r.MakeClusterSpec(4, spec.WorkloadNode()),
-			EncryptionSupport: registry.EncryptionMetamorphic,
-			NativeLibs:        registry.LibGEOS,
-			// See https://github.com/cockroachdb/cockroach/issues/105968
-			CompatibleClouds:           registry.Clouds(spec.GCE, spec.Local),
+			Name:                       sp.name,
+			Timeout:                    4 * time.Hour,
+			Owner:                      registry.OwnerDisasterRecovery,
+			Cluster:                    r.MakeClusterSpec(4, spec.WorkloadNode()),
+			EncryptionSupport:          registry.EncryptionMetamorphic,
+			RequiresLicense:            true,
+			NativeLibs:                 registry.LibGEOS,
+			CompatibleClouds:           registry.OnlyGCE,
 			Suites:                     registry.Suites(registry.Nightly),
 			TestSelectionOptOutSuites:  registry.Suites(registry.Nightly),
 			Randomized:                 true,
@@ -102,15 +102,21 @@ func registerBackupRestoreRoundTrip(r registry.Registry) {
 func backupRestoreRoundTrip(
 	ctx context.Context, t test.Test, c cluster.Cluster, sp roundTripSpecs,
 ) {
+	if c.Cloud() != spec.GCE && !c.IsLocal() {
+		t.Skip("uses gs://cockroachdb-backup-testing; see https://github.com/cockroachdb/cockroach/issues/105968")
+	}
 	pauseProbability := 0.2
 	testRNG, seed := randutil.NewLockedPseudoRand()
 	t.L().Printf("random seed: %d", seed)
+
+	// Upload cockroach and start cluster.
+	uploadCockroach(ctx, t, c, c.All(), clusterupgrade.CurrentVersion())
 
 	envOption := install.EnvOption([]string{
 		"COCKROACH_MIN_RANGE_MAX_BYTES=1",
 	})
 
-	c.Start(ctx, t.L(), roachtestutil.MaybeUseMemoryBudget(t, 50), install.MakeClusterSettings(envOption), c.CRDBNodes())
+	c.Start(ctx, t.L(), maybeUseMemoryBudget(t, 50), install.MakeClusterSettings(envOption), c.CRDBNodes())
 	m := c.NewMonitor(ctx, c.CRDBNodes())
 
 	m.Go(func(ctx context.Context) error {
@@ -122,8 +128,7 @@ func backupRestoreRoundTrip(
 
 			return conn, err
 		}
-		// TODO (msbutler): enable compaction for online restore test once inc layer limit is increased.
-		testUtils, err := newCommonTestUtils(ctx, t, c, connectFunc, c.CRDBNodes(), withMock(sp.mock), withOnlineRestore(sp.onlineRestore), withCompaction(!sp.onlineRestore))
+		testUtils, err := newCommonTestUtils(ctx, t, c, connectFunc, c.CRDBNodes(), sp.mock, sp.onlineRestore)
 		if err != nil {
 			return err
 		}
@@ -170,7 +175,7 @@ func backupRestoreRoundTrip(
 			// Run backups.
 			t.L().Printf("starting backup %d", i+1)
 			collection, err := d.createBackupCollection(
-				ctx, t.L(), t, testRNG, bspec, bspec, "round-trip-test-backup",
+				ctx, t.L(), testRNG, bspec, bspec, "round-trip-test-backup",
 				true /* internalSystemsJobs */, false, /* isMultitenant */
 			)
 			if err != nil {
@@ -187,11 +192,6 @@ func backupRestoreRoundTrip(
 					m.ExpectDeaths(int32(n))
 				}
 
-				// Between each reset grab a debug zip from the cluster.
-				zipPath := fmt.Sprintf("debug-%d.zip", timeutil.Now().Unix())
-				if err := testUtils.cluster.FetchDebugZip(ctx, t.L(), zipPath); err != nil {
-					t.L().Printf("failed to fetch a debug zip: %v", err)
-				}
 				if err := testUtils.resetCluster(ctx, t.L(), clusterupgrade.CurrentVersion(), expectDeathsFn, []install.ClusterSettingOption{}); err != nil {
 					return err
 				}

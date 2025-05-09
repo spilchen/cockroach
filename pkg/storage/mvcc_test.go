@@ -26,7 +26,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
-	"github.com/cockroachdb/cockroach/pkg/storage/mvccencoding"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/datapathutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/echotest"
@@ -386,40 +385,13 @@ func TestMVCCGetWithValueHeader(t *testing.T) {
 	}
 }
 
-func TestMVCCValueHeaderOriginTimestamp(t *testing.T) {
+func TestMVCCOmitInRangefeeds(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	ctx := context.Background()
-	engine := NewDefaultInMemForTesting()
-	defer engine.Close()
-
-	// Put a value with a non-zero origin timestamp.
-	_, err := MVCCPut(ctx, engine, testKey1, hlc.Timestamp{WallTime: 1}, value1, MVCCWriteOptions{OriginTimestamp: hlc.Timestamp{WallTime: 1}})
-	require.NoError(t, err)
-
-	valueRes, vh, err := MVCCGetWithValueHeader(ctx, engine, testKey1, hlc.Timestamp{WallTime: 3}, MVCCGetOptions{})
-	require.NoError(t, err)
-	require.NotNil(t, valueRes.Value)
-	require.Equal(t, hlc.Timestamp{WallTime: 1}, vh.OriginTimestamp)
-
-	// Ensure a regular put has no origin timestamp.
-	_, err = MVCCPut(ctx, engine, testKey1, hlc.Timestamp{WallTime: 2}, value1, MVCCWriteOptions{})
-	require.NoError(t, err)
-	valueRes, vh, err = MVCCGetWithValueHeader(ctx, engine, testKey1, hlc.Timestamp{WallTime: 3}, MVCCGetOptions{})
-	require.NoError(t, err)
-	require.Zero(t, vh.OriginTimestamp)
-}
-
-// TestMVCCValueHeadersForRangefeeds tests that the value headers used by
-// rangefeeds are set correctly.
-func TestMVCCValueHeadersForRangefeeds(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
-	for _, omitInRangefeeds := range []bool{false, true} {
-		for _, originID := range []uint32{0, 1} {
-			t.Run(fmt.Sprintf("omitInRangefeeds=%t/originID=%d", omitInRangefeeds, originID), func(t *testing.T) {
+	for _, omitPut := range []bool{false, true} {
+		for _, omitDel := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%t/%t", omitPut, omitDel), func(t *testing.T) {
 				ctx := context.Background()
 				engine := NewDefaultInMemForTesting()
 				defer engine.Close()
@@ -427,7 +399,7 @@ func TestMVCCValueHeadersForRangefeeds(t *testing.T) {
 				// Transactional put
 				txn := *txn1
 				_, err := MVCCPut(ctx, engine, testKey1, txn.WriteTimestamp, value1,
-					MVCCWriteOptions{Txn: &txn, OmitInRangefeeds: omitInRangefeeds, OriginID: originID})
+					MVCCWriteOptions{Txn: &txn, OmitInRangefeeds: omitPut})
 				require.NoError(t, err)
 
 				txnCommit := txn
@@ -441,13 +413,12 @@ func TestMVCCValueHeadersForRangefeeds(t *testing.T) {
 				valueRes, vh, err := MVCCGetWithValueHeader(ctx, engine, testKey1, hlc.Timestamp{WallTime: 4}, MVCCGetOptions{})
 				require.NoError(t, err)
 				require.NotNil(t, valueRes.Value)
-				require.Equal(t, omitInRangefeeds, vh.OmitInRangefeeds)
-				require.Equal(t, originID, vh.OriginID)
+				require.Equal(t, omitPut, vh.OmitInRangefeeds)
 
 				txn = *txn2
 				// Transactional delete
 				_, _, err = MVCCDelete(ctx, engine, testKey1, txn.WriteTimestamp,
-					MVCCWriteOptions{Txn: &txn, OmitInRangefeeds: omitInRangefeeds, OriginID: originID})
+					MVCCWriteOptions{Txn: &txn, OmitInRangefeeds: omitDel})
 				require.NoError(t, err)
 
 				txnCommit = txn
@@ -464,23 +435,21 @@ func TestMVCCValueHeadersForRangefeeds(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, valueRes.Value)
 				require.Zero(t, len(valueRes.Value.RawBytes))
-				require.Equal(t, omitInRangefeeds, vh.OmitInRangefeeds)
-				require.Equal(t, originID, vh.OriginID)
+				require.Equal(t, omitDel, vh.OmitInRangefeeds)
 
 				// Non-transactional put (e.g. 1PC put)
 				writeTs := hlc.Timestamp{Logical: 3}
-				_, err = MVCCPut(ctx, engine, testKey1, writeTs, value2, MVCCWriteOptions{OmitInRangefeeds: omitInRangefeeds, OriginID: originID})
+				_, err = MVCCPut(ctx, engine, testKey1, writeTs, value2, MVCCWriteOptions{OmitInRangefeeds: omitPut})
 				require.NoError(t, err)
 
 				valueRes, vh, err = MVCCGetWithValueHeader(ctx, engine, testKey1, hlc.Timestamp{WallTime: 4}, MVCCGetOptions{})
 				require.NoError(t, err)
 				require.NotNil(t, valueRes.Value)
-				require.Equal(t, omitInRangefeeds, vh.OmitInRangefeeds)
-				require.Equal(t, originID, vh.OriginID)
+				require.Equal(t, omitPut, vh.OmitInRangefeeds)
 
 				// Non-transactional delete (e.g. 1PC delete)
 				writeTs = hlc.Timestamp{Logical: 4}
-				_, _, err = MVCCDelete(ctx, engine, testKey1, writeTs, MVCCWriteOptions{OmitInRangefeeds: omitInRangefeeds, OriginID: originID})
+				_, _, err = MVCCDelete(ctx, engine, testKey1, writeTs, MVCCWriteOptions{OmitInRangefeeds: omitDel})
 				require.NoError(t, err)
 
 				// Read the latest version with tombstone.
@@ -489,8 +458,7 @@ func TestMVCCValueHeadersForRangefeeds(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, valueRes.Value)
 				require.Zero(t, len(valueRes.Value.RawBytes))
-				require.Equal(t, omitInRangefeeds, vh.OmitInRangefeeds)
-				require.Equal(t, originID, vh.OriginID)
+				require.Equal(t, omitDel, vh.OmitInRangefeeds)
 			})
 		}
 	}
@@ -2207,7 +2175,7 @@ func TestMVCCClearTimeRange(t *testing.T) {
 
 	// Add a shared lock at k1 with a txn at ts3.
 	addLock := func(t *testing.T, rw ReadWriter) {
-		err := MVCCAcquireLock(ctx, rw, &txn.TxnMeta, txn.IgnoredSeqNums, lock.Shared, testKey1, nil, 0, 0)
+		err := MVCCAcquireLock(ctx, rw, &txn, lock.Shared, testKey1, nil, 0, 0)
 		require.NoError(t, err)
 	}
 	t.Run("clear everything hitting lock fails", func(t *testing.T) {
@@ -3019,8 +2987,7 @@ func TestMVCCConditionalPutOldTimestamp(t *testing.T) {
 		// Condition matches.
 		value2,
 	} {
-		_, err = MVCCConditionalPut(ctx, engine, testKey1, hlc.Timestamp{WallTime: 2}, value3, expVal.TagAndDataBytes(),
-			ConditionalPutWriteOptions{AllowIfDoesNotExist: CPutFailIfMissing})
+		_, err = MVCCConditionalPut(ctx, engine, testKey1, hlc.Timestamp{WallTime: 2}, value3, expVal.TagAndDataBytes(), CPutFailIfMissing, MVCCWriteOptions{})
 		require.ErrorAs(t, err, new(*kvpb.WriteTooOldError))
 
 		// Either way, no new value is written.
@@ -5538,7 +5505,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyA, EndKey: keyD, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyB, EndKey: keyC, Timestamp: ts4, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts4)},
+				{StartKey: keyB, EndKey: keyC, Timestamp: ts4, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts4)},
 			},
 		},
 		{
@@ -5562,8 +5529,8 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyB, EndKey: keyC, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
-				{StartKey: keyC, EndKey: keyD, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyC, EndKey: keyD, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
 			},
 		},
 		{
@@ -5585,7 +5552,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyA, EndKey: keyC, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyC, EndKey: keyD, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyC, EndKey: keyD, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
 			},
 		},
 		{
@@ -5597,7 +5564,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyB, EndKey: keyD, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
 			},
 		},
 		{
@@ -5609,8 +5576,8 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyB, EndKey: keyC, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
-				{StartKey: keyC, EndKey: keyD, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyC, EndKey: keyD, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
 			},
 		},
 		{
@@ -5622,7 +5589,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyA, EndKey: keyB, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyB, EndKey: keyD, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyB, EndKey: keyD, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
 			},
 		},
 		{
@@ -5644,7 +5611,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyB, EndKey: keyD, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
 			},
 		},
 		{
@@ -5667,7 +5634,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyC, EndKey: keyD, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyB, EndKey: keyC, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyB, EndKey: keyC, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
 			},
 		},
 		{
@@ -5680,7 +5647,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyB, EndKey: keyD, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
 			},
 		},
 		{
@@ -5693,7 +5660,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyC, EndKey: keyD, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyC, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyA, EndKey: keyC, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
 			},
 		},
 		{
@@ -5706,7 +5673,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyB, EndKey: keyD, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts2)},
+				{StartKey: keyA, EndKey: keyB, Timestamp: ts2, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts2)},
 			},
 		},
 		{
@@ -5807,11 +5774,11 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyB, EndKey: keyC, Timestamp: ts1},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyB, Timestamp: ts3, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts3)},
-				{StartKey: keyA, EndKey: keyB, Timestamp: ts1, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts1)},
-				{StartKey: keyB, EndKey: keyC, Timestamp: ts3, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts3)},
-				{StartKey: keyC, EndKey: keyD, Timestamp: ts3, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts3)},
-				{StartKey: keyC, EndKey: keyD, Timestamp: ts1, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts1)},
+				{StartKey: keyA, EndKey: keyB, Timestamp: ts3, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts3)},
+				{StartKey: keyA, EndKey: keyB, Timestamp: ts1, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts1)},
+				{StartKey: keyB, EndKey: keyC, Timestamp: ts3, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts3)},
+				{StartKey: keyC, EndKey: keyD, Timestamp: ts3, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts3)},
+				{StartKey: keyC, EndKey: keyD, Timestamp: ts1, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts1)},
 			},
 		},
 		{
@@ -5824,7 +5791,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyB, EndKey: keyC, Timestamp: ts1},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyD, Timestamp: ts3, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts3)},
+				{StartKey: keyA, EndKey: keyD, Timestamp: ts3, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts3)},
 			},
 		},
 		{
@@ -5837,7 +5804,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyB, EndKey: keyC, Timestamp: ts1},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyC, Timestamp: ts3, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts3)},
+				{StartKey: keyA, EndKey: keyC, Timestamp: ts3, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts3)},
 			},
 		},
 		{
@@ -5850,7 +5817,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyA, EndKey: keyB, Timestamp: ts1},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyD, Timestamp: ts3, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts3)},
+				{StartKey: keyA, EndKey: keyD, Timestamp: ts3, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts3)},
 			},
 		},
 		{
@@ -5866,8 +5833,8 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyD, EndKey: keyE, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyF, Timestamp: ts4, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts4)},
-				{StartKey: keyA, EndKey: keyF, Timestamp: ts3, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts3)},
+				{StartKey: keyA, EndKey: keyF, Timestamp: ts4, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts4)},
+				{StartKey: keyA, EndKey: keyF, Timestamp: ts3, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts3)},
 			},
 		},
 		{
@@ -5882,7 +5849,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 				{StartKey: keyC, EndKey: keyD, Timestamp: ts2},
 			},
 			after: []MVCCRangeKey{
-				{StartKey: keyA, EndKey: keyE, Timestamp: ts3, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts3)},
+				{StartKey: keyA, EndKey: keyE, Timestamp: ts3, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts3)},
 			},
 		},
 		{
@@ -5898,7 +5865,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 			after: []MVCCRangeKey{
 				// We only iterate data within range, so range keys would be
 				// truncated.
-				{StartKey: keyB, EndKey: keyC, Timestamp: ts4, EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffix(ts4)},
+				{StartKey: keyB, EndKey: keyC, Timestamp: ts4, EncodedTimestampSuffix: EncodeMVCCTimestampSuffix(ts4)},
 			},
 			rangeStart: keyB,
 			rangeEnd:   keyC,
@@ -5910,7 +5877,7 @@ func TestMVCCGarbageCollectRanges(t *testing.T) {
 					StartKey:               keyA,
 					EndKey:                 keyC,
 					Timestamp:              ts4,
-					EncodedTimestampSuffix: mvccencoding.EncodeMVCCTimestampSuffixWithSyntheticBitForTesting(ts4),
+					EncodedTimestampSuffix: EncodeMVCCTimestampSuffixWithSyntheticBitForTesting(ts4),
 				}},
 			},
 			request: []kvpb.GCRequest_GCRangeKey{
@@ -7345,10 +7312,10 @@ func (f *fingerprintOracle) fingerprintPointKeys(t *testing.T, dataSST []byte) u
 		} else {
 			_, err := hasher.Write(k.Key)
 			require.NoError(t, err)
-			tsLen := mvccencoding.EncodedMVCCTimestampLength(k.Timestamp)
+			tsLen := encodedMVCCTimestampLength(k.Timestamp)
 			require.NotZero(t, tsLen)
 			timestampBuf := make([]byte, tsLen)
-			mvccencoding.EncodeMVCCTimestampToBufSized(timestampBuf, k.Timestamp)
+			encodeMVCCTimestampToBuf(timestampBuf, k.Timestamp)
 			_, err = hasher.Write(timestampBuf)
 			require.NoError(t, err)
 			v, err := iter.UnsafeValue()
@@ -7671,56 +7638,4 @@ func TestMVCCGetForKnownTimestampWithNoIntent(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestApproximateLockTableSize(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
-	ctx := context.Background()
-	engine := NewDefaultInMemForTesting()
-	defer engine.Close()
-
-	acq := roachpb.LockAcquisition{
-		Span: roachpb.Span{
-			Key: roachpb.Key("f"),
-		},
-		Txn:        txn1.TxnMeta,
-		Durability: lock.Replicated,
-		Strength:   lock.Exclusive,
-	}
-
-	batch := engine.NewBatch()
-	defer batch.Close()
-	stats := &enginepb.MVCCStats{}
-	require.NoError(t, MVCCAcquireLock(ctx,
-		batch,
-		&acq.Txn,
-		acq.IgnoredSeqNums,
-		acq.Strength,
-		acq.Key,
-		stats,
-		0,
-		0,
-	))
-	require.GreaterOrEqual(t, ApproximateLockTableSize(&acq), stats.LockBytes)
-}
-
-func BenchmarkApproximateLockTableSize(b *testing.B) {
-	defer leaktest.AfterTest(b)()
-	defer log.Scope(b).Close(b)
-
-	acq := roachpb.LockAcquisition{
-		Span: roachpb.Span{
-			Key: roachpb.Key("f"),
-		},
-		Txn:        txn1.TxnMeta,
-		Durability: lock.Replicated,
-		Strength:   lock.Exclusive,
-	}
-	total := int64(0)
-	for i := 0; i < b.N; i++ {
-		total += ApproximateLockTableSize(&acq)
-	}
-	b.Logf("total: %d", total)
 }
