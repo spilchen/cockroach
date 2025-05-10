@@ -7,6 +7,7 @@ package scbuildstmt
 
 import (
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
 
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
@@ -149,6 +150,9 @@ func dropSecondaryIndex(
 		// If expression index, also drop the expression column if no other index is
 		// using the expression column.
 		dropAdditionallyForExpressionIndex(next, sie)
+
+		// This handles if the index is referenced in a trigger.
+		maybeDropTriggers(b, sie.TableID, sie.IndexID, indexName.Index.String(), dropBehavior)
 	}
 	// Finally, drop all elements associated with this index.
 	tblElts := b.QueryByID(sie.TableID)
@@ -166,6 +170,41 @@ func dropSecondaryIndex(
 	}
 	tblElts.ForEach(func(_ scpb.Status, _ scpb.TargetStatus, e scpb.Element) {
 		b.Drop(e)
+	})
+}
+
+// maybeDropDependentViews attempts to drop all views that depend
+// on the to be dropped index if CASCADE.
+// Panic if there is a dependent view but drop behavior is not CASCADE.
+func maybeDropTriggers(
+	b BuildCtx,
+	tableID catid.DescID,
+	indexID catid.IndexID,
+	indexName string,
+	behavior tree.DropBehavior,
+) {
+	undroppedBackrefs(b, tableID).ForEach(func(_ scpb.Status, target scpb.TargetStatus, e scpb.Element) {
+		switch elt := e.(type) {
+		case *scpb.TriggerDeps:
+			for _, ref := range elt.UsesRelations {
+				if ref.ID == tableID && ref.IndexID == indexID {
+					if behavior == tree.DropCascade {
+						// SPILLY - use real issue number
+						panic(unimplemented.NewWithIssuef(
+							49351, "DROP INDEX cascade not supported with triggers"))
+					}
+					tableElts := b.QueryByID(elt.TableID)
+					tableName := tableElts.FilterNamespace().MustGetOneElement()
+					triggerName := tableElts.FilterTriggerName().Filter(
+						func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.TriggerName) bool {
+							return e.TriggerID == elt.TriggerID
+						}).MustGetOneElement()
+					panic(sqlerrors.NewDependentObjectErrorf(
+						"cannot drop index %q because trigger %q on table %q depends on it",
+						indexName, triggerName.Name, tableName.Name))
+				}
+			}
+		}
 	})
 }
 

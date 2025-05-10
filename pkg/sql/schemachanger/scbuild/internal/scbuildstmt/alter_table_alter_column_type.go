@@ -69,6 +69,17 @@ func alterTableAlterColumnType(
 		case *scpb.FunctionBody:
 			fnName := b.QueryByID(e.FunctionID).FilterFunctionName().MustGetOneElement()
 			panic(sqlerrors.NewDependentBlocksOpError(op, objType, t.Column.String(), "function", fnName.Name))
+		case *scpb.TriggerDeps:
+			tableElts := b.QueryByID(e.TableID)
+			tableName := tableElts.FilterNamespace().MustGetOneElement()
+			triggerName := tableElts.FilterTriggerName().Filter(
+				func(_ scpb.Status, _ scpb.TargetStatus, e *scpb.TriggerName) bool {
+					return e.TriggerID == e.TriggerID
+				}).MustGetOneElement()
+			panic(sqlerrors.NewDependentObjectErrorf(
+				"cannot %s %s %q because trigger %q on table %q depends on it",
+				op, objType, t.Column.String(), triggerName.Name, tableName.Name,
+			))
 		case *scpb.RowLevelTTL:
 			// If a duration expression is set, the column level dependency is on the
 			// internal ttl column, which we are attempting to alter.

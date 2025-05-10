@@ -4318,13 +4318,12 @@ $$;
 statement ok
 CREATE TYPE e AS ENUM('a');
 
-#                                SELECT f1();
-#                                SELECT *, 'a'::e FROM t1@i1 WHERE j=32;
 statement ok
 CREATE OR REPLACE FUNCTION audit_changes()
                                 RETURNS TRIGGER AS $$
                                 BEGIN
-                                 SELECT j FROM t1;
+                                 SELECT f1();
+                                 SELECT *, 'a'::e FROM t1@i1 WHERE j=32;
                                  RETURN NULL;
                                 END;
                                 $$ LANGUAGE PLpgSQL;
@@ -4335,7 +4334,10 @@ CREATE TRIGGER audit_trigger AFTER INSERT OR UPDATE OR DELETE ON t1 FOR EACH ROW
 statement error pq: cannot drop column "j" because trigger "audit_trigger" on table "t1" depends on it
 alter table t1 drop column j;
 
-statement ok
+statement error pq: cannot alter type of column "j" because trigger "audit_trigger" on table "t1" depends on it
+alter table t1 alter column j set data type text;
+
+statement error pq: cannot drop index "i1" because trigger "audit_trigger" on table "t1" depends on it
 drop index t1@i1;
 
 statement ok
@@ -4344,7 +4346,7 @@ insert into t1(n) values(1);
 statement error pq: cannot drop function "f1" because other objects \(\[test.public.t1, test.public.audit_changes\]\) still depend on it
 DROP FUNCTION f1;
 
-statement error pq: cannot drop type "e" because other objects \(\[movr.public.audit_changes\]\) still depend on it
+statement error pq: cannot drop type "e" because other objects \(\[test.public.audit_changes\]\) still depend on it
 DROP TYPE e;
 
 statement ok
