@@ -4308,6 +4308,12 @@ statement ok
 create index i1 on t1(k);
 
 statement ok
+create table other(n int primary key, j int, k int);
+
+statement ok
+create index i1 on other(k);
+
+statement ok
 CREATE FUNCTION f1 ()
 RETURNS VOID
 LANGUAGE SQL
@@ -4324,6 +4330,7 @@ CREATE OR REPLACE FUNCTION audit_changes()
                                 BEGIN
                                  SELECT f1();
                                  SELECT *, 'a'::e FROM t1@i1 WHERE j=32;
+                                 SELECT *, 'a'::e FROM other@i1 WHERE j=32;
                                  RETURN NULL;
                                 END;
                                 $$ LANGUAGE PLpgSQL;
@@ -4334,32 +4341,47 @@ CREATE TRIGGER audit_trigger AFTER INSERT OR UPDATE OR DELETE ON t1 FOR EACH ROW
 statement error pq: cannot drop column "j" because trigger "audit_trigger" on table "t1" depends on it
 alter table t1 drop column j;
 
+statement error pq: cannot drop column "j" because trigger "audit_trigger" on table "t1" depends on it
+alter table other drop column j;
+
 statement error pq: cannot alter type of column "j" because trigger "audit_trigger" on table "t1" depends on it
 alter table t1 alter column j set data type text;
+
+statement error pq: cannot alter type of column "j" because trigger "audit_trigger" on table "t1" depends on it
+alter table other alter column j set data type text;
 
 statement error pq: cannot drop index "i1" because trigger "audit_trigger" on table "t1" depends on it
 drop index t1@i1;
 
+statement error pq: cannot drop index "i1" because trigger "audit_trigger" on table "t1" depends on it
+drop index other@i1;
+
 statement ok
 insert into t1(n) values(1);
 
-statement error pq: cannot drop function "f1" because other objects \(\[test.public.t1, test.public.audit_changes\]\) still depend on it
+statement error pq: cannot drop function "f1" because other objects \(\[test.public.t1\]\) still depend on it
 DROP FUNCTION f1;
 
-statement error pq: cannot drop type "e" because other objects \(\[test.public.audit_changes\]\) still depend on it
+statement error pq: cannot drop type "e" because other objects \(\[test.public.t1\]\) still depend on it
 DROP TYPE e;
+
+statement error pq: cannot drop table other because other objects depend on it
+DROP TABLE other;
 
 statement ok
 DROP TRIGGER audit_trigger ON t1;
 
 statement ok
-DROP FUNCTION audit_changes;
-
-statement ok
 DROP TYPE e;
 
 statement ok
 DROP FUNCTION f1;
+
+statement error pq: unknown function: f1()
+CREATE TRIGGER audit_trigger AFTER INSERT OR UPDATE OR DELETE ON t1 FOR EACH ROW EXECUTE FUNCTION audit_changes();
+
+statement ok
+DROP TABLE other;
 
 statement ok
 DROP TABLE t1;
