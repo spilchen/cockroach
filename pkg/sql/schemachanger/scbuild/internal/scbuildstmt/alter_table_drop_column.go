@@ -224,6 +224,7 @@ func dropColumn(
 			}
 			dropCascadeDescriptor(b, e.FunctionID)
 		case *scpb.TriggerDeps:
+			// SPILLY - update comment
 			// Drop cascade with triggers is difficult because the trigger descriptor is Drop cascade will cascade Dropping a trigger is difficult because
 			if behavior == tree.DropCascade {
 				// SPILLY - enter a real issue number

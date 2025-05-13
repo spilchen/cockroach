@@ -925,7 +925,7 @@ statement ok
 CREATE TRIGGER foo AFTER INSERT ON xy FOR EACH ROW EXECUTE FUNCTION trigger_func();
 
 # Relations are referenced by name, so renaming the table is not allowed.
-statement error pgcode 2BP01 cannot rename relation "t" because view "xy" depends on it
+statement error pgcode 2BP01 cannot rename relation "t" because table "xy" depends on it
 ALTER TABLE t RENAME TO t2;
 
 # Sequences are remapped to their IDs, so renaming is allowed.
@@ -4353,20 +4353,90 @@ alter table other alter column j set data type text;
 statement error pq: cannot drop index "i1" because trigger "audit_trigger" on table "t1" depends on it
 drop index t1@i1;
 
+statement error pq: unimplemented: DROP INDEX cascade is not supported with triggers
+drop index t1@i1 cascade;
+
 statement error pq: cannot drop index "i1" because trigger "audit_trigger" on table "t1" depends on it
 drop index other@i1;
 
-statement ok
-insert into t1(n) values(1);
+statement error pq: unimplemented: DROP INDEX cascade is not supported with triggers
+drop index other@i1 cascade;
 
 statement error pq: cannot drop function "f1" because other objects \(\[test.public.t1\]\) still depend on it
 DROP FUNCTION f1;
 
+statement error pq: unimplemented: drop function cascade not supported
+DROP FUNCTION f1 CASCADE;
+
 statement error pq: cannot drop type "e" because other objects \(\[test.public.t1\]\) still depend on it
 DROP TYPE e;
 
+statement error pq: unimplemented: DROP TYPE CASCADE is not yet supported
+DROP TYPE e CASCADE;
+
 statement error pq: cannot drop table other because other objects depend on it
 DROP TABLE other;
+
+# This test doesn't run with the legacy schema config because CREATE/DROP
+# trigger isn't implemented there. We enable legacy to run DDL to verify
+# the dependencies.
+let $use_decl_sc
+SHOW use_declarative_schema_changer
+
+statement ok
+set use_declarative_schema_changer = 'off';
+
+statement error pq: cannot drop column "j" because table "t1" depends on it
+alter table t1 drop column j;
+
+statement error pq: cannot drop column "j" because table "t1" depends on it
+alter table other drop column j;
+
+statement error pq: cannot alter type of column "j" because table "t1" depends on it
+alter table t1 alter column j set data type text;
+
+statement error pq: cannot alter type of column "j" because table "t1" depends on it
+alter table other alter column j set data type text;
+
+statement error pq: cannot drop index "i1" because table "t1" depends on it
+drop index t1@i1;
+
+# SPILLY - causes a stack overflow
+#statement error pq: cannot drop index "i1" because table "t1" depends on it
+#drop index t1@i1 CASCADE;
+
+statement error pq: cannot drop index "i1" because table "t1" depends on it
+drop index other@i1;
+
+# SPILLY - causes a stack overflow
+#statement error pq: cannot drop index "i1" because table "t1" depends on it
+#drop index other@i1 CASCADE;
+
+statement error pq: cannot drop function "f1" because other objects \(\[test.public.t1\]\) still depend on it
+DROP FUNCTION f1;
+
+statement error pq: unimplemented: drop function cascade not supported
+DROP FUNCTION f1 CASCADE;
+
+statement error pq: cannot drop type "e" because other objects \(\[test.public.t1\]\) still depend on it
+DROP TYPE e;
+
+statement error pq: unimplemented: DROP TYPE CASCADE is not yet supported
+DROP TYPE e CASCADE;
+
+statement error pq: cannot drop relation "other" because table "t1" depends on it
+DROP TABLE other;
+
+# SPILLY - this causes a stack overflow
+#statement error pq: cannot drop relation "other" because table "t1" depends on it
+#DROP TABLE other CASCADE;
+
+statement ok
+set use_declarative_schema_changer = $use_decl_sc;
+
+# Verify the trigger still works
+statement ok
+INSERT INTO t1 VALUES (1,1,1);
 
 statement ok
 DROP TRIGGER audit_trigger ON t1;
@@ -4377,11 +4447,11 @@ DROP TYPE e;
 statement ok
 DROP FUNCTION f1;
 
-statement error pq: unknown function: f1()
-CREATE TRIGGER audit_trigger AFTER INSERT OR UPDATE OR DELETE ON t1 FOR EACH ROW EXECUTE FUNCTION audit_changes();
-
 statement ok
 DROP TABLE other;
+
+statement error pq: unknown function: f1()
+CREATE TRIGGER audit_trigger AFTER INSERT OR UPDATE OR DELETE ON t1 FOR EACH ROW EXECUTE FUNCTION audit_changes();
 
 statement ok
 DROP TABLE t1;

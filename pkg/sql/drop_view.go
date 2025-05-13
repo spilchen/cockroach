@@ -8,7 +8,6 @@ package sql
 import (
 	"context"
 	"fmt"
-
 	"github.com/cockroachdb/cockroach/pkg/server/telemetry"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
@@ -182,6 +181,7 @@ func (p *planner) canRemoveDependentFromTable(
 	return p.canRemoveDependent(ctx, string(from.DescriptorType()), from.Name, from.ParentID, ref, behavior)
 }
 
+// SPILLY - rname this function and viewDesc
 func (p *planner) canRemoveDependentViewGeneric(
 	ctx context.Context,
 	typeName string,
@@ -191,7 +191,8 @@ func (p *planner) canRemoveDependentViewGeneric(
 	behavior tree.DropBehavior,
 ) error {
 	if behavior != tree.DropCascade {
-		return p.dependentViewError(ctx, typeName, objName, parentID, viewDesc, "drop")
+		// SPILLY - error out if the dependent thing is a table
+		return p.dependentRelationError(ctx, typeName, objName, parentID, viewDesc, "drop")
 	}
 
 	if err := p.CheckPrivilege(ctx, viewDesc, privilege.DROP); err != nil {

@@ -191,7 +191,7 @@ func maybeDropTriggers(
 					if behavior == tree.DropCascade {
 						// SPILLY - use real issue number
 						panic(unimplemented.NewWithIssuef(
-							49351, "DROP INDEX cascade not supported with triggers"))
+							49351, "DROP INDEX cascade is not supported with triggers"))
 					}
 					tableElts := b.QueryByID(elt.TableID)
 					tableName := tableElts.FilterNamespace().MustGetOneElement()
