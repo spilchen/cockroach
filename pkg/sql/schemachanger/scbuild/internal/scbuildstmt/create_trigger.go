@@ -152,9 +152,9 @@ func CreateTrigger(b BuildCtx, n *tree.CreateTrigger) {
 		// SPILLY - this poses a problem. We don't build up the complex dependency.
 		// We think
 		// SPILLY - add a comment
-		//if tblID == tableID {
-		//	return nil
-		//}
+		if tblID == tableID {
+			return nil
+		}
 		// SPILLY - use a map
 		// SPILLY - likely needs a better solution than this
 		// SPILLY - don't add duplicate relations. Descriptor validations only allow

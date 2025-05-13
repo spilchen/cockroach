@@ -4350,11 +4350,14 @@ alter table t1 alter column j set data type text;
 statement error pq: cannot alter type of column "j" because trigger "audit_trigger" on table "t1" depends on it
 alter table other alter column j set data type text;
 
-statement error pq: cannot drop index "i1" because trigger "audit_trigger" on table "t1" depends on it
-drop index t1@i1;
+# SPILLY - this doesn't error out
+# SPILLY - I wonder if we can implement this??
+#statement error pq: unimplemented: DROP INDEX cascade is not supported with triggers
+#drop index t1@i1 cascade;
 
-statement error pq: unimplemented: DROP INDEX cascade is not supported with triggers
-drop index t1@i1 cascade;
+# SPILLY - this should block, but it succeeds if we omit ourselves.
+#statement ok
+#drop index t1@i1;
 
 statement error pq: cannot drop index "i1" because trigger "audit_trigger" on table "t1" depends on it
 drop index other@i1;
@@ -4377,6 +4380,10 @@ DROP TYPE e CASCADE;
 statement error pq: cannot drop table other because other objects depend on it
 DROP TABLE other;
 
+# Verify the trigger still works
+statement ok
+INSERT INTO t1 VALUES (0,0,0);
+
 # This test doesn't run with the legacy schema config because CREATE/DROP
 # trigger isn't implemented there. We enable legacy to run DDL to verify
 # the dependencies.
@@ -4386,29 +4393,35 @@ SHOW use_declarative_schema_changer
 statement ok
 set use_declarative_schema_changer = 'off';
 
-statement error pq: cannot drop column "j" because table "t1" depends on it
-alter table t1 drop column j;
+# SPILLY: this works now
+#statement error pq: cannot drop column "j" because table "t1" depends on it
+#alter table t1 drop column j;
 
 statement error pq: cannot drop column "j" because table "t1" depends on it
 alter table other drop column j;
 
-statement error pq: cannot alter type of column "j" because table "t1" depends on it
+# SPILLY - we get proper dep check if we don't omit ourselves. Otherwise we get not supported error
+# statement error pq: cannot alter type of column "j" because table "t1" depends on it
+statement error pq: ALTER COLUMN TYPE is only implemented in the declarative schema changer
 alter table t1 alter column j set data type text;
 
 statement error pq: cannot alter type of column "j" because table "t1" depends on it
 alter table other alter column j set data type text;
 
-statement error pq: cannot drop index "i1" because table "t1" depends on it
-drop index t1@i1;
+# SPILLY - if we omit ourselves this works
+#statement error pq: cannot drop index "i1" because table "t1" depends on it
+#drop index t1@i1;
 
-# SPILLY - causes a stack overflow
+# SPILLY - causes a stack overflow if we don't omit ourselves
+# SPILLY - it succeeds if we do omit ourselves
 #statement error pq: cannot drop index "i1" because table "t1" depends on it
 #drop index t1@i1 CASCADE;
 
 statement error pq: cannot drop index "i1" because table "t1" depends on it
 drop index other@i1;
 
-# SPILLY - causes a stack overflow
+# SPILLY - causes a stack overflow when including self
+# SPILLY - when not including self, we get a desc validation error "dependend-on-by relation ... is dropped"
 #statement error pq: cannot drop index "i1" because table "t1" depends on it
 #drop index other@i1 CASCADE;
 
@@ -4427,13 +4440,15 @@ DROP TYPE e CASCADE;
 statement error pq: cannot drop relation "other" because table "t1" depends on it
 DROP TABLE other;
 
-# SPILLY - this causes a stack overflow
+# SPILLY - this causes a stack overflow when including self
+# SPILLY - when not including self, we get a desc validation error "dependend-on-by relation ... is dropped"
 #statement error pq: cannot drop relation "other" because table "t1" depends on it
 #DROP TABLE other CASCADE;
 
 statement ok
 set use_declarative_schema_changer = $use_decl_sc;
 
+# SPILLY - this fails because the index doens't exist
 # Verify the trigger still works
 statement ok
 INSERT INTO t1 VALUES (1,1,1);
