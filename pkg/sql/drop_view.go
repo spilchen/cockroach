@@ -288,6 +288,10 @@ func (p *planner) dropViewImpl(
 	if behavior == tree.DropCascade {
 		dependedOnBy := append([]descpb.TableDescriptor_Reference(nil), viewDesc.DependedOnBy...)
 		for _, ref := range dependedOnBy {
+			// SPILLY - comment here
+			if ref.ID == viewDesc.ID {
+				continue
+			}
 			depDesc, err := p.getDescForCascade(
 				ctx, string(viewDesc.DescriptorType()), viewDesc.Name, viewDesc.ParentID, ref.ID, behavior,
 			)

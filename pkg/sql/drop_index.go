@@ -430,6 +430,14 @@ func (p *planner) dropIndexByName(
 	var depsToDrop catalog.DescriptorIDSet
 	for _, tableRef := range tableDesc.DependedOnBy {
 		if tableRef.IndexID == idx.GetID() {
+			// SPILLY - comment
+			if tableRef.ID == tableDesc.GetID() {
+				return pgerror.Newf(
+					pgcode.DependentObjectsStillExist,
+					"cannot drop index %q because table %q depends on it",
+					idx.GetName(), tableDesc.GetName(),
+				)
+			}
 			// Ensure that we have DROP privilege on all dependent views
 			err := p.canRemoveDependent(
 				ctx, "index", idx.GetName(), tableDesc.ParentID, tableRef, behavior)
