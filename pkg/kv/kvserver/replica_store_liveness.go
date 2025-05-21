@@ -34,8 +34,8 @@ var RaftLeaderFortificationFractionEnabled = settings.RegisterFloatSetting(
 		"expiration-based leases. Set to a value between 0.0 and 1.0 to gradually "+
 		"roll out Leader leases across the ranges in a cluster.",
 	metamorphic.ConstantWithTestChoice("kv.raft.leader_fortification.fraction_enabled",
-		1.0, /* defaultValue */
-		0.0 /* otherValues */),
+		0.0, /* defaultValue */
+		1.0 /* otherValues */),
 	settings.FloatInRange(0.0, 1.0),
 	settings.WithPublic,
 )
@@ -63,9 +63,7 @@ func (r *replicaRLockedStoreLiveness) SupportFor(replicaID raftpb.PeerID) (raftp
 	storeID, ok := r.getStoreIdent(replicaID)
 	if !ok {
 		ctx := r.AnnotateCtx(context.TODO())
-		if log.ExpensiveLogEnabled(ctx, 1) {
-			log.VEventf(ctx, 1, "store not found for replica %d in SupportFor", replicaID)
-		}
+		log.Warningf(ctx, "store not found for replica %d in SupportFor", replicaID)
 		return 0, false
 	}
 	epoch, ok := r.store.storeLiveness.SupportFor(storeID)
@@ -79,9 +77,7 @@ func (r *replicaRLockedStoreLiveness) SupportFrom(
 	storeID, ok := r.getStoreIdent(replicaID)
 	if !ok {
 		ctx := r.AnnotateCtx(context.TODO())
-		if log.ExpensiveLogEnabled(ctx, 1) {
-			log.VEventf(ctx, 1, "store not found for replica %d in SupportFrom", replicaID)
-		}
+		log.Warningf(ctx, "store not found for replica %d in SupportFrom", replicaID)
 		return 0, hlc.Timestamp{}
 	}
 	epoch, exp := r.store.storeLiveness.SupportFrom(storeID)

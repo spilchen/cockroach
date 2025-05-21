@@ -70,6 +70,5 @@ func (cr *commandRegistry) register() {
 		cr.buildOpentelemetryStopCmd(),
 		cr.buildFetchLogsCmd(),
 		cr.buildGetLatestPProfCmd(),
-		cr.buildFetchCertsDir(),
 	})
 }

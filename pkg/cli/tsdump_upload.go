@@ -246,17 +246,11 @@ func (d *datadogWriter) emitDataDogMetrics(data []DatadogSeries) ([]string, erro
 	func() {
 		printLock.Lock()
 		defer printLock.Unlock()
-		if len(data) > 0 {
-			fmt.Printf(
-				"\033[G\033[Ktsdump datadog upload: uploading metrics containing %d series including %s",
-				len(data),
-				data[0].Metric,
-			)
-		} else {
-			fmt.Printf(
-				"\033[G\033[Ktsdump datadog upload: uploading metrics containing 0 series",
-			)
-		}
+		fmt.Printf(
+			"\033[G\033[Ktsdump datadog upload: uploading metrics containing %d series including %s",
+			len(data),
+			data[0].Metric,
+		)
 	}()
 
 	return emittedMetrics, d.flush(data)
@@ -339,6 +333,7 @@ func (d *datadogWriter) upload(fileName string) error {
 	}
 
 	dec := gob.NewDecoder(f)
+	gob.Register(&roachpb.KeyValue{})
 	decodeOne := func() ([]DatadogSeries, error) {
 		var ddSeries []DatadogSeries
 

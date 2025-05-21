@@ -244,17 +244,9 @@ func createTestStoreWithoutStart(
 		nil, /* PiggybackedAdmittedResponseScheduler */
 		nil, /* knobs */
 	)
-
-	{
-		livenessInterval, heartbeatInterval := cfg.StoreLivenessDurations()
-		supportGracePeriod := rpcContext.StoreLivenessWithdrawalGracePeriod()
-		options := storeliveness.NewOptions(livenessInterval, heartbeatInterval, supportGracePeriod)
-		transport := storeliveness.NewTransport(
-			cfg.AmbientCtx, stopper, cfg.Clock, cfg.NodeDialer, server, nil, /* knobs */
-		)
-		knobs := cfg.TestingKnobs.StoreLivenessKnobs
-		cfg.StoreLiveness = storeliveness.NewNodeContainer(stopper, options, transport, knobs)
-	}
+	cfg.StoreLivenessTransport = storeliveness.NewTransport(
+		cfg.AmbientCtx, stopper, cfg.Clock, cfg.NodeDialer, server, nil, /* knobs */
+	)
 
 	stores := NewStores(cfg.AmbientCtx, cfg.Clock)
 	nodeDesc := &roachpb.NodeDescriptor{NodeID: 1}
@@ -326,6 +318,14 @@ func createTestStoreWithConfig(
 	ctx context.Context, t testing.TB, stopper *stop.Stopper, opts testStoreOpts, cfg *StoreConfig,
 ) *Store {
 	store := createTestStoreWithoutStart(ctx, t, stopper, opts, cfg)
+	// Put an empty system config into gossip.
+	//
+	// TODO(ajwerner): Remove this in 22.2. It's possible it can be removed
+	// already.
+	if err := store.Gossip().AddInfoProto(gossip.KeyDeprecatedSystemConfig,
+		&config.SystemConfigEntries{}, 0); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Start(ctx, stopper); err != nil {
 		t.Fatal(err)
 	}
@@ -2174,7 +2174,7 @@ func TestStoreSkipLockedTSCache(t *testing.T) {
 				req, resp := ba.Requests[i].GetInner(), ru.GetInner()
 				require.NoError(t, kvpb.ResponseKeyIterate(req, resp, func(k roachpb.Key) {
 					respKeys = append(respKeys, string(k))
-				}, false /* includeLockedNonExisting */))
+				}))
 			}
 			sort.Strings(respKeys) // normalize reverse scan
 			require.Equal(t, []string{"a", "c"}, respKeys)
@@ -3385,10 +3385,9 @@ func TestReserveSnapshotFullnessLimit(t *testing.T) {
 	desc.Capacity.Available = 1
 	desc.Capacity.Used = desc.Capacity.Capacity - desc.Capacity.Available
 
-	sd := s.cfg.StorePool.GetStoreDetail(desc.StoreID)
-	sd.Lock()
-	sd.Desc = desc
-	sd.Unlock()
+	s.cfg.StorePool.DetailsMu.Lock()
+	s.cfg.StorePool.GetStoreDetailLocked(desc.StoreID).Desc = desc
+	s.cfg.StorePool.DetailsMu.Unlock()
 
 	if n := s.ReservationCount(); n != 0 {
 		t.Fatalf("expected 0 reservations, but found %d", n)
@@ -3410,10 +3409,9 @@ func TestReserveSnapshotFullnessLimit(t *testing.T) {
 	// available disk space should be rejected.
 	desc.Capacity.Available = desc.Capacity.Capacity / 2
 	desc.Capacity.Used = desc.Capacity.Capacity - desc.Capacity.Available
-	sd = s.cfg.StorePool.GetStoreDetail(desc.StoreID)
-	sd.Lock()
-	sd.Desc = desc
-	sd.Unlock()
+	s.cfg.StorePool.DetailsMu.Lock()
+	s.cfg.StorePool.GetStoreDetailLocked(desc.StoreID).Desc = desc
+	s.cfg.StorePool.DetailsMu.Unlock()
 
 	if n := s.ReservationCount(); n != 0 {
 		t.Fatalf("expected 0 reservations, but found %d", n)

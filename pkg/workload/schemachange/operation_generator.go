@@ -28,7 +28,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/randgen"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util"
@@ -986,20 +985,13 @@ func (og *operationGenerator) createIndex(ctx context.Context, tx pgx.Tx) (*opSt
 		}
 	}
 
-	// TODO(andyk): Do we need to include vector indexes?
-	indexType := idxtype.FORWARD
-	if og.randIntn(10) == 0 {
-		// 10% INVERTED
-		indexType = idxtype.INVERTED
-	}
-
 	def := &tree.CreateIndex{
 		Name:         tree.Name(indexName),
 		Table:        *tableName,
-		Unique:       og.randIntn(4) == 0, // 25% UNIQUE
-		Type:         indexType,
-		IfNotExists:  og.randIntn(2) == 0, // 50% IF NOT EXISTS
-		Invisibility: invisibility,        // 5% NOT VISIBLE
+		Unique:       og.randIntn(4) == 0,  // 25% UNIQUE
+		Inverted:     og.randIntn(10) == 0, // 10% INVERTED
+		IfNotExists:  og.randIntn(2) == 0,  // 50% IF NOT EXISTS
+		Invisibility: invisibility,         // 5% NOT VISIBLE
 	}
 
 	regionColumn := tree.Name("")
@@ -1031,7 +1023,7 @@ func (og *operationGenerator) createIndex(ctx context.Context, tx pgx.Tx) (*opSt
 		if columnNames[i].name == regionColumn && i != 0 {
 			duplicateRegionColumn = true
 		}
-		if def.Type == idxtype.INVERTED {
+		if def.Inverted {
 			// We can have an inverted index on a set of columns if the last column
 			// is an inverted indexable type and the preceding columns are not.
 			invertedIndexableType := colinfo.ColumnTypeIsInvertedIndexable(columnNames[i].typ)
@@ -1148,10 +1140,10 @@ func (og *operationGenerator) createIndex(ctx context.Context, tx pgx.Tx) (*opSt
 		stmt.expectedExecErrors.addAll(codesWithConditions{
 			{code: pgcode.DuplicateRelation, condition: indexExists},
 			// Inverted indexes do not support stored columns.
-			{code: pgcode.InvalidSQLStatementName, condition: len(def.Storing) > 0 && def.Type == idxtype.INVERTED},
+			{code: pgcode.InvalidSQLStatementName, condition: len(def.Storing) > 0 && def.Inverted},
 			// Inverted indexes cannot be unique.
-			{code: pgcode.InvalidSQLStatementName, condition: def.Unique && def.Type == idxtype.INVERTED},
-			{code: pgcode.InvalidSQLStatementName, condition: def.Type == idxtype.INVERTED && len(def.Storing) > 0},
+			{code: pgcode.InvalidSQLStatementName, condition: def.Unique && def.Inverted},
+			{code: pgcode.InvalidSQLStatementName, condition: def.Inverted && len(def.Storing) > 0},
 			{code: pgcode.DuplicateColumn, condition: duplicateStore},
 			{code: pgcode.FeatureNotSupported, condition: nonIndexableType},
 			{code: pgcode.FeatureNotSupported, condition: regionColStored},
@@ -1305,14 +1297,6 @@ func (og *operationGenerator) createTable(ctx context.Context, tx pgx.Tx) (*opSt
 		}
 		return false
 	}()
-
-	// Randomly create as schema locked table.
-	if og.params.rng.Intn(2) == 0 {
-		stmt.StorageParams = append(stmt.StorageParams, tree.StorageParam{
-			Key:   "schema_locked",
-			Value: tree.DBoolTrue,
-		})
-	}
 
 	tableExists, err := og.tableExists(ctx, tx, tableName)
 	if err != nil {
@@ -1663,14 +1647,6 @@ func (og *operationGenerator) dropColumn(ctx context.Context, tx pgx.Tx) (*opStm
 		return nil, err
 	}
 
-	// Check if the table has any policies
-	tableHasPolicies := false
-	if tableExists {
-		if tableHasPolicies, err = og.tableHasPolicies(ctx, tx, tableName); err != nil {
-			return nil, err
-		}
-	}
-
 	columnName, err := og.randColumn(ctx, tx, *tableName, og.pctExisting(true))
 	if err != nil {
 		return nil, err
@@ -1719,38 +1695,9 @@ func (og *operationGenerator) dropColumn(ctx context.Context, tx pgx.Tx) (*opStm
 		// It is possible the column we are dropping is in the new primary key,
 		// so a potential error is an invalid reference in this case.
 		{code: pgcode.InvalidColumnReference, condition: og.useDeclarativeSchemaChanger && hasAlterPKSchemaChange},
-		// It is possible that we cannot drop column because
-		// it is referenced in a policy expression.
-		{code: pgcode.InvalidTableDefinition, condition: tableHasPolicies},
 	})
 	stmt.sql = fmt.Sprintf(`ALTER TABLE %s DROP COLUMN %s`, tableName.String(), columnName.String())
 	return stmt, nil
-}
-
-// tableHasPolicies checks if a table has any row-level security policies defined
-func (og *operationGenerator) tableHasPolicies(
-	ctx context.Context, tx pgx.Tx, tableName *tree.TableName,
-) (bool, error) {
-	// Query to check if a table has any RLS policies
-	query := `
-	SELECT EXISTS (
-		SELECT 1
-		FROM pg_policy p
-		JOIN pg_class t ON p.polrelid = t.oid
-		JOIN pg_namespace n ON t.relnamespace = n.oid
-		WHERE t.relname = $1
-		AND n.nspname = $2
-		LIMIT 1
-	)
-	`
-
-	var hasPolicies bool
-	err := tx.QueryRow(ctx, query, tableName.Object(), tableName.Schema()).Scan(&hasPolicies)
-	if err != nil {
-		return false, err
-	}
-
-	return hasPolicies, nil
 }
 
 func (og *operationGenerator) dropColumnDefault(ctx context.Context, tx pgx.Tx) (*opStmt, error) {
@@ -2847,6 +2794,9 @@ func (og *operationGenerator) alterTableAlterPrimaryKey(
 		return nil, err
 	}
 
+	// TODO(sql-foundations): Until #130165 is resolved, we add this potential
+	// error.
+	og.potentialCommitErrors.add(pgcode.DuplicateColumn)
 	// There is a risk of unique violations if concurrent inserts
 	// happen during an ALTER PRIMARY KEY. So allow this to be
 	// a potential error on the commit.
@@ -3093,7 +3043,6 @@ func (og *operationGenerator) insertRow(ctx context.Context, tx pgx.Tx) (stmt *o
 		{code: pgcode.ForeignKeyViolation, condition: fkViolation},
 		{code: pgcode.NotNullViolation, condition: true},
 		{code: pgcode.CheckViolation, condition: true},
-		{code: pgcode.InsufficientPrivilege, condition: true}, // For RLS violations
 	})
 	og.expectedCommitErrors.addAll(codesWithConditions{
 		{code: pgcode.ForeignKeyViolation, condition: fkViolation},
@@ -3829,14 +3778,6 @@ func (og *operationGenerator) randTypeName(
 func (og *operationGenerator) randTable(
 	ctx context.Context, tx pgx.Tx, pctExisting int, desiredSchema string,
 ) (*tree.TableName, error) {
-	// Because the declarative schema change can automatically set / unset
-	// schema_locked on tables, we will allow random table selection include
-	// schema_locked tables. When working with the legacy schema changer, we
-	// will intentionally only select non-schema locked tables.
-	excludeSchemaLocked := "  AND create_statement NOT LIKE '%schema_locked%' "
-	if og.useDeclarativeSchemaChanger {
-		excludeSchemaLocked = ""
-	}
 	if err := og.setSeedInDB(ctx, tx); err != nil {
 		return nil, err
 	}
@@ -3849,15 +3790,13 @@ func (og *operationGenerator) randTable(
 			return &treeTableName, nil
 		}
 		q := fmt.Sprintf(`
-		  SELECT descriptor_name 
-		    FROM crdb_internal.create_statements
-		   WHERE descriptor_name SIMILAR TO 'table_w[0-9]_+%%'
+		  SELECT table_name
+		    FROM [SHOW TABLES]
+		   WHERE table_name SIMILAR TO 'table_w[0-9]_+%%'
 				 AND schema_name = '%s'
-		     AND descriptor_type='table'
-		 	   %s 
 		ORDER BY random()
 		   LIMIT 1;
-		`, desiredSchema, excludeSchemaLocked)
+		`, desiredSchema)
 
 		var tableName string
 		if err := tx.QueryRow(ctx, q).Scan(&tableName); err != nil {
@@ -3888,17 +3827,13 @@ func (og *operationGenerator) randTable(
 		return &treeTableName, nil
 	}
 
-	q := fmt.Sprintf(`
-SELECT schema_name, descriptor_name 
-		    FROM crdb_internal.create_statements
-		   WHERE descriptor_name SIMILAR TO 'table_w[0-9]_+%%'
-		     AND descriptor_type='table'
-		 	   %s 
-		ORDER BY random()
-		   LIMIT 1;
-`,
-		excludeSchemaLocked)
-
+	const q = `
+  SELECT schema_name, table_name
+    FROM [SHOW TABLES]
+   WHERE table_name SIMILAR TO 'table_w[0-9]_+%'
+ORDER BY random()
+   LIMIT 1;
+`
 	var schemaName string
 	var tableName string
 	if err := tx.QueryRow(ctx, q).Scan(&schemaName, &tableName); err != nil {
@@ -4921,420 +4856,4 @@ func (og *operationGenerator) setSeedInDB(ctx context.Context, tx pgx.Tx) error 
 		return err
 	}
 	return nil
-}
-
-func (og *operationGenerator) alterTableRLS(ctx context.Context, tx pgx.Tx) (*opStmt, error) {
-	tableName, err := og.randTable(ctx, tx, og.pctExisting(true), "")
-	if err != nil {
-		return nil, err
-	}
-
-	tableExists, err := og.tableExists(ctx, tx, tableName)
-	if err != nil {
-		return nil, err
-	}
-
-	// Define the available RLS options
-	rlsOptions := []string{
-		"ENABLE ROW LEVEL SECURITY",
-		"DISABLE ROW LEVEL SECURITY",
-		"FORCE ROW LEVEL SECURITY",
-		"NO FORCE ROW LEVEL SECURITY",
-	}
-
-	// Randomly decide between 1 or 2 options
-	numOptions := og.randIntn(2) + 1
-
-	// Randomly select a unique permutation of the options
-	perm := og.params.rng.Perm(len(rlsOptions))
-	selectedOptions := make([]string, numOptions)
-	for i := 0; i < numOptions; i++ {
-		selectedOptions[i] = rlsOptions[perm[i]]
-	}
-
-	// Build the SQL statement
-	sqlStatement := fmt.Sprintf(`ALTER TABLE %s %s`, tableName, strings.Join(selectedOptions, ", "))
-
-	opStmt := makeOpStmt(OpStmtDDL)
-	opStmt.expectedExecErrors.addAll(codesWithConditions{
-		{code: pgcode.FeatureNotSupported, condition: !og.useDeclarativeSchemaChanger},
-		{code: pgcode.UndefinedTable, condition: !tableExists},
-	})
-
-	opStmt.sql = sqlStatement
-	return opStmt, nil
-}
-
-// generatePolicyExpression creates a random expression suitable for use in policy USING or WITH CHECK clauses
-func (og *operationGenerator) generatePolicyExpression(
-	columns []string, preferredColumn int,
-) string {
-	if len(columns) == 0 {
-		// Fallback to simple boolean if no columns are available
-		if og.randIntn(2) == 0 {
-			return "true"
-		}
-		return "false"
-	}
-
-	// Choose a column index (or use the preferred one if valid)
-	colIdx := og.randIntn(len(columns))
-	if preferredColumn >= 0 && preferredColumn < len(columns) {
-		colIdx = preferredColumn
-	}
-
-	// Generate a basic expression (IS NULL or IS NOT NULL)
-	var expr string
-	if og.randIntn(2) == 0 {
-		// IS NULL check
-		expr = fmt.Sprintf("%s IS NULL", columns[colIdx])
-	} else {
-		// IS NOT NULL check
-		expr = fmt.Sprintf("%s IS NOT NULL", columns[colIdx])
-	}
-
-	// Sometimes add complexity to the expression
-	if og.randIntn(3) == 0 {
-		expressionType := og.randIntn(3)
-		switch expressionType {
-		case 0:
-			// Add OR TRUE/FALSE
-			if og.randIntn(2) == 0 {
-				expr = fmt.Sprintf("(%s OR TRUE)", expr)
-			} else {
-				expr = fmt.Sprintf("(%s OR FALSE)", expr)
-			}
-		case 1:
-			// Use a different column if available for a compound expression
-			if len(columns) > 1 {
-				secondColIdx := (colIdx + 1) % len(columns)
-				if og.randIntn(2) == 0 {
-					expr = fmt.Sprintf("(%s OR %s IS NOT NULL)", expr, columns[secondColIdx])
-				} else {
-					expr = fmt.Sprintf("(%s AND %s IS NULL)", expr, columns[secondColIdx])
-				}
-			}
-		case 2:
-			// Add a comparison with a literal
-			if og.randIntn(2) == 0 {
-				expr = fmt.Sprintf("((%s) OR (TRUE))", expr)
-			} else {
-				expr = fmt.Sprintf("(%s AND current_user = current_user)", expr)
-			}
-		}
-	}
-
-	return expr
-}
-
-func (og *operationGenerator) createPolicy(ctx context.Context, tx pgx.Tx) (*opStmt, error) {
-	tableName, err := og.randTable(ctx, tx, og.pctExisting(true), "")
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if table exists to include appropriate expected error
-	tableExists, err := og.tableExists(ctx, tx, tableName)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get columns for the table to reference in expressions
-	var columns []string
-	if tableExists {
-		columns, err = og.tableColumnsShuffled(ctx, tx, tableName.String())
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Generate a unique policy name
-	policyName := fmt.Sprintf("policy_%s", og.newUniqueSeqNumSuffix())
-
-	// Determine which policy components to include
-	includeUsing := og.randIntn(2) == 0     // 50% chance to include a USING expression
-	includeWithCheck := og.randIntn(2) == 0 // 50% chance to include WITH CHECK
-
-	// Build the SQL statement
-	var sqlStatement strings.Builder
-	sqlStatement.WriteString(fmt.Sprintf("CREATE POLICY %s ON %s", policyName, tableName))
-
-	if includeUsing {
-		usingExpr := og.generatePolicyExpression(columns, -1) // -1 means no preferred column
-		sqlStatement.WriteString(fmt.Sprintf(" USING (%s)", usingExpr))
-	}
-
-	if includeWithCheck {
-		// Try to use a different column for WITH CHECK if possible
-		preferredColIdx := -1
-		if len(columns) > 1 && includeUsing {
-			preferredColIdx = og.randIntn(len(columns))
-		}
-
-		withCheckExpr := og.generatePolicyExpression(columns, preferredColIdx)
-		sqlStatement.WriteString(fmt.Sprintf(" WITH CHECK (%s)", withCheckExpr))
-	}
-
-	// Create the operation statement
-	opStmt := makeOpStmt(OpStmtDDL)
-	opStmt.sql = sqlStatement.String()
-
-	opStmt.expectedExecErrors.addAll(codesWithConditions{
-		{code: pgcode.FeatureNotSupported, condition: !og.useDeclarativeSchemaChanger},
-		{code: pgcode.UndefinedTable, condition: !tableExists},
-	})
-
-	return opStmt, nil
-}
-
-// policyInfo pairs a table name with a name of a policy
-type policyInfo struct {
-	table      tree.TableName
-	policyName string
-}
-
-// findExistingPolicy returns a policyInfo struct with the qualified table name and policy name.
-// It also returns a boolean indicating whether a policy was found.
-func findExistingPolicy(
-	ctx context.Context, tx pgx.Tx, og *operationGenerator,
-) (*policyInfo, bool, error) {
-	var policyWithInfo policyInfo
-	policyExists := false
-
-	// Search for tables that have policies
-	policyTableQuery := `
-		SELECT
-			t.relname as table_name,
-			n.nspname as schema_name,
-			p.polname as policy_name
-		FROM
-			pg_policy p
-			JOIN pg_class t ON p.polrelid = t.oid
-			JOIN pg_namespace n ON t.relnamespace = n.oid
-		ORDER BY random()
-		LIMIT 1
-	`
-
-	rows, err := tx.Query(ctx, policyTableQuery)
-	if err != nil {
-		return nil, policyExists, err
-	}
-	defer rows.Close()
-
-	// Check if any rows were returned
-	for rows.Next() {
-		var tableName, schemaName, policyName string
-		if err := rows.Scan(&tableName, &schemaName, &policyName); err != nil {
-			return nil, policyExists, err
-		}
-		policyWithInfo = policyInfo{
-			table: tree.MakeTableNameFromPrefix(tree.ObjectNamePrefix{
-				SchemaName:     tree.Name(schemaName),
-				ExplicitSchema: true,
-			}, tree.Name(tableName)),
-			policyName: policyName,
-		}
-		policyExists = true
-	}
-
-	if rows.Err() != nil {
-		return nil, false, rows.Err()
-	}
-
-	return &policyWithInfo, policyExists, nil
-}
-
-func (og *operationGenerator) dropPolicy(ctx context.Context, tx pgx.Tx) (*opStmt, error) {
-	policyWithInfo, policyExists, err := findExistingPolicy(ctx, tx, og)
-	if err != nil {
-		return nil, err
-	}
-
-	tableExists := true
-
-	if !policyExists {
-		// Fall back to random table if no tables with policies were found
-		randomTable, err := og.randTable(ctx, tx, og.pctExisting(true), "")
-		if err != nil {
-			return nil, err
-		}
-		policyWithInfo.table = *randomTable
-
-		// If we didn't get a real policy name, generate a random one
-		if policyWithInfo.policyName == "" {
-			policyWithInfo.policyName = fmt.Sprintf("dummy_policy_%s", og.newUniqueSeqNumSuffix())
-		}
-
-		// Check if table exists to include appropriate expected error
-		tableExists, err = og.tableExists(ctx, tx, randomTable)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Build the SQL statement
-	var sqlStatement strings.Builder
-	sqlStatement.WriteString("DROP POLICY ")
-
-	// Randomly decide whether to include IF EXISTS (60% chance)
-	includeIfExists := og.randIntn(100) < 60
-	if includeIfExists {
-		sqlStatement.WriteString("IF EXISTS ")
-	}
-
-	sqlStatement.WriteString(fmt.Sprintf("%s ON %s", policyWithInfo.policyName, &policyWithInfo.table))
-
-	// Create the operation statement
-	opStmt := makeOpStmt(OpStmtDDL)
-	opStmt.sql = sqlStatement.String()
-
-	opStmt.expectedExecErrors.addAll(codesWithConditions{
-		// The policy might not exist
-		{code: pgcode.UndefinedObject, condition: !policyExists && !includeIfExists},
-		// Table might not exist
-		{code: pgcode.UndefinedTable, condition: !tableExists && !includeIfExists},
-	})
-
-	return opStmt, nil
-}
-
-func (og *operationGenerator) alterPolicy(ctx context.Context, tx pgx.Tx) (*opStmt, error) {
-	// Try to find an existing policy to alter
-	policyWithInfo, policyExists, err := findExistingPolicy(ctx, tx, og)
-	if err != nil {
-		return nil, err
-	}
-
-	// Variable to track table existence
-	var tableExists bool = true
-
-	if !policyExists {
-		// Fall back to random table if no tables with policies were found
-		randomTable, err := og.randTable(ctx, tx, og.pctExisting(true), "")
-		if err != nil {
-			return nil, err
-		}
-		policyWithInfo.table = *randomTable
-
-		// If we didn't get a real policy name, generate a random one
-		if policyWithInfo.policyName == "" {
-			policyWithInfo.policyName = fmt.Sprintf("dummy_policy_%s", og.newUniqueSeqNumSuffix())
-		}
-
-		// Check if table exists to include appropriate expected error
-		tableExists, err = og.tableExists(ctx, tx, randomTable)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Determine which ALTER POLICY features to include
-	alterType := og.randIntn(4) // 0-3 for different types of alterations
-
-	var sqlStatement strings.Builder
-	sqlStatement.WriteString(fmt.Sprintf("ALTER POLICY %s ON %s", policyWithInfo.policyName, &policyWithInfo.table))
-
-	usesDummyRole := false
-	includeUsing := false
-	includeWithCheck := false
-
-	var columns []string
-
-	switch alterType {
-	case 0: // RENAME TO
-		newName := fmt.Sprintf("policy_%s", og.newUniqueSeqNumSuffix())
-		sqlStatement.WriteString(fmt.Sprintf(" RENAME TO %s", newName))
-	case 1: // TO roles
-		// Define roles to grant the policy to
-		var roles string
-		if og.randIntn(2) == 0 {
-			// 50% chance to a real username
-			roles, err = og.randUser(ctx, tx)
-			if err != nil {
-				return nil, err
-			}
-		} else if og.randIntn(4) == 0 {
-			// Fall back to two options: 25% chance for PUBLIC or a 75% for generated dummy role
-			roles = "PUBLIC"
-		} else {
-			// Generate a random role name that doesn't exist
-			roles = fmt.Sprintf("dummy_role_%s", og.newUniqueSeqNumSuffix())
-			usesDummyRole = true
-		}
-
-		sqlStatement.WriteString(fmt.Sprintf(" TO %s", lexbase.EscapeSQLIdent(roles)))
-	default: // USING and/or WITH CHECK expressions
-		// For case 2 and 3, we generate USING, WITH CHECK, or both
-		includeUsing = alterType == 2 || og.randIntn(2) == 0
-		includeWithCheck = alterType == 3 || og.randIntn(2) == 0
-
-		// If neither was selected, default to including USING
-		if !includeUsing && !includeWithCheck {
-			includeUsing = true
-		}
-
-		// Get columns for the table to reference in expressions
-		if tableExists {
-			columns, err = og.tableColumnsShuffled(ctx, tx, policyWithInfo.table.String())
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		// Generate expressions for USING and WITH CHECK
-		if includeUsing {
-			usingExpr := og.generatePolicyExpression(columns, -1) // -1 means no preferred column
-			sqlStatement.WriteString(fmt.Sprintf(" USING (%s)", usingExpr))
-		}
-
-		if includeWithCheck {
-			// Try to use a different column for WITH CHECK if possible
-			preferredColIdx := -1
-			if len(columns) > 1 && includeUsing {
-				preferredColIdx = og.randIntn(len(columns))
-			}
-
-			withCheckExpr := og.generatePolicyExpression(columns, preferredColIdx)
-			sqlStatement.WriteString(fmt.Sprintf(" WITH CHECK (%s)", withCheckExpr))
-		}
-	}
-
-	// Create the operation statement
-	opStmt := makeOpStmt(OpStmtDDL)
-	opStmt.sql = sqlStatement.String()
-
-	opStmt.expectedExecErrors.addAll(codesWithConditions{
-		{code: pgcode.UndefinedObject, condition: !policyExists || usesDummyRole},
-		{code: pgcode.UndefinedTable, condition: !tableExists},
-	})
-
-	return opStmt, nil
-}
-
-// randUser returns a real username from the database.
-// It returns an error if no user is found.
-func (og *operationGenerator) randUser(ctx context.Context, tx pgx.Tx) (string, error) {
-	query := "SELECT username FROM [SHOW USERS] ORDER BY random() LIMIT 1"
-	rows, err := tx.Query(ctx, query)
-	if rows.Err() != nil {
-		return "", rows.Err()
-	}
-
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	var realUser string
-	if rows.Next() {
-		if err := rows.Scan(&realUser); err != nil {
-			return "", err
-		}
-		og.LogMessage(fmt.Sprintf("Found real user: '%s'", realUser))
-		return realUser, nil
-	}
-
-	// This should never happen in a valid CockroachDB instance.
-	// There should always be at least one user.
-	return "", errors.New("no users found in the database")
 }

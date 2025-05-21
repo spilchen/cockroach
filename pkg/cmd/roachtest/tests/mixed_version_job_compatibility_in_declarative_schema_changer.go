@@ -55,6 +55,11 @@ func setShortJobIntervalsStep(
 func setShortGCTTLInSystemZoneConfig(
 	ctx context.Context, l *logger.Logger, r *rand.Rand, h *mixedversion.Helper,
 ) error {
+	// Ensure the system database has a longer TTL interval, which is needed to avoid
+	// flakes on system database queries for upgrades.
+	if err := h.Exec(r, "ALTER DATABASE system CONFIGURE ZONE USING gc.ttlseconds=60;"); err != nil {
+		return err
+	}
 	return h.Exec(r, "ALTER RANGE default CONFIGURE ZONE USING gc.ttlseconds = 1;")
 }
 
@@ -86,7 +91,7 @@ func executeSupportedDDLs(
 	// here because these connnections are managed by the mixedversion
 	// framework, which already closes them at the end of the test.
 	testUtils, err := newCommonTestUtils(
-		ctx, t, c, connectFunc, helper.DefaultService().Descriptor.Nodes,
+		ctx, t, c, connectFunc, helper.DefaultService().Descriptor.Nodes, false, false,
 	)
 	if err != nil {
 		return err

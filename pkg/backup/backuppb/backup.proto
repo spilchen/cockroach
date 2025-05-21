@@ -151,9 +151,7 @@ message BackupManifest {
   int32 elided_prefix = 28 [(gogoproto.nullable) = false,
     (gogoproto.customtype) = "github.com/cockroachdb/cockroach/pkg/sql/execinfrapb.ElidePrefix"];
 
-  bool is_compacted = 29;
-
-  // NEXT ID: 30.
+  // NEXT ID: 29.
 }
 
 message BackupPartitionDescriptor{

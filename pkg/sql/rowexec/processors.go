@@ -301,20 +301,6 @@ func NewProcessor(
 		}
 		return newWindower(ctx, flowCtx, processorID, core.Windower, inputs[0], post)
 	}
-	if core.VectorSearch != nil {
-		if err := checkNumIn(inputs, 0); err != nil {
-			return nil, err
-		}
-		return newVectorSearchProcessor(ctx, flowCtx, processorID, core.VectorSearch, post)
-	}
-	if core.VectorMutationSearch != nil {
-		if err := checkNumIn(inputs, 1); err != nil {
-			return nil, err
-		}
-		return newVectorMutationSearchProcessor(
-			ctx, flowCtx, processorID, core.VectorMutationSearch, inputs[0], post,
-		)
-	}
 	if core.LocalPlanNode != nil {
 		numInputs := int(core.LocalPlanNode.NumInputs)
 		if err := checkNumIn(inputs, numInputs); err != nil {
@@ -405,15 +391,6 @@ func NewProcessor(
 		}
 		return NewGenerativeSplitAndScatterProcessor(ctx, flowCtx, processorID, *core.GenerativeSplitAndScatter, post)
 	}
-	if core.CompactBackups != nil {
-		if err := checkNumIn(inputs, 0); err != nil {
-			return nil, err
-		}
-		if NewCompactBackupsProcessor == nil {
-			return nil, errors.New("CompactBackups processor unimplemented")
-		}
-		return NewCompactBackupsProcessor(ctx, flowCtx, processorID, *core.CompactBackups, post)
-	}
 	return nil, errors.Errorf("unsupported processor core %q", core)
 }
 
@@ -459,5 +436,3 @@ var NewGenerativeSplitAndScatterProcessor func(context.Context, *execinfra.FlowC
 var NewLogicalReplicationWriterProcessor func(context.Context, *execinfra.FlowCtx, int32, execinfrapb.LogicalReplicationWriterSpec, *execinfrapb.PostProcessSpec) (execinfra.Processor, error)
 
 var NewLogicalReplicationOfflineScanProcessor func(context.Context, *execinfra.FlowCtx, int32, execinfrapb.LogicalReplicationOfflineScanSpec, *execinfrapb.PostProcessSpec) (execinfra.Processor, error)
-
-var NewCompactBackupsProcessor func(context.Context, *execinfra.FlowCtx, int32, execinfrapb.CompactBackupsSpec, *execinfrapb.PostProcessSpec) (execinfra.Processor, error)

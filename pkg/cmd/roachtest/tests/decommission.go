@@ -363,6 +363,9 @@ func runDecommission(
 				return err
 			}
 
+			db := c.Conn(ctx, l, pinnedNode)
+			defer db.Close()
+
 			startOpts := option.NewStartOpts(option.SkipInit)
 			startOpts.RoachprodOpts.JoinTargets = []int{pinnedNode}
 			extraArgs := []string{
@@ -1193,7 +1196,7 @@ var decommissionFooter = []string{
 
 // Header from the output of `cockroach node status`.
 var statusHeader = []string{
-	"id", "address", "sql_address", "build", "started_at", "updated_at", "locality", "attrs", "is_available", "is_live",
+	"id", "address", "sql_address", "build", "started_at", "updated_at", "locality", "is_available", "is_live",
 }
 
 // Header from the output of `cockroach node status --decommission`.

@@ -4,11 +4,13 @@
 // included in the /LICENSE file.
 
 //go:build darwin
+// +build darwin
 
 package disk
 
 import (
 	"io/fs"
+	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/util/sysutil"
 	"github.com/cockroachdb/pebble/vfs"
@@ -17,8 +19,8 @@ import (
 
 type darwinCollector struct{}
 
-func (darwinCollector) collect([]*monitoredDisk) error {
-	return nil
+func (darwinCollector) collect(disks []*monitoredDisk, time time.Time) (int, error) {
+	return len(disks), nil
 }
 
 func newStatsCollector(fs vfs.FS) (*darwinCollector, error) {

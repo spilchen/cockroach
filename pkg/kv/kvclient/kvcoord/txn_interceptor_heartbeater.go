@@ -285,9 +285,6 @@ func (h *txnHeartbeater) setWrapped(wrapped lockedSender) {
 // populateLeafInputState is part of the txnInterceptor interface.
 func (*txnHeartbeater) populateLeafInputState(*roachpb.LeafTxnInputState) {}
 
-// initializeLeaf is part of the txnInterceptor interface.
-func (*txnHeartbeater) initializeLeaf(tis *roachpb.LeafTxnInputState) {}
-
 // populateLeafFinalState is part of the txnInterceptor interface.
 func (*txnHeartbeater) populateLeafFinalState(*roachpb.LeafTxnFinalState) {}
 

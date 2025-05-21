@@ -53,6 +53,7 @@ var (
 		"bulkio.ingest.flush_delay",
 		"amount of time to wait before sending a file to the KV/Storage layer to ingest",
 		0,
+		settings.NonNegativeDuration,
 	)
 
 	senderConcurrency = settings.RegisterIntSetting(
@@ -875,6 +876,7 @@ func (b *SSTBatcher) addSSTable(
 				req := &kvpb.AddSSTableRequest{
 					RequestHeader:                          kvpb.RequestHeader{Key: item.start, EndKey: item.end},
 					Data:                                   item.sstBytes,
+					DisallowShadowing:                      !b.disallowShadowingBelow.IsEmpty(),
 					DisallowShadowingBelow:                 b.disallowShadowingBelow,
 					MVCCStats:                              &item.stats,
 					IngestAsWrites:                         ingestAsWriteBatch,

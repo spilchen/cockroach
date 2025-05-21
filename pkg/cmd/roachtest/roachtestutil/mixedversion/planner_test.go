@@ -21,8 +21,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
 	"github.com/cockroachdb/cockroach/pkg/testutils/datapathutils"
 	"github.com/cockroachdb/cockroach/pkg/util/retry"
+	"github.com/cockroachdb/cockroach/pkg/util/version"
 	"github.com/cockroachdb/datadriven"
-	"github.com/cockroachdb/version"
 	"github.com/stretchr/testify/require"
 )
 
@@ -114,8 +114,6 @@ func TestTestPlanner(t *testing.T) {
 				}
 			case "mixed-version-test":
 				mvt = createDataDrivenMixedVersionTest(t, d.CmdArgs)
-			case "before-cluster-start":
-				mvt.BeforeClusterStart(d.CmdArgs[0].Vals[0], dummyHook)
 			case "on-startup":
 				mvt.OnStartup(d.CmdArgs[0].Vals[0], dummyHook)
 			case "in-mixed-version":
@@ -358,7 +356,7 @@ func Test_maxNumPlanSteps(t *testing.T) {
 // the oldest supported version. Called by TestMain.
 func setDefaultVersions() func() {
 	previousBuildV := clusterupgrade.TestBuildVersion
-	clusterupgrade.TestBuildVersion = &buildVersion
+	clusterupgrade.TestBuildVersion = buildVersion
 
 	previousOldestV := OldestSupportedVersion
 	OldestSupportedVersion = minimumSupported
@@ -442,7 +440,7 @@ func testPredecessorFunc(
 ) (*clusterupgrade.Version, error) {
 	pred, ok := testPredecessorMapping[v.Series()]
 	if !ok {
-		return nil, fmt.Errorf("no known predecessor for %q (%q series)", v, v.Series())
+		return nil, fmt.Errorf("no known predecessor for %q", v)
 	}
 
 	return pred, nil

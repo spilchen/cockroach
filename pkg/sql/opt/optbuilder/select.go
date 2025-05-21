@@ -155,7 +155,7 @@ func (b *Builder) buildDataSource(
 		switch t := ds.(type) {
 		case cat.Table:
 			tabMeta := b.addTable(t, &resName)
-			policyCommandScope, locking := b.prepForTableScan(lockCtx.locking, tabMeta)
+			locking := b.lockingSpecForTableScan(lockCtx.locking, tabMeta)
 			return b.buildScan(
 				tabMeta,
 				tableOrdinals(t, columnKinds{
@@ -165,7 +165,6 @@ func (b *Builder) buildDataSource(
 				}),
 				indexFlags, locking, inScope,
 				false, /* disableNotVisibleIndex */
-				policyCommandScope,
 			)
 
 		case cat.Sequence:
@@ -479,11 +478,9 @@ func (b *Builder) buildScanFromTableRef(
 
 	tn := tree.MakeUnqualifiedTableName(tab.Name())
 	tabMeta := b.addTable(tab, &tn)
-	var policyCommandScope cat.PolicyCommandScope
-	policyCommandScope, locking = b.prepForTableScan(locking, tabMeta)
+	locking = b.lockingSpecForTableScan(locking, tabMeta)
 	return b.buildScan(
 		tabMeta, ordinals, indexFlags, locking, inScope, false, /* disableNotVisibleIndex */
-		policyCommandScope,
 	)
 }
 
@@ -535,7 +532,6 @@ func (b *Builder) buildScan(
 	locking lockingSpec,
 	inScope *scope,
 	disableNotVisibleIndex bool,
-	policyCommandScope cat.PolicyCommandScope,
 ) (outScope *scope) {
 	if ordinals == nil {
 		panic(errors.AssertionFailedf("no ordinals"))
@@ -769,11 +765,6 @@ func (b *Builder) buildScan(
 		})
 		outScope.expr = b.factory.ConstructProject(outScope.expr, proj, scanColIDs)
 	}
-
-	// Apply any filters required to enforce RLS policies. This must be done
-	// after adding projections for virtual columns, in case any policies
-	// reference them.
-	b.addRowLevelSecurityFilter(tabMeta, outScope, policyCommandScope)
 
 	if b.trackSchemaDeps {
 		dep := opt.SchemaDep{DataSource: tab}
@@ -1487,16 +1478,6 @@ func (b *Builder) validateAsOf(asOfClause tree.AsOfClause) {
 		panic(err)
 	}
 
-	// We need to look at the original statement to know if the AOST clause was
-	// specified for a backfill, This must be set correctly in order to pass
-	// the validations below.
-	switch s := b.stmt.(type) {
-	case *tree.CreateTable, *tree.RefreshMaterializedView:
-		asOf.ForBackfill = true
-	case *tree.CreateView:
-		asOf.ForBackfill = s.Materialized
-	}
-
 	if b.evalCtx.AsOfSystemTime == nil {
 		panic(pgerror.Newf(pgcode.Syntax,
 			"AS OF SYSTEM TIME must be provided on a top-level statement"))
@@ -1557,28 +1538,4 @@ func (b *Builder) rejectIfLocking(locking lockingSpec, context string) {
 func (b *Builder) raiseLockingContextError(locking lockingSpec, context string) {
 	panic(pgerror.Newf(pgcode.FeatureNotSupported,
 		"%s is not allowed with %s", locking.get().Strength, context))
-}
-
-// getPolicyCommandScopeForScan returns the applicable cat.PolicyCommandScope
-// for the current scan.
-func (b *Builder) getPolicyCommandScopeForScan(lockingSpec lockingSpec) cat.PolicyCommandScope {
-	// For policy enforcement, SELECT ... FOR UPDATE|SHARE is treated as an UPDATE
-	// command. This ensures that only rows subject to UPDATE policies are returned.
-	if lockingSpec.get().IsLocking() {
-		return cat.PolicyScopeUpdate
-	}
-	return cat.PolicyScopeSelect
-}
-
-// prepForTableScan computes the necessary inputs for the buildScan call.
-// This is handled in a helper function because the order in which these
-// inputs are generated is important.
-func (b *Builder) prepForTableScan(
-	locking lockingSpec, tabMeta *opt.TableMeta,
-) (cat.PolicyCommandScope, lockingSpec) {
-	// Determine the policy command scope first, as it can be influenced by
-	// the locking spec. However, since lockingSpecForTableScan may modify
-	// the locking spec, this check must be performed beforehand.
-	policyCommandScope := b.getPolicyCommandScopeForScan(locking)
-	return policyCommandScope, b.lockingSpecForTableScan(locking, tabMeta)
 }

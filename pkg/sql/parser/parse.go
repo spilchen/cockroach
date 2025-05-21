@@ -201,10 +201,6 @@ func (p *Parser) parse(
 		return statements.Statement[tree.Statement]{}, err
 	}
 
-	// Once a statement has been parsed, reset the comments to ensure
-	// that the next statement does not pick up comments from the previous
-	// statement.
-	defer p.scanner.ResetComments()
 	return statements.Statement[tree.Statement]{
 		AST:             p.lexer.stmt,
 		SQL:             sql,

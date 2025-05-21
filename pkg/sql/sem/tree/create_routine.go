@@ -140,14 +140,13 @@ func (node *CreateRoutine) Format(ctx *FmtCtx) {
 			if i > 0 {
 				ctx.WriteByte(' ')
 			}
-			oldAnn := ctx.ann
-			ctx.ann = node.BodyAnnotations[i]
-			ctx.FormatNode(stmt)
-			if !isPLpgSQL {
-				// PL/pgSQL statements handle printing semicolons themselves.
-				ctx.WriteByte(';')
-			}
-			ctx.ann = oldAnn
+			ctx.WithAnnotations(node.BodyAnnotations[i], func() {
+				ctx.FormatNode(stmt)
+				if !isPLpgSQL {
+					// PL/pgSQL statements handle printing semicolons themselves.
+					ctx.WriteByte(';')
+				}
+			})
 		}
 		ctx.WriteString("$$")
 	} else if node.RoutineBody != nil {
@@ -637,8 +636,6 @@ const (
 	TTLExpirationExpr               SchemaExprContext = "TTL EXPIRATION EXPRESSION"
 	TTLDefaultExpr                  SchemaExprContext = "TTL DEFAULT"
 	TTLUpdateExpr                   SchemaExprContext = "TTL UPDATE"
-	PolicyUsingExpr                 SchemaExprContext = "POLICY USING"
-	PolicyWithCheckExpr             SchemaExprContext = "POLICY WITH CHECK"
 )
 
 func ComputedColumnExprContext(isVirtual bool) SchemaExprContext {

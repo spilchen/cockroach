@@ -9,7 +9,6 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/sql/opt"
-	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
@@ -112,11 +111,11 @@ func (b *Builder) buildUpdate(upd *tree.Update, inScope *scope) (outScope *scope
 	mb.buildRowLevelBeforeTriggers(tree.TriggerEventUpdate, false /* cascade */)
 
 	// Build the final update statement, including any returned expressions.
-	var returningExpr *tree.ReturningExprs
 	if resultsNeeded(upd.Returning) {
-		returningExpr = upd.Returning.(*tree.ReturningExprs)
+		mb.buildUpdate(upd.Returning.(*tree.ReturningExprs))
+	} else {
+		mb.buildUpdate(nil /* returning */)
 	}
-	mb.buildUpdate(returningExpr, cat.PolicyScopeUpdate)
 
 	return mb.outScope
 }
@@ -331,16 +330,13 @@ func (mb *mutationBuilder) addSynthesizedColsForUpdate() {
 
 // buildUpdate constructs an Update operator, possibly wrapped by a Project
 // operator that corresponds to the given RETURNING clause.
-func (mb *mutationBuilder) buildUpdate(
-	returning *tree.ReturningExprs, policyScopeCmd cat.PolicyCommandScope,
-) {
+func (mb *mutationBuilder) buildUpdate(returning *tree.ReturningExprs) {
 	// Disambiguate names so that references in any expressions, such as a
 	// check constraint, refer to the correct columns.
 	mb.disambiguateColumns()
 
 	// Add any check constraint boolean columns to the input.
-	mb.addCheckConstraintCols(true, /* isUpdate */
-		policyScopeCmd, false /* includeSelectOnInsert */)
+	mb.addCheckConstraintCols(true /* isUpdate */)
 
 	// Add the partial index predicate expressions to the table metadata.
 	// These expressions are used to prune fetch columns during
@@ -351,7 +347,7 @@ func (mb *mutationBuilder) buildUpdate(
 	mb.projectPartialIndexPutAndDelCols()
 
 	// Project vector index PUT and DEL columns.
-	mb.projectVectorIndexColsForUpdate()
+	mb.projectVectorIndexCols()
 
 	mb.buildUniqueChecksForUpdate()
 
@@ -359,7 +355,7 @@ func (mb *mutationBuilder) buildUpdate(
 
 	mb.buildRowLevelAfterTriggers(opt.UpdateOp)
 
-	private := mb.makeMutationPrivate(returning != nil, false /* vectorInsert */)
+	private := mb.makeMutationPrivate(returning != nil)
 	for _, col := range mb.extraAccessibleCols {
 		if col.id != 0 {
 			private.PassthroughCols = append(private.PassthroughCols, col.id)

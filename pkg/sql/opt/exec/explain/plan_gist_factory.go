@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util"
@@ -34,7 +33,7 @@ import (
 )
 
 func init() {
-	if numOperators != 65 {
+	if numOperators != 63 {
 		// This error occurs when an operator has been added or removed in
 		// pkg/sql/opt/exec/explain/factory.opt. If an operator is added at the
 		// end of factory.opt, simply adjust the hardcoded value above. If an
@@ -532,10 +531,6 @@ func (u *unknownTable) IsMaterializedView() bool {
 	return false
 }
 
-func (u *unknownTable) LookupColumnOrdinal(descpb.ColumnID) (int, error) {
-	panic(errors.AssertionFailedf("not implemented"))
-}
-
 func (u *unknownTable) ColumnCount() int {
 	return 0
 }
@@ -650,11 +645,6 @@ func (u *unknownTable) GetDatabaseID() descpb.ID {
 	return 0
 }
 
-// GetSchemaID is part of the cat.Table interface.
-func (u *unknownTable) GetSchemaID() descpb.ID {
-	return 0
-}
-
 // IsHypothetical is part of the cat.Table interface.
 func (u *unknownTable) IsHypothetical() bool {
 	return false
@@ -669,15 +659,6 @@ func (u *unknownTable) TriggerCount() int {
 func (u *unknownTable) Trigger(i int) cat.Trigger {
 	panic(errors.AssertionFailedf("not implemented"))
 }
-
-// IsRowLevelSecurityEnabled is part of the cat.Table interface
-func (u *unknownTable) IsRowLevelSecurityEnabled() bool { return false }
-
-// IsRowLevelSecurityForced is part of the cat.Table interface
-func (u *unknownTable) IsRowLevelSecurityForced() bool { return false }
-
-// Policies is part of the cat.Table interface.
-func (u *unknownTable) Policies() *cat.Policies { return nil }
 
 var _ cat.Table = &unknownTable{}
 
@@ -706,8 +687,12 @@ func (u *unknownIndex) IsUnique() bool {
 	return false
 }
 
-func (u *unknownIndex) Type() idxtype.T {
-	return idxtype.FORWARD
+func (u *unknownIndex) IsInverted() bool {
+	return false
+}
+
+func (u *unknownIndex) IsVector() bool {
+	return false
 }
 
 func (u *unknownIndex) GetInvisibility() float64 {
@@ -798,10 +783,6 @@ func (u *unknownIndex) PartitionCount() int {
 
 func (u *unknownIndex) Partition(i int) cat.Partition {
 	panic(errors.AssertionFailedf("not implemented"))
-}
-
-func (u *unknownIndex) IsTemporaryIndexForBackfill() bool {
-	return false
 }
 
 var _ cat.Index = &unknownIndex{}

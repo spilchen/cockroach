@@ -34,7 +34,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondatapb"
-	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/ssmemstorage"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqltelemetry"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/fsm"
@@ -181,7 +181,7 @@ func MakeInternalExecutorMemMonitor(
 	memMetrics MemoryMetrics, settings *cluster.Settings,
 ) *mon.BytesMonitor {
 	return mon.NewMonitor(mon.Options{
-		Name:       mon.MakeName("internal SQL executor"),
+		Name:       mon.MakeMonitorName("internal SQL executor"),
 		CurCount:   memMetrics.CurBytesCount,
 		MaxHist:    memMetrics.MaxBytesHist,
 		Settings:   settings,
@@ -303,7 +303,7 @@ func (ie *InternalExecutor) initConnEx(
 	}
 	clientComm.rowsAffectedState.numRewindsLimit = ieRowsAffectedRetryLimit.Get(&ie.s.cfg.Settings.SV)
 
-	applicationStats := ie.s.localSqlStats.GetApplicationStats(sd.ApplicationName)
+	applicationStats := ie.s.sqlStats.GetApplicationStats(sd.ApplicationName)
 	sds := sessiondata.NewStack(sd)
 	defaults := SessionDefaults(map[string]string{
 		"application_name": sd.ApplicationName,
@@ -384,7 +384,7 @@ func (ie *InternalExecutor) newConnExecutorWithTxn(
 	sdMutIterator *sessionDataMutatorIterator,
 	stmtBuf *StmtBuf,
 	clientComm ClientComm,
-	applicationStats *ssmemstorage.Container,
+	applicationStats sqlstats.ApplicationStats,
 	attributeToUser bool,
 ) (ex *connExecutor, _ error) {
 
@@ -477,9 +477,6 @@ func (ie *InternalExecutor) newConnExecutorWithTxn(
 		ex.QualityOfService(),
 		isolation.Serializable,
 		txn.GetOmitInRangefeeds(),
-		// TODO(yuzefovich): re-evaluate whether we want to allow buffered
-		// writes for internal executor.
-		false, /* bufferedWritesEnabled */
 	)
 
 	// Modify the Collection to match the parent executor's Collection.
@@ -962,13 +959,6 @@ func applyOverrides(o sessiondata.InternalExecutorOverride, sd *sessiondata.Sess
 	if o.DisablePlanGists {
 		sd.DisablePlanGists = true
 	}
-	if o.BufferedWritesEnabled != nil {
-		sd.BufferedWritesEnabled = *o.BufferedWritesEnabled
-	}
-	// For 25.2, we're being conservative and explicitly disabling buffered
-	// writes for the internal executor.
-	// TODO(yuzefovich): remove this for 25.3.
-	sd.BufferedWritesEnabled = false
 
 	if o.MultiOverride != "" {
 		overrides := strings.Split(o.MultiOverride, ",")
@@ -1185,12 +1175,6 @@ func (ie *InternalExecutor) execInternal(
 
 	applyInternalExecutorSessionExceptions(sd)
 	applyOverrides(sessionDataOverride, sd)
-	if txn != nil && txn.Type() == kv.RootTxn {
-		// For 25.2, we're being conservative and explicitly disabling buffered
-		// writes for the internal executor.
-		// TODO(yuzefovich): remove this for 25.3.
-		txn.SetBufferedWritesEnabled(false)
-	}
 	attributeToUser := sessionDataOverride.AttributeToUser && attributeToUserEnabled.Get(&ie.s.cfg.Settings.SV)
 	growStackSize := sessionDataOverride.GrowStackSize
 	if !rw.async() && (txn != nil && txn.Type() == kv.RootTxn) {

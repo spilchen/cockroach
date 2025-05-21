@@ -1117,7 +1117,7 @@ func buildSSHKeysListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "list every SSH public key installed on clusters managed by roachprod",
 		Run: wrap(func(cmd *cobra.Command, args []string) error {
-			authorizedKeys, err := gce.Infrastructure.GetUserAuthorizedKeys()
+			authorizedKeys, err := gce.GetUserAuthorizedKeys()
 			if err != nil {
 				return err
 			}
@@ -1168,7 +1168,7 @@ func buildSSHKeysRemoveCmd() *cobra.Command {
 		Run: wrap(func(cmd *cobra.Command, args []string) error {
 			user := args[0]
 
-			existingKeys, err := gce.Infrastructure.GetUserAuthorizedKeys()
+			existingKeys, err := gce.GetUserAuthorizedKeys()
 			if err != nil {
 				return fmt.Errorf("failed to fetch existing keys: %w", err)
 			}
@@ -2204,34 +2204,6 @@ If the time is not provided, it downloads the latest pprof file across all clust
 			}
 			ctx := context.Background()
 			return roachprod.DownloadLatestPProfFile(ctx, config.Logger, cluster, pprofTimeBefore)
-		}),
-	}
-}
-
-func (cr *commandRegistry) buildFetchCertsDir() *cobra.Command {
-	return &cobra.Command{
-		Use:   "fetch-certs <cluster> [<dest-dir>]",
-		Short: "downloads the PGUrl certs directory from the cluster",
-		Long: fmt.Sprintf(`
-Downloads the PGUrl certs directory from the cluster. In addition to downloading the
-certs, it also makes sure the files are not world readable so lib/pq doesn't complain.
-If a destination is not provided, the certs will be downloaded to a default %s directory.
-
---certs-dir: specify the directory to download the certs from
-
-`, install.CockroachNodeCertsDir),
-		Args: cobra.RangeArgs(1, 2),
-		Run: wrap(func(cmd *cobra.Command, args []string) error {
-			cluster := args[0]
-			// If a destination is not provided, download the certs to a default directory
-			// for safety. FetchCertsDir will walk the entire directory and chmod each file
-			// so we want to avoid side effects.
-			dest := fmt.Sprintf("./%s", install.CockroachNodeCertsDir)
-			if len(args) == 2 {
-				dest = args[1]
-			}
-			ctx := context.Background()
-			return roachprod.FetchCertsDir(ctx, config.Logger, cluster, pgurlCertsDir, dest)
 		}),
 	}
 }

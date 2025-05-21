@@ -28,7 +28,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/liveness/livenesspb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/storeliveness"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/storeliveness/storelivenesspb"
-	"github.com/cockroachdb/cockroach/pkg/multitenant/tenantcapabilitiespb"
+	"github.com/cockroachdb/cockroach/pkg/multitenant/tenantcapabilities"
 	"github.com/cockroachdb/cockroach/pkg/raft/raftpb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/rpc"
@@ -38,9 +38,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/spanconfig"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/lease"
-	"github.com/cockroachdb/cockroach/pkg/sql/catalog/replication"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/sql/randgen"
 	"github.com/cockroachdb/cockroach/pkg/storage"
@@ -136,11 +133,6 @@ func (tc *TestCluster) SystemLayer(idx int) serverutils.ApplicationLayerInterfac
 // cluster.
 func (tc *TestCluster) StorageLayer(idx int) serverutils.StorageLayerInterface {
 	return tc.Server(idx).StorageLayer()
-}
-
-// DefaultTenantDeploymentMode implements TestClusterInterface.
-func (tc *TestCluster) DefaultTenantDeploymentMode() serverutils.DeploymentMode {
-	return tc.Server(0).DeploymentMode()
 }
 
 // stopServers stops the stoppers for each individual server in the cluster.
@@ -843,9 +835,6 @@ func (tc *TestCluster) changeReplicas(
 			ctx, keys.RangeDescriptorKey(startKey), &beforeDesc,
 		); err != nil {
 			return errors.Wrap(err, "range descriptor lookup error")
-		}
-		if !beforeDesc.IsInitialized() {
-			return errors.Errorf("no RangeDescriptor found")
 		}
 		var err error
 		desc, err = db.AdminChangeReplicas(
@@ -2093,52 +2082,13 @@ func (tc *TestCluster) SplitTable(
 	}
 }
 
-// GrantTenantCapabilities implements TestClusterInterface.
-func (tc *TestCluster) GrantTenantCapabilities(
-	ctx context.Context,
-	t serverutils.TestFataler,
-	tenID roachpb.TenantID,
-	targetCaps map[tenantcapabilitiespb.ID]string,
-) {
-	require.NoError(t, tc.Server(0).TenantController().GrantTenantCapabilities(ctx, tenID, targetCaps))
-	tc.WaitForTenantCapabilities(t, tenID, targetCaps)
-}
-
 // WaitForTenantCapabilities implements TestClusterInterface.
 func (tc *TestCluster) WaitForTenantCapabilities(
-	t serverutils.TestFataler, tenID roachpb.TenantID, targetCaps map[tenantcapabilitiespb.ID]string,
+	t serverutils.TestFataler, tenID roachpb.TenantID, targetCaps map[tenantcapabilities.ID]string,
 ) {
 	for i, ts := range tc.Servers {
 		serverutils.WaitForTenantCapabilities(t, ts, tenID, targetCaps, fmt.Sprintf("server %d", i))
 	}
-}
-
-// WaitForStandbyTenantReplication sets the "AsOf" time for a standby reader
-// tenant, and then waits until replication has caught up to that time.
-// It returns the chosen "AsOf" timestamp.
-func WaitForStandbyTenantReplication(
-	t serverutils.TestFataler,
-	ctx context.Context,
-	clock *hlc.Clock,
-	dstTenant serverutils.ApplicationLayerInterface,
-) (asOf hlc.Timestamp) {
-	asOf = clock.Now()
-	dstInternal := dstTenant.InternalDB().(descs.DB)
-	err := replication.SetupOrAdvanceStandbyReaderCatalog(
-		ctx, serverutils.TestTenantID(), asOf, dstInternal, dstTenant.ClusterSettings(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := clock.Now()
-	lm := dstTenant.LeaseManager().(*lease.Manager)
-	testutils.SucceedsSoon(t, func() error {
-		if lm.GetSafeReplicationTS().Less(now) {
-			return errors.AssertionFailedf("waiting for descriptor closed timestamp to catch up")
-		}
-		return nil
-	})
-	return asOf
 }
 
 type rangeAndKT struct {

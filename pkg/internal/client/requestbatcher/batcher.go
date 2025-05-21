@@ -564,6 +564,7 @@ func (b *RequestBatcher) run(ctx context.Context) {
 			handleRequest(req)
 			maybeSetTimer(false)
 		case <-timer.Ch():
+			timer.MarkRead()
 			sendBatch(b.batches.popFront())
 			maybeSetTimer(true)
 		case <-b.sendDoneChan:

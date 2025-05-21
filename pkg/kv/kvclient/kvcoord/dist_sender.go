@@ -87,20 +87,22 @@ var (
 	metaDistSenderCrossZoneBatchRequestBytes = metric.Metadata{
 		Name: "distsender.batch_requests.cross_zone.bytes",
 		Help: `Total byte count of replica-addressed batch requests processed cross
-		zone within the same region when zone tiers are configured. If region tiers
-		are not set, it is assumed to be within the same region. To ensure accurate
-		monitoring of cross-zone data transfer, region and zone tiers should be
-		consistently configured across all nodes.`,
+		zone within the same region when region and zone tiers are configured.
+		However, if the region tiers are not configured, this count may also include
+		batch data sent between different regions. Ensuring consistent configuration
+		of region and zone tiers across nodes helps to accurately monitor the data
+		transmitted.`,
 		Measurement: "Bytes",
 		Unit:        metric.Unit_BYTES,
 	}
 	metaDistSenderCrossZoneBatchResponseBytes = metric.Metadata{
 		Name: "distsender.batch_responses.cross_zone.bytes",
 		Help: `Total byte count of replica-addressed batch responses received cross
-		zone within the same region when zone tiers are configured. If region tiers
-		are not set, it is assumed to be within the same region. To ensure accurate
-		monitoring of cross-zone data transfer, region and zone tiers should be
-		consistently configured across all nodes.`,
+		zone within the same region when region and zone tiers are configured.
+		However, if the region tiers are not configured, this count may also include
+		batch data received between different regions. Ensuring consistent
+		configuration of region and zone tiers across nodes helps to accurately
+		monitor the data transmitted.`,
 		Measurement: "Bytes",
 		Unit:        metric.Unit_BYTES,
 	}
@@ -604,25 +606,21 @@ func (DistSenderRangeFeedMetrics) MetricStruct() {}
 
 // updateCrossLocalityMetricsOnReplicaAddressedBatchRequest updates
 // DistSenderMetrics for batch requests that have been divided and are currently
-// forwarding to a specific replica for the corresponding range. These metrics
-// may include batches that were not successfully sent but were terminated at an
-// early stage.
+// forwarding to a specific replica for the corresponding range. The metrics
+// being updated include 1. total byte count of replica-addressed batch requests
+// processed 2. cross-region metrics, which monitor activities across different
+// regions, and 3. cross-zone metrics, which monitor activities across different
+// zones within the same region or in cases where region tiers are not
+// configured. These metrics may include batches that were not successfully sent
+// but were terminated at an early stage.
 func (dm *DistSenderMetrics) updateCrossLocalityMetricsOnReplicaAddressedBatchRequest(
 	comparisonResult roachpb.LocalityComparisonType, inc int64,
 ) {
-	// Update metrics for total byte count of replica-addressed batch requests
-	// processed.
 	dm.ReplicaAddressedBatchRequestBytes.Inc(inc)
-	// In cases where both region and zone tiers are not configured,
-	// comparisonResult will be UNDEFINED.
 	switch comparisonResult {
 	case roachpb.LocalityComparisonType_CROSS_REGION:
-		// Update cross-region metrics: monitor activities across different regions.
 		dm.CrossRegionBatchRequestBytes.Inc(inc)
 	case roachpb.LocalityComparisonType_SAME_REGION_CROSS_ZONE:
-		// Update cross-zone metrics: monitor activities across different zones
-		// within the same region. If region tiers are not set, it is assumed to be
-		// within the same region.
 		dm.CrossZoneBatchRequestBytes.Inc(inc)
 	}
 }
@@ -636,8 +634,6 @@ func (dm *DistSenderMetrics) updateCrossLocalityMetricsOnReplicaAddressedBatchRe
 	comparisonResult roachpb.LocalityComparisonType, inc int64,
 ) {
 	dm.ReplicaAddressedBatchResponseBytes.Inc(inc)
-	// Read more about locality comparison in
-	// updateCrossLocalityMetricsOnReplicaAddressedBatchRequest above.
 	switch comparisonResult {
 	case roachpb.LocalityComparisonType_CROSS_REGION:
 		dm.CrossRegionBatchResponseBytes.Inc(inc)
@@ -1092,7 +1088,7 @@ func (ds *DistSender) initAndVerifyBatch(ctx context.Context, ba *kvpb.BatchRequ
 				foundReverse = true
 
 			case *kvpb.QueryIntentRequest, *kvpb.EndTxnRequest,
-				*kvpb.GetRequest, *kvpb.ResolveIntentRequest, *kvpb.DeleteRequest, *kvpb.PutRequest:
+				*kvpb.GetRequest, *kvpb.ResolveIntentRequest, *kvpb.DeleteRequest:
 				// Accepted point requests that can be in batches with limit.
 
 			default:
@@ -1226,6 +1222,12 @@ func (ds *DistSender) Send(
 		splitET = true
 	}
 	parts := splitBatchAndCheckForRefreshSpans(ba, splitET)
+	if len(parts) > 1 && (ba.MaxSpanRequestKeys != 0 || ba.TargetBytes != 0) {
+		// We already verified above that the batch contains only scan requests of the same type.
+		// Such a batch should never need splitting.
+		log.Fatalf(ctx, "batch with MaxSpanRequestKeys=%d, TargetBytes=%d needs splitting",
+			redact.Safe(ba.MaxSpanRequestKeys), redact.Safe(ba.TargetBytes))
+	}
 	var singleRplChunk [1]*kvpb.BatchResponse
 	rplChunks := singleRplChunk[:0:1]
 
@@ -2218,8 +2220,6 @@ func (ds *DistSender) sendPartialBatch(
 			// RPC is not retried any more.
 			if err != nil || reply.Error != nil {
 				ds.metrics.SlowRPCs.Inc(1)
-				// This defer is intended to run after the loop; this code runs at most once per loop.
-				//nolint:deferloop
 				defer func(tBegin crtime.Mono, attempts int64) {
 					ds.metrics.SlowRPCs.Dec(1)
 					var s redact.StringBuilder
@@ -3145,7 +3145,15 @@ func (ds *DistSender) getLocalityComparison(
 		log.VEventf(ctx, 5, "failed to perform look up for node descriptor %v", err)
 		return roachpb.LocalityComparisonType_UNDEFINED
 	}
-	return gatewayNodeDesc.Locality.Compare(destinationNodeDesc.Locality)
+
+	comparisonResult, regionValid, zoneValid := gatewayNodeDesc.Locality.CompareWithLocality(destinationNodeDesc.Locality)
+	if !regionValid {
+		log.VInfof(ctx, 5, "unable to determine if the given nodes are cross region")
+	}
+	if !zoneValid {
+		log.VInfof(ctx, 5, "unable to determine if the given nodes are cross zone")
+	}
+	return comparisonResult
 }
 
 func (ds *DistSender) maybeIncrementErrCounters(br *kvpb.BatchResponse, err error) {

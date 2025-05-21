@@ -775,7 +775,7 @@ func init() {
 // to run. See the comments for the Phase enumeration for more details
 // on what each phase includes.
 func BenchmarkPhases(b *testing.B) {
-	for _, query := range queriesToTest() {
+	for _, query := range queriesToTest(b) {
 		h := newHarness(b, query, schemas)
 		b.Run(query.name, func(b *testing.B) {
 			b.Run("Simple", func(b *testing.B) {
@@ -864,7 +864,7 @@ func newHarness(tb testing.TB, query benchQuery, schemas []string) *harness {
 			tb.Fatalf("%v", err)
 		}
 	} else {
-		if _, err := h.optimizer.TryPlaceholderFastPath(); err != nil {
+		if _, _, err := h.optimizer.TryPlaceholderFastPath(); err != nil {
 			tb.Fatalf("%v", err)
 		}
 	}
@@ -1086,7 +1086,7 @@ func makeParameterizedQueryWithORs(size int) benchQuery {
 // in the testSizes array and test name suffix. The test names produced are:
 // ored-preds-100
 // ored-preds-using-params-100
-func makeOredPredsTests() []benchQuery {
+func makeOredPredsTests(b *testing.B) []benchQuery {
 	// Add more entries to this array to test with different numbers of ORed
 	// predicates.
 	testSizes := [...]int{100}
@@ -1100,8 +1100,8 @@ func makeOredPredsTests() []benchQuery {
 	return benchQueries
 }
 
-func queriesToTest() []benchQuery {
-	allQueries := append(queries[:], makeOredPredsTests()...)
+func queriesToTest(b *testing.B) []benchQuery {
+	allQueries := append(queries[:], makeOredPredsTests(b)...)
 	return allQueries
 }
 
@@ -1141,12 +1141,14 @@ func BenchmarkEndToEnd(b *testing.B) {
 	sr.Exec(b, `SET CLUSTER SETTING sql.stats.automatic_collection.enabled = false`)
 	sr.Exec(b, `SET CLUSTER SETTING sql.stats.flush.enabled = false`)
 	sr.Exec(b, `SET CLUSTER SETTING sql.metrics.statement_details.enabled = false`)
+	sr.Exec(b, `SET CLUSTER SETTING sql.metrics.statement_details.index_recommendation_collection.enabled = false`)
+	sr.Exec(b, `SET plan_cache_mode = force_custom_plan`)
 	sr.Exec(b, `CREATE DATABASE bench`)
 	for _, schema := range schemas {
 		sr.Exec(b, schema)
 	}
 
-	for _, query := range queriesToTest() {
+	for _, query := range queriesToTest(b) {
 		args := trimSingleQuotes(query.args)
 		b.Run(query.name, func(b *testing.B) {
 			for _, vectorize := range []string{"on", "off"} {
@@ -1743,7 +1745,7 @@ func BenchmarkExecBuild(b *testing.B) {
 	var testCases []testCase
 
 	// Add the basic queries.
-	for _, query := range queriesToTest() {
+	for _, query := range queriesToTest(b) {
 		testCases = append(testCases, testCase{query, schemas})
 	}
 

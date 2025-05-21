@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree/treecmp"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree/treewindow"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
@@ -1643,10 +1642,9 @@ func (node *CreateIndex) doc(p *PrettyCfg) pretty.Doc {
 	if node.Unique {
 		title = append(title, pretty.Keyword("UNIQUE"))
 	}
-	switch node.Type {
-	case idxtype.INVERTED:
+	if node.Inverted {
 		title = append(title, pretty.Keyword("INVERTED"))
-	case idxtype.VECTOR:
+	} else if node.Vector {
 		title = append(title, pretty.Keyword("VECTOR"))
 	}
 	title = append(title, pretty.Keyword("INDEX"))
@@ -1739,10 +1737,9 @@ func (node *IndexTableDef) doc(p *PrettyCfg) pretty.Doc {
 	if node.Name != "" {
 		title = pretty.ConcatSpace(title, p.Doc(&node.Name))
 	}
-	switch node.Type {
-	case idxtype.INVERTED:
+	if node.Inverted {
 		title = pretty.ConcatSpace(pretty.Keyword("INVERTED"), title)
-	case idxtype.VECTOR:
+	} else if node.Vector {
 		title = pretty.ConcatSpace(pretty.Keyword("VECTOR"), title)
 	}
 	title = pretty.ConcatSpace(title, p.bracket("(", p.Doc(&node.Columns), ")"))
@@ -1810,12 +1807,19 @@ func (node *UniqueConstraintTableDef) doc(p *PrettyCfg) pretty.Doc {
 		if node.WithoutIndex {
 			title = pretty.ConcatSpace(title, pretty.Keyword("WITHOUT INDEX"))
 		}
+		if node.FormatAsIndex {
+			title = pretty.ConcatSpace(title, pretty.Keyword("INDEX"))
+		}
+	}
+	if node.Name != "" {
+		if node.FormatAsIndex {
+			title = pretty.ConcatSpace(title, p.Doc(&node.Name))
+		} else {
+			constraint := pretty.ConcatSpace(pretty.Keyword("CONSTRAINT"), p.Doc(&node.Name))
+			title = pretty.ConcatSpace(constraint, title)
+		}
 	}
 	title = pretty.ConcatSpace(title, p.bracket("(", p.Doc(&node.Columns), ")"))
-	if node.Name != "" {
-		clauses = append(clauses, title)
-		title = pretty.ConcatSpace(pretty.Keyword("CONSTRAINT"), p.Doc(&node.Name))
-	}
 	if node.Sharded != nil {
 		clauses = append(clauses, p.Doc(node.Sharded))
 	}

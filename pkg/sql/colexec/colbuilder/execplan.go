@@ -6,7 +6,6 @@
 package colbuilder
 
 import (
-	"bytes"
 	"context"
 	"reflect"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/col/coldata"
 	"github.com/cockroachdb/cockroach/pkg/col/coldataext"
 	"github.com/cockroachdb/cockroach/pkg/col/typeconv"
-	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/concurrency/lock"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
@@ -310,8 +308,6 @@ func canWrap(mode sessiondatapb.VectorizeExecMode, core *execinfrapb.ProcessorCo
 	case core.StreamIngestionFrontier != nil:
 		return errStreamIngestionWrap
 	case core.HashGroupJoiner != nil:
-	case core.VectorSearch != nil:
-	case core.VectorMutationSearch != nil:
 	default:
 		return errors.AssertionFailedf("unexpected processor core %q", core)
 	}
@@ -348,7 +344,7 @@ func createDiskBackedSort(
 	diskBackedReuseMode colexecop.BufferingOpReuseMode,
 ) colexecop.Operator {
 	var (
-		sorterMemMonitorName mon.Name
+		sorterMemMonitorName redact.SafeString
 		inMemorySorter       colexecop.Operator
 	)
 	if len(ordering.Columns) == int(matchLen) {
@@ -649,7 +645,7 @@ func makeNewHashJoinerArgs(
 	opName redact.SafeString,
 	core *execinfrapb.HashJoinerSpec,
 	factory coldata.ColumnFactory,
-) (colexecjoin.NewHashJoinerArgs, mon.Name) {
+) (colexecjoin.NewHashJoinerArgs, redact.SafeString) {
 	hashJoinerMemAccount, hashJoinerMemMonitorName := args.MonitorRegistry.CreateMemAccountForSpillStrategy(
 		ctx, flowCtx, opName, args.Spec.ProcessorID,
 	)
@@ -683,7 +679,7 @@ func makeNewHashAggregatorArgs(
 	opName redact.SafeString,
 	newAggArgs *colexecagg.NewAggregatorArgs,
 	factory coldata.ColumnFactory,
-) (*colexecagg.NewHashAggregatorArgs, *colexecutils.NewSpillingQueueArgs, mon.Name) {
+) (*colexecagg.NewHashAggregatorArgs, *colexecutils.NewSpillingQueueArgs, redact.SafeString) {
 	// We will divide the available memory equally between the two usages - the
 	// hash aggregation itself and the input tuples tracking.
 	totalMemLimit := execinfra.GetWorkMemLimit(flowCtx)
@@ -728,8 +724,7 @@ func makeNewHashAggregatorArgs(
 			DiskQueueCfg:       args.DiskQueueCfg,
 			FDSemaphore:        args.FDSemaphore,
 			DiskAcc: args.MonitorRegistry.CreateDiskAccount(
-				// TODO(mgartner): Do not convert the name to a string.
-				ctx, flowCtx, redact.SafeString(hashAggregatorMemMonitorName.String())+"-spilling-queue", args.Spec.ProcessorID,
+				ctx, flowCtx, hashAggregatorMemMonitorName+"-spilling-queue", args.Spec.ProcessorID,
 			),
 			DiskQueueMemAcc: accounts[4],
 		},
@@ -846,17 +841,6 @@ func NewColOperator(
 			var resultTypes []*types.T
 			if flowCtx.EvalCtx.SessionData().DirectColumnarScansEnabled {
 				canUseDirectScan := func() bool {
-					// txnWriteBuffer currently doesn't support
-					// COL_BATCH_RESPONSE scan format, so if buffered writes are
-					// enabled, we won't use the direct scans.
-					//
-					// We could've relaxed this condition further to not use
-					// direct scans if at least some writes are actually
-					// buffered, but given this feature is in experimental
-					// state, we don't bother doing so for now.
-					if flowCtx.Txn.BufferedWritesEnabled() {
-						return false
-					}
 					// We currently don't use the direct scans if TraceKV is
 					// enabled (due to not being able to tell the KV server
 					// about it). One idea would be to include this boolean into
@@ -880,38 +864,17 @@ func NewColOperator(
 						core.TableReader.LockingWaitPolicy == descpb.ScanLockingWaitPolicy_SKIP_LOCKED {
 						return false
 					}
-					var prevRowPrefix []byte
-					for i, sp := range core.TableReader.Spans {
-						if len(sp.EndKey) == 0 {
-							// At the moment, the ColBatchDirectScan cannot
-							// handle Gets (it's not clear whether it is worth
-							// to handle them via the same path as for Scans and
-							// ReverseScans (which could have too large of an
-							// overhead) or by teaching the operator to also
-							// decode a single KV (similar to what regular
-							// ColBatchScan does)).
-							// TODO(yuzefovich, 23.1): explore supporting Gets
-							// somehow.
+					// At the moment, the ColBatchDirectScan cannot handle Gets
+					// (it's not clear whether it is worth to handle them via
+					// the same path as for Scans and ReverseScans (which could
+					// have too large of an overhead) or by teaching the
+					// operator to also decode a single KV (similar to what
+					// regular ColBatchScan does)).
+					// TODO(yuzefovich, 23.1): explore supporting Gets somehow.
+					for i := range core.TableReader.Spans {
+						if len(core.TableReader.Spans[i].EndKey) == 0 {
 							return false
 						}
-						l, err := keys.GetRowPrefixLength(sp.Key)
-						if err != nil {
-							// This should rarely happen since an error here
-							// indicates that we're dealing with a non-SQL key,
-							// so we'll be conservative and simply disable
-							// direct columnar scans. (One example where we can
-							// get an error if we had manually split the range.)
-							return false
-						}
-						curRowPrefix := sp.Key[:l]
-						if i > 0 && bytes.Equal(prevRowPrefix, curRowPrefix) {
-							// Two consecutive requests are part of the
-							// same SQL row in which case we cannot use direct
-							// columnar scans since we'd create a separate
-							// coldata.Batch for each.
-							return false
-						}
-						prevRowPrefix = curRowPrefix
 					}
 					fetchSpec := core.TableReader.FetchSpec
 					// Handling user-defined types requires type hydration which
@@ -1244,7 +1207,7 @@ func NewColOperator(
 				} else {
 					diskSpiller := colexecdisk.NewTwoInputDiskSpiller(
 						inputs[0].Root, inputs[1].Root, inMemoryHashJoiner.(colexecop.BufferingInMemoryOperator),
-						[]mon.Name{hashJoinerMemMonitorName},
+						[]redact.SafeString{hashJoinerMemMonitorName},
 						func(inputOne, inputTwo colexecop.Operator) colexecop.Operator {
 							opName := redact.SafeString("external-hash-joiner")
 							accounts := args.MonitorRegistry.CreateUnlimitedMemAccounts(
@@ -1411,7 +1374,7 @@ func NewColOperator(
 			evalCtx.SingleDatumAggMemAccount = ehaMemAccount
 			diskSpiller := colexecdisk.NewTwoInputDiskSpiller(
 				inputs[0].Root, inputs[1].Root, hgj,
-				[]mon.Name{hashJoinerMemMonitorName, hashAggregatorMemMonitorName},
+				[]redact.SafeString{hashJoinerMemMonitorName, hashAggregatorMemMonitorName},
 				func(inputOne, inputTwo colexecop.Operator) colexecop.Operator {
 					// When we spill to disk, we just use a combo of an external
 					// hash join followed by an external hash aggregation.

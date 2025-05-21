@@ -327,7 +327,7 @@ func TestAlterTableLocalityRegionalByRowError(t *testing.T) {
 						job_type = 'SCHEMA CHANGE' AND
 						status = $1 AND
 						description NOT LIKE 'ROLL BACK%'
-				)`, jobs.StateRunning)
+				)`, jobs.StatusRunning)
 								return err
 							},
 							errorContains: "job canceled by user",

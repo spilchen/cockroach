@@ -76,9 +76,9 @@ func (c *CustomFuncs) BoolType() *types.T {
 	return types.Bool
 }
 
-// AnyType returns the wildcard AnyElement type.
+// AnyType returns the wildcard Any type.
 func (c *CustomFuncs) AnyType() *types.T {
-	return types.AnyElement
+	return types.Any
 }
 
 // CanConstructBinary returns true if (op left right) has a valid binary op
@@ -767,6 +767,17 @@ func (c *CustomFuncs) RemoveFiltersItem(
 	filters memo.FiltersExpr, search *memo.FiltersItem,
 ) memo.FiltersExpr {
 	return filters.RemoveFiltersItem(search)
+}
+
+// AppendFiltersItem returns a new list that is a copy of the given list, except
+// that the given item has been appended to the end of the list.
+func (c *CustomFuncs) AppendFiltersItem(
+	filters memo.FiltersExpr, toAppend opt.ScalarExpr,
+) memo.FiltersExpr {
+	newFilters := make(memo.FiltersExpr, len(filters)+1)
+	copy(newFilters, filters)
+	newFilters[len(filters)] = c.f.ConstructFiltersItem(toAppend)
+	return newFilters
 }
 
 // ReplaceFiltersItem returns a new list that is a copy of the given list,
