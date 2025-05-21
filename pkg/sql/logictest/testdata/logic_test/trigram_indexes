@@ -7,10 +7,10 @@ CREATE INVERTED INDEX ON a(t)
 statement error data type text has no default operator class for access method \"gin\"
 CREATE INDEX ON a USING GIN(t)
 
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted or vector index
+statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 CREATE INDEX ON a (t gin_trgm_ops)
 
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted or vector index
+statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 CREATE INVERTED INDEX ON a (a gin_trgm_ops, t gin_trgm_ops)
 
 statement error operator class \"blah_ops\" does not exist
@@ -244,19 +244,19 @@ foobar 367
 
 # Regression tests for #84512. Do not allow opclasses for non-inverted columns.
 
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted or vector index
+statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 create table err (a int, index (a jsonb_ops));
 
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted or vector index
+statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 create table err (a int, index (a gin_trgm_ops));
 
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted or vector index
+statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 create table err (a int, index (a gist_trgm_ops));
 
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted or vector index
+statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 create table err (a int, b int, index (a gin_trgm_ops, b));
 
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted or vector index
+statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 create table err (a int, j json, inverted index (a gin_trgm_ops, j));
 
 # Regression test for #86614. Do not display opclasses for non-inverted columns
@@ -358,29 +358,3 @@ FROM
             AS tab (col1_1, col1_2) ON
             (tab2.col1) = (tab.col1_1)
             AND (tab2.col2) = (tab.col1_2);
-
-subtest trigram_similarity_zero_threshold_inverted_index
-
-statement ok
-SET pg_trgm.similarity_threshold =  0;
-
-statement ok
-CREATE TABLE trigram_similarity_zero_threshold_inverted_index_a (
-  a INT PRIMARY KEY,
-  b STRING,
-  INVERTED INDEX c (b gin_trgm_ops)
-);
-
-statement ok
-SET optimizer_use_trigram_similarity_optimization = false;
-
-statement error pq: index "c" is inverted and cannot be used for this query
-SELECT * FROM trigram_similarity_zero_threshold_inverted_index_a@c WHERE b % 'foo';
-
-statement ok
-SET optimizer_use_trigram_similarity_optimization = true;
-
-statement error pq: index "c" is inverted and cannot be used for this query
-SELECT * FROM trigram_similarity_zero_threshold_inverted_index_a@c WHERE b % 'foo';
-
-subtest end

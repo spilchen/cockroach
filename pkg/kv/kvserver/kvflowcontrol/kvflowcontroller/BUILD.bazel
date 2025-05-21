@@ -12,6 +12,7 @@ go_library(
         "//pkg/base",
         "//pkg/kv/kvserver/kvflowcontrol",
         "//pkg/kv/kvserver/kvflowcontrol/kvflowinspectpb",
+        "//pkg/settings",
         "//pkg/settings/cluster",
         "//pkg/util/admission/admissionpb",
         "//pkg/util/buildutil",
@@ -28,6 +29,7 @@ go_library(
 go_test(
     name = "kvflowcontroller_test",
     srcs = ["kvflowcontroller_test.go"],
+    args = ["-test.timeout=295s"],
     data = glob(["testdata/**"]),
     embed = [":kvflowcontroller"],
     deps = [

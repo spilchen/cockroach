@@ -1,6 +1,3 @@
-# LogicTest: !local-mixed-25.1 !local-mixed-24.3
-# TODO(mw5h): Remove this once 25.2 is our minimum supported version.
-
 statement ok
 CREATE TABLE t (
   a INT PRIMARY KEY,
@@ -140,25 +137,21 @@ statement ok
 CREATE TABLE telemetry (
   x INT PRIMARY KEY,
   y INT,
-  z JSONB,
-  v VECTOR(3)
+  z JSONB
 )
 
 statement ok
 CREATE INVERTED INDEX ON telemetry (z);
-CREATE VECTOR INDEX ON telemetry (v);
 CREATE INDEX ON telemetry (y) USING HASH WITH (bucket_count=4)
 
 query T rowsort
 SELECT feature_name FROM crdb_internal.feature_usage
 WHERE feature_name IN (
   'sql.schema.inverted_index',
-  'sql.schema.vector_index',
   'sql.schema.hash_sharded_index'
 )
 ----
 sql.schema.inverted_index
-sql.schema.vector_index
 sql.schema.hash_sharded_index
 
 subtest create_index_concurrently
@@ -166,19 +159,11 @@ subtest create_index_concurrently
 statement ok
 CREATE TABLE create_index_concurrently_tbl (a int)
 
-onlyif config weak-iso-level-configs
-statement ok
-CREATE INDEX CONCURRENTLY create_index_concurrently_idx ON create_index_concurrently_tbl(a)
-
-# Weak isolation levels emit extra notices, so skip them.
-skipif config weak-iso-level-configs
 query T noticetrace
 CREATE INDEX CONCURRENTLY create_index_concurrently_idx ON create_index_concurrently_tbl(a)
 ----
 NOTICE: CONCURRENTLY is not required as all indexes are created concurrently
 
-# Weak isolation levels emit extra notices, so skip them.
-skipif config weak-iso-level-configs
 query T noticetrace
 CREATE INDEX CONCURRENTLY IF NOT EXISTS create_index_concurrently_idx ON create_index_concurrently_tbl(a)
 ----
@@ -193,8 +178,6 @@ create_index_concurrently_tbl  CREATE TABLE public.create_index_concurrently_tbl
                                  INDEX create_index_concurrently_idx (a ASC)
                                )
 
-# Weak isolation levels emit extra notices, so skip them.
-skipif config weak-iso-level-configs
 query T noticetrace
 DROP INDEX CONCURRENTLY create_index_concurrently_idx
 ----
@@ -202,16 +185,10 @@ NOTICE: CONCURRENTLY is not required as all indexes are dropped concurrently
 NOTICE: the data for dropped indexes is reclaimed asynchronously
 HINT: The reclamation delay can be customized in the zone configuration for the table.
 
-# Weak isolation levels emit extra notices, so skip them.
-skipif config weak-iso-level-configs
 query T noticetrace
 DROP INDEX CONCURRENTLY IF EXISTS create_index_concurrently_idx
 ----
 NOTICE: CONCURRENTLY is not required as all indexes are dropped concurrently
-
-onlyif config weak-iso-level-configs
-statement ok
-DROP INDEX CONCURRENTLY create_index_concurrently_idx
 
 query TT
 SHOW CREATE TABLE create_index_concurrently_tbl
@@ -425,12 +402,12 @@ CREATE TABLE opclasses (a INT PRIMARY KEY, b TEXT, c JSON)
 
 # Make sure that we don't permit creating indexes with opclasses that aren't
 # inverted.
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted or vector index
+statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 CREATE INDEX ON opclasses(b blah_ops)
 
 # Make sure that we don't permit creating indexes with opclasses that aren't
 # inverted, even if the type is invertible.
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted or vector index
+statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 CREATE INDEX ON opclasses(c blah_ops)
 
 # Make sure that we don't permit creating indexes with opclasses that don't exist
@@ -569,70 +546,5 @@ SET CLUSTER SETTING sql.defaults.disallow_full_table_scans.enabled = $disallow_f
 
 statement ok
 DROP TABLE t_disable_full_ts
-
-subtest end
-
-subtest create_index_duplicate_storage_params
-
-statement ok
-CREATE TABLE create_index_duplicate_storage_params_a (
-  a INT PRIMARY KEY,
-  b INT
-);
-
-statement error pgcode 22023 pq: parameter "fillfactor" specified more than once
-CREATE INDEX idx_a ON create_index_duplicate_storage_params_a (b) WITH (fillfactor=10, fillfactor=20);
-
-statement error pgcode 22023 pq: parameter "fillfactor" specified more than once
-CREATE INDEX IF NOT EXISTS idx_b ON create_index_duplicate_storage_params_a (b) WITH (fillfactor=10, fillfactor=20);
-
-statement error pgcode 22023 pq: parameter "bucket_count" specified more than once
-CREATE INDEX ON create_index_duplicate_storage_params_a (b) USING HASH WITH (bucket_count=10, bucket_count=12);
-
-subtest end
-
-subtest create_inverted_index_duplicate_storage_params
-
-statement ok
-CREATE TABLE create_inverted_index_duplicate_storage_params_a (
-  a INT PRIMARY KEY,
-  b JSONB
-);
-
-statement error pgcode 22023 pq: parameter "fillfactor" specified more than once
-CREATE INVERTED INDEX idx_a ON create_inverted_index_duplicate_storage_params_a (b) WITH (fillfactor=10, fillfactor=20);
-
-statement error pgcode 22023 pq: parameter "fillfactor" specified more than once
-CREATE INVERTED INDEX IF NOT EXISTS idx_b ON create_inverted_index_duplicate_storage_params_a (b) WITH (fillfactor=10, fillfactor=20);
-
-subtest end
-
-
-subtest create_index_expression_with_default_collation
-
-statement ok
-CREATE TABLE tbl_with_collate (c1 int);
-
-statement ok
-CREATE UNIQUE INDEX tbl_with_collate_expr ON tbl_with_collate ((c1::text COLLATE "C"));
-
-statement ok
-CREATE UNIQUE INDEX tbl_with_collate_expr2 ON tbl_with_collate ((c1::text COLLATE "POSIX"));
-
-statement ok
-CREATE UNIQUE INDEX tbl_with_collate_expr3 ON tbl_with_collate ((c1::text COLLATE "en-us"));
-
-
-query TT
-SHOW CREATE TABLE tbl_with_collate
-----
-tbl_with_collate  CREATE TABLE public.tbl_with_collate (
-                    c1 INT8 NULL,
-                    rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
-                    CONSTRAINT tbl_with_collate_pkey PRIMARY KEY (rowid ASC),
-                    UNIQUE INDEX tbl_with_collate_expr ((c1::STRING) ASC),
-                    UNIQUE INDEX tbl_with_collate_expr2 ((c1::STRING) ASC),
-                    UNIQUE INDEX tbl_with_collate_expr3 ((c1::STRING COLLATE en_US) ASC)
-                  )
 
 subtest end

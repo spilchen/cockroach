@@ -6,8 +6,6 @@
 package catalog
 
 import (
-	"fmt"
-
 	"github.com/cockroachdb/cockroach/pkg/ts/tspb"
 	"github.com/cockroachdb/cockroach/pkg/util/metric"
 	prometheusgo "github.com/prometheus/client_model/go"
@@ -41,8 +39,6 @@ func generateInternal(
 	metadata map[string]metric.Metadata, sl []ChartSection, metricLayer MetricLayer,
 ) []ChartSection {
 	avgAgg := tspb.TimeSeriesQueryAggregator_AVG
-	chartSections := make(map[metric.Metadata_Category]*ChartSection)
-
 	for name, meta := range metadata {
 		der := tspb.TimeSeriesQueryDerivative_NONE
 		if meta.MetricType == prometheusgo.MetricType_COUNTER {
@@ -54,53 +50,33 @@ func generateInternal(
 			dstUnit = AxisUnits(candidate)
 		}
 
-		if meta.Essential {
-			if meta.Category == metric.Metadata_UNSET {
-				panic(fmt.Sprintf("Metric %s is essential but has no Category", name))
-			}
-			if meta.HowToUse == "" {
-				panic(fmt.Sprintf("Metric %s is essential but has no HowToUse", name))
-			}
-		}
-
-		section, ok := chartSections[meta.Category]
-		if !ok {
-			chartSections[meta.Category] = &ChartSection{
-				Title:           meta.Category.String(),
-				LongTitle:       meta.Category.String(),
-				CollectionTitle: meta.Category.String(),
-				Description:     meta.Category.String(),
-				Level:           0,
-				MetricLayer:     metricLayer,
-			}
-			section = chartSections[meta.Category]
-		}
-
-		section.Charts = append(section.Charts, &IndividualChart{
+		sl = append(sl, ChartSection{
 			Title:           name,
 			LongTitle:       name,
 			CollectionTitle: name,
-			Downsampler:     &avgAgg,
-			Aggregator:      &avgAgg,
-			Derivative:      &der,
-			Units:           dstUnit,
-			AxisLabel:       meta.Measurement,
-			Metrics: []ChartMetric{
-				{
-					ExportedName:   metric.ExportedName(name),
-					Name:           name,
-					Help:           meta.Help,
-					AxisLabel:      meta.Measurement,
-					PreferredUnits: dstUnit,
-					MetricType:     meta.MetricType,
-					Essential:      meta.Essential,
-					HowToUse:       meta.HowToUse,
+			Description:     name,
+			Level:           0,
+			MetricLayer:     metricLayer,
+			Charts: []*IndividualChart{{
+				Title:           name,
+				LongTitle:       name,
+				CollectionTitle: name,
+				Downsampler:     &avgAgg,
+				Aggregator:      &avgAgg,
+				Derivative:      &der,
+				Units:           dstUnit,
+				AxisLabel:       meta.Measurement,
+				Metrics: []ChartMetric{
+					{
+						Name:           name,
+						Help:           meta.Help,
+						AxisLabel:      meta.Measurement,
+						PreferredUnits: dstUnit,
+						MetricType:     meta.MetricType,
+					},
 				},
-			},
+			}},
 		})
-	}
-	for _, s := range chartSections {
-		sl = append(sl, *s)
 	}
 	return sl
 }

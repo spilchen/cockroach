@@ -31,10 +31,6 @@ func (m *mockRegistry) Add(spec registry.TestSpec) {
 	m.testNames = append(m.testNames, spec.Name)
 }
 
-func (m *mockRegistry) AddOperation(spec registry.OperationSpec) {
-	// No-op.
-}
-
 func (m *mockRegistry) PromFactory() promauto.Factory {
 	return promauto.With(nil)
 }

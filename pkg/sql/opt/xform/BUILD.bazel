@@ -48,7 +48,6 @@ go_library(
         "//pkg/sql/opt/props/physical",
         "//pkg/sql/rowinfra",
         "//pkg/sql/sem/eval",
-        "//pkg/sql/sem/idxtype",
         "//pkg/sql/sem/tree",
         "//pkg/sql/sem/volatility",
         "//pkg/sql/sessiondatapb",
@@ -75,6 +74,7 @@ go_test(
         "optimizer_test.go",
         "physical_props_test.go",
     ],
+    args = ["-test.timeout=295s"],
     data = glob(["testdata/**"]) + [
         "//c-deps:libgeos",
         "//pkg/sql/opt/testutils/opttester:testfixtures",
@@ -124,7 +124,7 @@ genrule(
     cmd = """
       $(location //pkg/sql/opt/optgen/cmd/optgen) -out $@ explorer $(locations //pkg/sql/opt:ops) $(locations :rules)
     """,
-    tools = ["//pkg/sql/opt/optgen/cmd/optgen"],
+    exec_tools = ["//pkg/sql/opt/optgen/cmd/optgen"],
     visibility = [
         ":__pkg__",
         "//pkg/gen:__pkg__",

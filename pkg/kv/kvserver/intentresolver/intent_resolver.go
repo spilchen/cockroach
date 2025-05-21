@@ -9,12 +9,15 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"runtime/debug"
 	"sort"
 	"time"
 
+	"github.com/cockroachdb/cockroach/pkg/build"
 	"github.com/cockroachdb/cockroach/pkg/internal/client/requestbatcher"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/rangecache"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/batcheval/result"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
@@ -23,7 +26,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
-	"github.com/cockroachdb/cockroach/pkg/util/debugutil"
 	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -158,8 +160,8 @@ type Config struct {
 
 // RangeCache is a simplified interface to the rngcache.RangeCache.
 type RangeCache interface {
-	// LookupRangeID looks up range ID for the range containing key.
-	LookupRangeID(ctx context.Context, key roachpb.RKey) (roachpb.RangeID, error)
+	// Lookup looks up range information for the range containing key.
+	Lookup(ctx context.Context, key roachpb.RKey) (rangecache.CacheEntry, error)
 }
 
 // IntentResolver manages the process of pushing transactions and
@@ -221,10 +223,10 @@ func setConfigDefaults(c *Config) {
 
 type nopRangeDescriptorCache struct{}
 
-func (nrdc nopRangeDescriptorCache) LookupRangeID(
+func (nrdc nopRangeDescriptorCache) Lookup(
 	ctx context.Context, key roachpb.RKey,
-) (roachpb.RangeID, error) {
-	return 0, nil
+) (rangecache.CacheEntry, error) {
+	return rangecache.CacheEntry{}, nil
 }
 
 // New creates an new IntentResolver.
@@ -468,6 +470,10 @@ func (ir *IntentResolver) MaybePushTransactions(
 	if err != nil {
 		return nil, false, b.MustPErr()
 	}
+
+	// TODO(nvanbenschoten): if we succeed because the transaction has already
+	// been pushed _past_ where we were pushing, we need to set the synthetic
+	// bit. This is part of #36431.
 
 	br := b.RawResponse()
 	pushedTxns := make(map[uuid.UUID]*roachpb.Transaction, len(br.Responses))
@@ -931,14 +937,14 @@ func (ir *IntentResolver) lookupRangeID(ctx context.Context, key roachpb.Key) ro
 		}
 		return 0
 	}
-	rangeID, err := ir.rdc.LookupRangeID(ctx, rKey)
+	rInfo, err := ir.rdc.Lookup(ctx, rKey)
 	if err != nil {
 		if ir.every.ShouldLog() {
 			log.Warningf(ctx, "failed to look up range descriptor for key %q: %+v", key, err)
 		}
 		return 0
 	}
-	return rangeID
+	return rInfo.Desc().RangeID
 }
 
 // lockUpdates allows for eager or lazy translation of lock spans to lock updates.
@@ -1052,14 +1058,10 @@ func (ir *IntentResolver) resolveIntents(
 	reqs := resolveIntentReqs(intents, opts, singleReq[:])
 	h := opts.AdmissionHeader
 	// We skip the warning for release builds to avoid printing out verbose stack traces.
-	// NB: this was disabled in general since there's a large backlog of reported warnings
-	// that yet have to be resolved, and in the meantime it's not worth  more engineering
-	// time making additional reports.
 	// TODO(aaditya): reconsider this once #112680 is resolved.
-	// if !build.IsRelease() && h == (kvpb.AdmissionHeader{}) && ir.everyAdmissionHeaderMissing.ShouldLog() {
-	if false {
+	if !build.IsRelease() && h == (kvpb.AdmissionHeader{}) && ir.everyAdmissionHeaderMissing.ShouldLog() {
 		log.Warningf(ctx,
-			"test-only warning: if you see this, please report to https://github.com/cockroachdb/cockroach/issues/112680. empty admission header provided by %s", debugutil.Stack())
+			"test-only warning: if you see this, please report to https://github.com/cockroachdb/cockroach/issues/112680. empty admission header provided by %s", string(debug.Stack()))
 	}
 	// Send the requests ...
 	if opts.sendImmediately {

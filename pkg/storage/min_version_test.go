@@ -13,10 +13,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
-	"github.com/cockroachdb/cockroach/pkg/storage/fs"
-	"github.com/cockroachdb/cockroach/pkg/storage/storagepb"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/vfs"
 	"github.com/stretchr/testify/require"
 )
@@ -92,16 +91,18 @@ func TestSetMinVersion(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
+	st := cluster.MakeClusterSettings()
 	p, err := Open(context.Background(), InMemory(), cluster.MakeClusterSettings(), CacheSize(0))
 	require.NoError(t, err)
 	defer p.Close()
-	require.Equal(t, MinimumSupportedFormatVersion, p.db.FormatMajorVersion())
+	require.Equal(t, pebble.FormatFlushableIngest, p.db.FormatMajorVersion())
 
+	ValueBlocksEnabled.Override(context.Background(), &st.SV, true)
 	// Advancing the store cluster version to one that supports a new feature
 	// should also advance the store's format major version.
-	err = p.SetMinVersion(clusterversion.Latest.Version())
+	err = p.SetMinVersion(clusterversion.ByKey(clusterversion.V23_2_PebbleFormatDeleteSizedAndObsolete))
 	require.NoError(t, err)
-	require.Equal(t, pebbleFormatVersion(clusterversion.Latest.Version()), p.db.FormatMajorVersion())
+	require.Equal(t, pebble.FormatDeleteSizedAndObsolete, p.db.FormatMajorVersion())
 }
 
 func TestMinVersion_IsNotEncrypted(t *testing.T) {
@@ -111,41 +112,35 @@ func TestMinVersion_IsNotEncrypted(t *testing.T) {
 	// Replace the NewEncryptedEnvFunc global for the duration of this
 	// test. We'll use it to initialize a test caesar cipher
 	// encryption-at-rest implementation.
-	oldNewEncryptedEnvFunc := fs.NewEncryptedEnvFunc
-	defer func() { fs.NewEncryptedEnvFunc = oldNewEncryptedEnvFunc }()
-	fs.NewEncryptedEnvFunc = fauxNewEncryptedEnvFunc
+	oldNewEncryptedEnvFunc := NewEncryptedEnvFunc
+	defer func() { NewEncryptedEnvFunc = oldNewEncryptedEnvFunc }()
+	NewEncryptedEnvFunc = fauxNewEncryptedEnvFunc
 
-	ctx := context.Background()
 	st := cluster.MakeClusterSettings()
-	baseFS := vfs.NewMem()
-	env, err := fs.InitEnv(ctx, baseFS, "", fs.EnvConfig{
-		EncryptionOptions: &storagepb.EncryptionOptions{},
-	}, nil /* statsCollector */)
-	require.NoError(t, err)
-
-	p, err := Open(ctx, env, st)
+	fs := vfs.NewMem()
+	p, err := Open(
+		context.Background(),
+		Location{dir: "", fs: fs},
+		st,
+		EncryptionAtRest(nil))
 	require.NoError(t, err)
 	defer p.Close()
-	require.NoError(t, p.SetMinVersion(st.Version.LatestVersion()))
+	require.NoError(t, p.SetMinVersion(st.Version.BinaryVersion()))
 
 	// Reading the file directly through the unencrypted MemFS should
 	// succeed and yield the correct version.
-	v, ok, err := getMinVersion(env.UnencryptedFS, "")
+	v, ok, err := getMinVersion(fs, "")
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, st.Version.LatestVersion(), v)
+	require.Equal(t, st.Version.BinaryVersion(), v)
 }
 
 func fauxNewEncryptedEnvFunc(
-	unencryptedFS vfs.FS,
-	fr *fs.FileRegistry,
-	dbDir string,
-	readOnly bool,
-	_ *storagepb.EncryptionOptions,
-) (*fs.EncryptionEnv, error) {
-	return &fs.EncryptionEnv{
+	fs vfs.FS, fr *PebbleFileRegistry, dbDir string, readOnly bool, optionBytes []byte,
+) (*EncryptionEnv, error) {
+	return &EncryptionEnv{
 		Closer: nopCloser{},
-		FS:     fauxEncryptedFS{FS: unencryptedFS},
+		FS:     fauxEncryptedFS{FS: fs},
 	}, nil
 }
 
@@ -157,8 +152,8 @@ type fauxEncryptedFS struct {
 	vfs.FS
 }
 
-func (fs fauxEncryptedFS) Create(path string, category vfs.DiskWriteCategory) (vfs.File, error) {
-	f, err := fs.FS.Create(path, category)
+func (fs fauxEncryptedFS) Create(path string) (vfs.File, error) {
+	f, err := fs.FS.Create(path)
 	if err != nil {
 		return nil, err
 	}

@@ -1225,6 +1225,7 @@ at or near "EOF": syntax error
 DETAIL: source SQL:
 SELECT * FROM t WHERE k=
                         ^
+HINT: try \h SELECT
 
 parse
 SELECT a FROM t ORDER BY a
@@ -2325,14 +2326,6 @@ SELECT a FROM t1 INNER JOIN t2 ON a = b -- literals removed
 SELECT _ FROM _ INNER JOIN _ ON _ = _ -- identifiers removed
 
 parse
-SELECT a FROM t1 INNER STRAIGHT JOIN t2 ON a = b
-----
-SELECT a FROM t1 INNER STRAIGHT JOIN t2 ON a = b
-SELECT (a) FROM t1 INNER STRAIGHT JOIN t2 ON ((a) = (b)) -- fully parenthesized
-SELECT a FROM t1 INNER STRAIGHT JOIN t2 ON a = b -- literals removed
-SELECT _ FROM _ INNER STRAIGHT JOIN _ ON _ = _ -- identifiers removed
-
-parse
 SELECT a FROM t1 INNER HASH JOIN t2 ON a = b
 ----
 SELECT a FROM t1 INNER HASH JOIN t2 ON a = b
@@ -2387,14 +2380,6 @@ SELECT a FROM t1 INNER JOIN t2 USING (a)
 SELECT (a) FROM t1 INNER JOIN t2 USING (a) -- fully parenthesized
 SELECT a FROM t1 INNER JOIN t2 USING (a) -- literals removed
 SELECT _ FROM _ INNER JOIN _ USING (_) -- identifiers removed
-
-parse
-SELECT a FROM t1 INNER STRAIGHT JOIN t2 USING (a)
-----
-SELECT a FROM t1 INNER STRAIGHT JOIN t2 USING (a)
-SELECT (a) FROM t1 INNER STRAIGHT JOIN t2 USING (a) -- fully parenthesized
-SELECT a FROM t1 INNER STRAIGHT JOIN t2 USING (a) -- literals removed
-SELECT _ FROM _ INNER STRAIGHT JOIN _ USING (_) -- identifiers removed
 
 parse
 SELECT a FROM t1 FULL JOIN t2 USING (a)

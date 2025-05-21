@@ -99,7 +99,7 @@ func TestTenantsStorageMetricsOnSplit(t *testing.T) {
 		})
 		ex := metric.MakePrometheusExporter()
 		scrape := func(ex *metric.PrometheusExporter) {
-			ex.ScrapeRegistry(store.Registry(), metric.WithIncludeChildMetrics(true), metric.WithIncludeAggregateMetrics(true))
+			ex.ScrapeRegistry(store.Registry(), true /* includeChildMetrics */)
 		}
 		var in bytes.Buffer
 		if err := ex.ScrapeAndPrintAsText(&in, expfmt.FmtText, scrape); err != nil {
@@ -198,6 +198,7 @@ func TestTenantRateLimiter(t *testing.T) {
 			UpgradeManager: &upgradebase.TestingKnobs{
 				DontUseJobs:                       true,
 				SkipJobMetricsPollingJobBootstrap: true,
+				SkipAutoConfigRunnerJobBootstrap:  true,
 			},
 		},
 	})

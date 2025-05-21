@@ -22,9 +22,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverpb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
-	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
-	"github.com/cockroachdb/cockroach/pkg/testutils/datapathutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/testcluster"
@@ -41,11 +39,8 @@ import (
 
 var defaultNumSteps = envutil.EnvOrDefaultInt("COCKROACH_KVNEMESIS_STEPS", 100)
 
-func (cfg kvnemesisTestCfg) testClusterArgs(
-	ctx context.Context, tr *SeqTracker,
-) base.TestClusterArgs {
+func (cfg kvnemesisTestCfg) testClusterArgs(tr *SeqTracker) base.TestClusterArgs {
 	storeKnobs := &kvserver.StoreTestingKnobs{
-		AllowUnsynchronizedReplicationChanges: true,
 		// Drop the clock MaxOffset to reduce commit-wait time for
 		// transactions that write to global_read ranges.
 		MaxOffset: 10 * time.Millisecond,
@@ -157,13 +152,6 @@ func (cfg kvnemesisTestCfg) testClusterArgs(
 		}
 	}
 
-	st := cluster.MakeTestingClusterSettings()
-	// TODO(mira): Remove this cluster setting once the default is set to true.
-	kvcoord.KeepRefreshSpansOnSavepointRollback.Override(ctx, &st.SV, true)
-	if cfg.leaseTypeOverride != 0 {
-		kvserver.OverrideDefaultLeaseType(ctx, &st.SV, cfg.leaseTypeOverride)
-	}
-
 	return base.TestClusterArgs{
 		ServerArgs: base.TestServerArgs{
 			Knobs: base.TestingKnobs{
@@ -187,7 +175,6 @@ func (cfg kvnemesisTestCfg) testClusterArgs(
 					},
 				},
 			},
-			Settings: st,
 		},
 	}
 }
@@ -222,9 +209,9 @@ type tBridge struct {
 func newTBridge(t *testing.T) *tBridge {
 	// NB: we're not using t.TempDir() because we want these to survive
 	// on failure.
-	td, err := os.MkdirTemp(datapathutils.DebuggableTempDir(), "kvnemesis")
+	td, err := os.MkdirTemp("", "kvnemesis")
 	if err != nil {
-		td = datapathutils.DebuggableTempDir()
+		td = os.TempDir()
 	}
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -266,8 +253,6 @@ type kvnemesisTestCfg struct {
 	// invariants (in particular that we don't double-apply a request or
 	// proposal).
 	assertRaftApply bool
-	// If set, overrides the default lease type for ranges.
-	leaseTypeOverride roachpb.LeaseType
 }
 
 func TestKVNemesisSingleNode(t *testing.T) {
@@ -315,22 +300,6 @@ func TestKVNemesisMultiNode(t *testing.T) {
 	})
 }
 
-func TestKVNemesisMultiNode_LeaderLeases(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
-	testKVNemesisImpl(t, kvnemesisTestCfg{
-		numNodes:                     4,
-		numSteps:                     defaultNumSteps,
-		concurrency:                  5,
-		seedOverride:                 0,
-		invalidLeaseAppliedIndexProb: 0.2,
-		injectReproposalErrorProb:    0.2,
-		assertRaftApply:              true,
-		leaseTypeOverride:            roachpb.LeaseLeader,
-	})
-}
-
 func testKVNemesisImpl(t *testing.T, cfg kvnemesisTestCfg) {
 	skip.UnderRace(t)
 
@@ -348,7 +317,7 @@ func testKVNemesisImpl(t *testing.T, cfg kvnemesisTestCfg) {
 	// 4 nodes so we have somewhere to move 3x replicated ranges to.
 	ctx := context.Background()
 	tr := &SeqTracker{}
-	tc := testcluster.StartTestCluster(t, cfg.numNodes, cfg.testClusterArgs(ctx, tr))
+	tc := testcluster.StartTestCluster(t, cfg.numNodes, cfg.testClusterArgs(tr))
 	defer tc.Stopper().Stop(ctx)
 	dbs, sqlDBs := make([]*kv.DB, cfg.numNodes), make([]*gosql.DB, cfg.numNodes)
 	for i := 0; i < cfg.numNodes; i++ {

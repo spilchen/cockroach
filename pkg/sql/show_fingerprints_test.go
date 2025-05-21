@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,11 +21,11 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/spanconfig/spanconfigptsreader"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -136,20 +135,16 @@ func TestShowTenantFingerprintsProtectsTimestamp(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	// Under deadlock there isn't enough time for the CREATE TENANT txn to commit
-	// due to the intervals we lower to speed up this test. There is no difference
-	// otherwise when running this test under deadlock
-	skip.UnderDeadlock(t, 121445, "Deadlock makes txns take too long to commit")
-
 	ctx := context.Background()
 
-	var exportStartedClosed atomic.Bool
+	exportStartedClosed := syncutil.AtomicBool(0)
 	exportsStarted := make(chan struct{})
 	exportsResume := make(chan struct{})
 	testingRequestFilter := func(_ context.Context, ba *kvpb.BatchRequest) *kvpb.Error {
 		for _, req := range ba.Requests {
 			if expReq := req.GetExport(); expReq != nil {
-				if expReq.ExportFingerprint && exportStartedClosed.CompareAndSwap(false, true) {
+				if expReq.ExportFingerprint && !exportStartedClosed.Get() {
+					exportStartedClosed.Set(true)
 					close(exportsStarted)
 					<-exportsResume
 				}
@@ -169,6 +164,8 @@ func TestShowTenantFingerprintsProtectsTimestamp(t *testing.T) {
 	defer s.Stopper().Stop(ctx)
 
 	systemSQL := sqlutils.MakeSQLRunner(db)
+	systemSQL.Exec(t, "ALTER VIRTUAL CLUSTER ALL SET CLUSTER SETTING sql.virtual_cluster.feature_access.zone_configs.enabled = true")
+	systemSQL.Exec(t, "ALTER VIRTUAL CLUSTER ALL SET CLUSTER SETTING sql.virtual_cluster.feature_access.manual_range_split.enabled=true")
 	systemSQL.Exec(t, "SET CLUSTER SETTING kv.closed_timestamp.target_duration = '100ms'")
 	systemSQL.Exec(t, "SET CLUSTER SETTING kv.closed_timestamp.side_transport_interval ='100ms'")
 	systemSQL.Exec(t, "SET CLUSTER SETTING kv.rangefeed.closed_timestamp_refresh_interval ='100ms'")
@@ -202,7 +199,7 @@ func TestShowTenantFingerprintsProtectsTimestamp(t *testing.T) {
 		t.Logf("udating PTS reader cache to %s", asOf)
 		require.NoError(
 			t,
-			spanconfigptsreader.TestingRefreshPTSState(ctx, ptsReader, asOf),
+			spanconfigptsreader.TestingRefreshPTSState(ctx, t, ptsReader, asOf),
 		)
 		require.NoError(t, repl.ReadProtectedTimestampsForTesting(ctx))
 	}

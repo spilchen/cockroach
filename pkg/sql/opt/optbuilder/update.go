@@ -9,7 +9,6 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/sql/opt"
-	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
@@ -66,8 +65,8 @@ func (b *Builder) buildUpdate(upd *tree.Update, inScope *scope) (outScope *scope
 	}
 
 	// UX friendliness safeguard.
-	if upd.Where == nil && upd.Limit == nil && b.evalCtx.SessionData().SafeUpdates {
-		panic(pgerror.DangerousStatementf("UPDATE without WHERE or LIMIT clause"))
+	if upd.Where == nil && b.evalCtx.SessionData().SafeUpdates {
+		panic(pgerror.DangerousStatementf("UPDATE without WHERE clause"))
 	}
 
 	// Find which table we're working on, check the permissions.
@@ -108,15 +107,12 @@ func (b *Builder) buildUpdate(upd *tree.Update, inScope *scope) (outScope *scope
 	// Build each of the SET expressions.
 	mb.addUpdateCols(upd.Exprs)
 
-	// Project row-level BEFORE triggers for UPDATE.
-	mb.buildRowLevelBeforeTriggers(tree.TriggerEventUpdate, false /* cascade */)
-
 	// Build the final update statement, including any returned expressions.
-	var returningExpr *tree.ReturningExprs
 	if resultsNeeded(upd.Returning) {
-		returningExpr = upd.Returning.(*tree.ReturningExprs)
+		mb.buildUpdate(upd.Returning.(*tree.ReturningExprs))
+	} else {
+		mb.buildUpdate(nil /* returning */)
 	}
-	mb.buildUpdate(returningExpr, cat.PolicyScopeUpdate)
 
 	return mb.outScope
 }
@@ -331,16 +327,13 @@ func (mb *mutationBuilder) addSynthesizedColsForUpdate() {
 
 // buildUpdate constructs an Update operator, possibly wrapped by a Project
 // operator that corresponds to the given RETURNING clause.
-func (mb *mutationBuilder) buildUpdate(
-	returning *tree.ReturningExprs, policyScopeCmd cat.PolicyCommandScope,
-) {
+func (mb *mutationBuilder) buildUpdate(returning *tree.ReturningExprs) {
 	// Disambiguate names so that references in any expressions, such as a
 	// check constraint, refer to the correct columns.
 	mb.disambiguateColumns()
 
 	// Add any check constraint boolean columns to the input.
-	mb.addCheckConstraintCols(true, /* isUpdate */
-		policyScopeCmd, false /* includeSelectOnInsert */)
+	mb.addCheckConstraintCols(true /* isUpdate */)
 
 	// Add the partial index predicate expressions to the table metadata.
 	// These expressions are used to prune fetch columns during
@@ -350,16 +343,11 @@ func (mb *mutationBuilder) buildUpdate(
 	// Project partial index PUT and DEL boolean columns.
 	mb.projectPartialIndexPutAndDelCols()
 
-	// Project vector index PUT and DEL columns.
-	mb.projectVectorIndexColsForUpdate()
-
 	mb.buildUniqueChecksForUpdate()
 
 	mb.buildFKChecksForUpdate()
 
-	mb.buildRowLevelAfterTriggers(opt.UpdateOp)
-
-	private := mb.makeMutationPrivate(returning != nil, false /* vectorInsert */)
+	private := mb.makeMutationPrivate(returning != nil)
 	for _, col := range mb.extraAccessibleCols {
 		if col.id != 0 {
 			private.PassthroughCols = append(private.PassthroughCols, col.id)

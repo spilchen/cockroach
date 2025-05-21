@@ -24,13 +24,13 @@ go_library(
 go_test(
     name = "kvflowdispatch_test",
     srcs = ["kvflowdispatch_test.go"],
+    args = ["-test.timeout=295s"],
     data = glob(["testdata/**"]),
     embed = [":kvflowdispatch"],
     deps = [
         "//pkg/base",
         "//pkg/kv/kvserver/kvflowcontrol",
         "//pkg/kv/kvserver/kvflowcontrol/kvflowcontrolpb",
-        "//pkg/kv/kvserver/kvflowcontrol/kvflowinspectpb",
         "//pkg/roachpb",
         "//pkg/testutils/datapathutils",
         "//pkg/util/admission/admissionpb",
