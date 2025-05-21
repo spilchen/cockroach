@@ -60,6 +60,9 @@ func SetupOrAdvanceStandbyReaderCatalog(
 			// Resolve any existing descriptors within the tenant, which
 			// will be use to compute old values for writing.
 			b := txn.KV().NewBatch()
+			// Batch the write updates, since we mutate descriptors one at a time
+			// below.
+			descriptorsToWrite := make([]catalog.MutableDescriptor, 0, len(allExistingDescs.OrderedDescriptorIDs()))
 			if err := extracted.ForEachDescriptor(func(fromDesc catalog.Descriptor) error {
 				if !shouldSetupForReader(fromDesc.GetID(), fromDesc.GetParentID()) {
 					return nil
@@ -71,7 +74,7 @@ func SetupOrAdvanceStandbyReaderCatalog(
 				existingDesc, err := txn.Descriptors().MutableByID(txn.KV()).Desc(ctx, fromDesc.GetID())
 				if err != nil &&
 					!errors.Is(err, catalog.ErrDescriptorNotFound) {
-					return err
+					return errors.Wrapf(err, "failed to get mutable descriptor")
 				} else {
 					err = nil
 				}
@@ -118,18 +121,28 @@ func SetupOrAdvanceStandbyReaderCatalog(
 						descriptorsRenamed.Add(existingDesc.GetID())
 					}
 				}
-				return errors.Wrapf(txn.Descriptors().WriteDescToBatch(ctx, true, mut, b),
-					"unable to create replicated descriptor: %d %T", mut.GetID(), mut)
+				descriptorsToWrite = append(descriptorsToWrite, mut)
+				return nil
 			}); err != nil {
 				return err
+			}
+			// Write all the descriptors into a single batch, we previously would write
+			// them in the loop above. But that interferes with mutable descriptor
+			// validation, which will include uncommitted descriptors. For example,
+			// if a table and sequence depend on each other, then updating one and
+			// fetching the other in a mutable way to remove a dependency will hit
+			// a validation error.
+			for _, mut := range descriptorsToWrite {
+				if err := txn.Descriptors().WriteDescToBatch(ctx, true, mut, b); err != nil {
+					return errors.Wrapf(err, "unable to create replicated descriptor: %d %T", mut.GetID(), mut)
+				}
 			}
 			if err := extracted.ForEachNamespaceEntry(func(e nstree.NamespaceEntry) error {
 				if !shouldSetupForReader(e.GetID(), e.GetParentID()) {
 					return nil
 				}
 				// Do not upsert entries if one already exists.
-				entry := allExistingDescs.LookupNamespaceEntry(catalog.MakeNameInfo(e))
-				if entry != nil && e.GetID() == entry.GetID() {
+				if entry := allExistingDescs.LookupNamespaceEntry(e); entry != nil && e.GetID() == entry.GetID() {
 					return nil
 				}
 				return errors.Wrapf(txn.Descriptors().UpsertNamespaceEntryToBatch(ctx, true, e, b), "namespace entry %v", e)

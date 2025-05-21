@@ -94,14 +94,11 @@ const (
 type ClusterSpec struct {
 	Arch      vm.CPUArch // CPU architecture; auto-chosen if left empty
 	NodeCount int
-	// WorkloadNode indicates if we are using workload nodes.
-	// WorkloadNodeCount indicates count of the last few node of the cluster
-	// treated as workload node. Defaults to a VM with 4 CPUs if not specified
-	// by WorkloadNodeCPUs.
-	// TODO(GouravKumar): remove use of WorkloadNode, use WorkloadNodeCount instead
-	WorkloadNode      bool
-	WorkloadNodeCount int
-	WorkloadNodeCPUs  int
+	// WorkloadNode indicates that the last node of the cluster should be a
+	// workload node. Defaults to a VM with 4 CPUs if not specified by
+	// WorkloadNodeCPUs.
+	WorkloadNode     bool
+	WorkloadNodeCPUs int
 	// CPUs is the number of CPUs per node.
 	CPUs                 int
 	Mem                  MemPerCPU
@@ -128,7 +125,6 @@ type ClusterSpec struct {
 		MachineType    string
 		MinCPUPlatform string
 		VolumeType     string
-		VolumeCount    int // volume count is only supported for GCE. This can be moved up if we start supporting other clouds
 		Zones          string
 	} `cloud:"gce"`
 
@@ -241,7 +237,6 @@ func getGCEOpts(
 	minCPUPlatform string,
 	arch vm.CPUArch,
 	volumeType string,
-	volumeCount int,
 	useSpot bool,
 ) vm.ProviderOpts {
 	opts := gce.DefaultProviderOpts()
@@ -254,9 +249,6 @@ func getGCEOpts(
 	}
 	if volumeSize != 0 {
 		opts.PDVolumeSize = volumeSize
-	}
-	if volumeCount != 0 {
-		opts.PDVolumeCount = volumeCount
 	}
 	opts.SSDCount = localSSDCount
 	if localSSD && localSSDCount > 0 {
@@ -469,11 +461,11 @@ func (s *ClusterSpec) RoachprodOpts(
 	case GCE:
 		providerOpts = getGCEOpts(machineType, s.VolumeSize, ssdCount,
 			createVMOpts.SSDOpts.UseLocalSSD, s.RAID0, s.TerminateOnMigration,
-			s.GCE.MinCPUPlatform, vm.ParseArch(createVMOpts.Arch), s.GCE.VolumeType, s.GCE.VolumeCount, s.UseSpotVMs,
+			s.GCE.MinCPUPlatform, vm.ParseArch(createVMOpts.Arch), s.GCE.VolumeType, s.UseSpotVMs,
 		)
 		workloadProviderOpts = getGCEOpts(workloadMachineType, s.VolumeSize, ssdCount,
 			createVMOpts.SSDOpts.UseLocalSSD, s.RAID0, s.TerminateOnMigration,
-			s.GCE.MinCPUPlatform, vm.ParseArch(createVMOpts.Arch), s.GCE.VolumeType, s.GCE.VolumeCount, s.UseSpotVMs,
+			s.GCE.MinCPUPlatform, vm.ParseArch(createVMOpts.Arch), s.GCE.VolumeType, s.UseSpotVMs,
 		)
 	case Azure:
 		providerOpts = getAzureOpts(machineType, s.VolumeSize)
@@ -565,5 +557,5 @@ func (s *ClusterSpec) TotalCPUs() int {
 	if !s.WorkloadNode {
 		return s.NodeCount * s.CPUs
 	}
-	return (s.NodeCount-s.WorkloadNodeCount)*s.CPUs + (s.WorkloadNodeCPUs * s.WorkloadNodeCount)
+	return (s.NodeCount-1)*s.CPUs + s.WorkloadNodeCPUs
 }

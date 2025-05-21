@@ -219,10 +219,8 @@ func (c *client) sendGossip(g *Gossip, stream Gossip_GossipClient, firstReq bool
 		infosSent := int64(len(delta))
 		c.clientMetrics.BytesSent.Inc(bytesSent)
 		c.clientMetrics.InfosSent.Inc(infosSent)
-		c.clientMetrics.MessagesSent.Inc(1)
 		c.nodeMetrics.BytesSent.Inc(bytesSent)
 		c.nodeMetrics.InfosSent.Inc(infosSent)
-		c.nodeMetrics.MessagesSent.Inc(1)
 
 		if log.V(1) {
 			ctx := c.AnnotateCtx(stream.Context())
@@ -249,10 +247,8 @@ func (c *client) handleResponse(ctx context.Context, g *Gossip, reply *Response)
 	infosReceived := int64(len(reply.Delta))
 	c.clientMetrics.BytesReceived.Inc(bytesReceived)
 	c.clientMetrics.InfosReceived.Inc(infosReceived)
-	c.clientMetrics.MessagesReceived.Inc(1)
 	c.nodeMetrics.BytesReceived.Inc(bytesReceived)
 	c.nodeMetrics.InfosReceived.Inc(infosReceived)
-	c.nodeMetrics.MessagesReceived.Inc(1)
 
 	// Combine remote node's infostore delta with ours.
 	if reply.Delta != nil {
@@ -330,7 +326,6 @@ func (c *client) gossip(
 
 	errCh := make(chan error, 1)
 	initCh := make(chan struct{}, 1)
-
 	// This wait group is used to allow the caller to wait until gossip
 	// processing is terminated.
 	wg.Add(1)
@@ -395,9 +390,6 @@ func (c *client) gossip(
 		case <-initTimer.C:
 			maybeRegister()
 		case <-sendGossipChan:
-			// We need to send the gossip delta to the remote server. Wait a bit to
-			// batch the updates in one message.
-			batchAndConsume(sendGossipChan, infosBatchDelay)
 			if err := c.sendGossip(g, stream, count == 0); err != nil {
 				return err
 			}

@@ -228,7 +228,7 @@ vectorized: true
 └── • subquery
     │ id: @S1
     │ original sql: SELECT * FROM (SELECT database_name, 'database' AS object_type, grantee, privilege_type, is_grantable::BOOL FROM "".crdb_internal.cluster_database_privileges) WHERE database_name IN ('t',)
-    │ exec mode: discard all rows
+    │ exec mode: all rows
     │
     └── • buffer
         │ label: buffer 1 (r)
@@ -529,15 +529,3 @@ vectorized: true
 
 statement ok
 RESET disallow_full_table_scans;
-
-# Verify that we're not fooling ourselves by showing that we can use a virtual
-# index when we actually can't (#108317).
-query T
-EXPLAIN SELECT * FROM crdb_internal.system_jobs WHERE id > 100;
-----
-distribution: local
-vectorized: true
-·
-• virtual table
-  table: system_jobs@primary
-  virtual table filter

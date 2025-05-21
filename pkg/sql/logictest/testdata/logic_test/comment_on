@@ -296,8 +296,15 @@ CREATE TABLE t_99316(a INT);
 statement ok
 INSERT INTO system.comments VALUES (4294967122, 't_99316'::regclass::OID, 0, 'bar');
 
-statement error pgcode XX000 internal error: invalid comment type 4294967122
+# Invalid comments will be ignored
+statement ok
 SELECT * FROM pg_catalog.pg_description WHERE objoid = 't'::regclass::OID;
+
+# Validation errors will be generated for them in invalid_objects.
+query ITTTT
+SELECT * FROM crdb_internal.invalid_objects ORDER BY id;
+----
+111  test  public  t_99316  invalid comment type: 4294967122 on object ID: 111
 
 statement ok
 DELETE FROM system.comments WHERE type = 4294967122
@@ -314,22 +321,27 @@ statement error COMMENT ON TYPE is only implemented in the declarative schema ch
 COMMENT ON TYPE roach_dwellings IS 'First-CRDB-comment-on-types';
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 statement ok
 COMMENT ON TYPE roach_dwellings IS 'First-CRDB-comment-on-types';
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 statement ok
 COMMENT ON TYPE roach_legs IS 'Second-CRDB-comment-on-types';
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 statement ok
 COMMENT ON TYPE roach_dwellings IS 'First-CRDB-comment-on-types-again';
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 statement ok
 COMMENT ON TYPE roach_legs IS 'Second-CRDB-comment-on-types-again';
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 query IIIT colnames,rowsort
 SELECT * FROM SYSTEM.COMMENTS;
 ----
@@ -339,6 +351,7 @@ type  object_id  sub_id  comment
 7     114        0       Second-CRDB-comment-on-types-again
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 query TTTT colnames,rowsort
 SHOW TYPES WITH COMMENT
 ----
@@ -347,14 +360,17 @@ public  roach_dwellings  root   First-CRDB-comment-on-types-again
 public  roach_legs       root   Second-CRDB-comment-on-types-again
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 statement ok
 COMMENT ON TYPE roach_dwellings IS NULL;
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 statement ok
 COMMENT ON TYPE roach_legs IS NULL;
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 query TTTT colnames,rowsort
 SHOW TYPES WITH COMMENT
 ----
@@ -363,8 +379,36 @@ public  roach_dwellings  root   NULL
 public  roach_legs       root   NULL
 
 skipif config local-legacy-schema-changer
+skipif config local-mixed-24.1
 query IIIT colnames
 SELECT * FROM SYSTEM.COMMENTS;
 ----
 type  object_id  sub_id  comment
 4     109        0       Database_Schema
+
+# Test what happens if a user intentionally adds invalid comments.
+subtest validate_invalid_comments
+
+statement ok
+INSERT INTO system.comments VALUES (32, 11111, 0, 'abc');
+INSERT INTO system.comments VALUES (32, 1, 0, 'abc');
+
+# Validate we can scan pg_description fine even if an invalid
+# comment exists.
+statement ok
+SELECT count(*) FROM pg_catalog.pg_description
+
+query ITTTT
+SELECT * FROM crdb_internal.invalid_objects ORDER BY id;
+----
+1      system  ·  ·  invalid comment type: 32 on object ID: 1
+11111  ·       ·  ·  comment exists for non-existent descriptor 11111
+
+statement ok
+DELETE FROM system.comments WHERE type=32;
+
+query ITTTT
+SELECT * FROM crdb_internal.invalid_objects ORDER BY id;
+----
+
+subtest end

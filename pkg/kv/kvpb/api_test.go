@@ -306,7 +306,7 @@ func TestContentionEvent_SafeFormat(t *testing.T) {
 		Key:     roachpb.Key("foo"),
 		TxnMeta: enginepb.TxnMeta{ID: uuid.FromStringOrNil("51b5ef6a-f18f-4e85-bc3f-c44e33f2bb27"), CoordinatorNodeID: 6},
 	}
-	const exp = redact.RedactableString(`conflicted with 51b5ef6a-f18f-4e85-bc3f-c44e33f2bb27 on ‹"foo"› for 0.000s`)
+	const exp = redact.RedactableString(`conflicted with ‹51b5ef6a-f18f-4e85-bc3f-c44e33f2bb27› on ‹"foo"› for 0.000s`)
 	require.Equal(t, exp, redact.Sprint(ce))
 }
 
@@ -431,14 +431,4 @@ func TestRequestHeaderRoundTrip(t *testing.T) {
 	require.NoError(t, protoutil.Unmarshal(sl, &rh))
 
 	require.Equal(t, exp, rh.KVNemesisSeq.Get())
-}
-
-func TestBatchRequestEmptySize(t *testing.T) {
-	ba := &BatchRequest{}
-	require.Equal(t, 22, ba.Size())
-}
-
-func TestBatchResponseEmptySize(t *testing.T) {
-	br := &BatchResponse{}
-	require.Equal(t, 6, br.Size())
 }

@@ -54,8 +54,7 @@ UPDATE supermarket
 update supermarket
  └── project
       ├── scan supermarket
-      │    ├── constraint: /9: [/'michael' - /'michael']
-      │    └── flags: avoid-full-scan
+      │    └── constraint: /9: [/'michael' - /'michael']
       └── projections
            └── subquery
                 └── project
@@ -83,7 +82,6 @@ vectorized: true
 │   │ estimated row count: 0 (missing stats)
 │   │ table: supermarket
 │   │ set: aisle
-│   │ auto commit
 │   │
 │   └── • render
 │       │ columns: (person, aisle, starts_with, ends_with, aisle_new)
@@ -159,7 +157,7 @@ vectorized: true
 └── • subquery
     │ id: @S1
     │ original sql: SELECT aisle FROM supermarket WHERE person = 'matilda' FOR UPDATE
-    │ exec mode: discard all rows
+    │ exec mode: all rows
     │
     └── • buffer
         │ columns: (aisle)
@@ -245,7 +243,7 @@ vectorized: true
 └── • subquery
     │ id: @S1
     │ original sql: SELECT 'matilda' AS person
-    │ exec mode: discard all rows
+    │ exec mode: all rows
     │
     └── • buffer
         │ columns: (person)

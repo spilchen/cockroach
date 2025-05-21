@@ -80,7 +80,7 @@ func TestEval(t *testing.T) {
 		walkExpr(t, func(e tree.Expr) (tree.TypedExpr, error) {
 			// expr.TypeCheck to avoid constant folding.
 			semaCtx := tree.MakeSemaContext(nil /* resolver */)
-			typedExpr, err := e.TypeCheck(ctx, &semaCtx, types.AnyElement)
+			typedExpr, err := e.TypeCheck(ctx, &semaCtx, types.Any)
 			if err != nil {
 				return nil, err
 			}
@@ -359,7 +359,7 @@ func TestEvalError(t *testing.T) {
 			t.Fatalf("%s: %v", d.expr, err)
 		}
 		semaCtx := tree.MakeSemaContext(nil /* resolver */)
-		typedExpr, err := tree.TypeCheck(ctx, expr, &semaCtx, types.AnyElement)
+		typedExpr, err := tree.TypeCheck(ctx, expr, &semaCtx, types.Any)
 		if err == nil {
 			evalCtx := eval.NewTestingEvalContext(cluster.MakeTestingClusterSettings())
 			defer evalCtx.Stop(ctx)

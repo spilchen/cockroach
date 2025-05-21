@@ -118,10 +118,6 @@ const (
 	// we didn't need to tighten the last time we checked.
 	gossipTightenInterval = time.Second
 
-	// infosBatchDelay controls how much time do we wait to batch infos before
-	// sending them.
-	infosBatchDelay = 10 * time.Millisecond
-
 	unknownNodeID roachpb.NodeID = 0
 )
 
@@ -143,18 +139,6 @@ var (
 		Name:        "gossip.connections.refused",
 		Help:        "Number of refused incoming gossip connections",
 		Measurement: "Connections",
-		Unit:        metric.Unit_COUNT,
-	}
-	MetaMessagesSent = metric.Metadata{
-		Name:        "gossip.messages.sent",
-		Help:        "Number of sent gossip messages",
-		Measurement: "Messages",
-		Unit:        metric.Unit_COUNT,
-	}
-	MetaMessagesReceived = metric.Metadata{
-		Name:        "gossip.messages.received",
-		Help:        "Number of received gossip messages",
-		Measurement: "Messages",
 		Unit:        metric.Unit_COUNT,
 	}
 	MetaInfosSent = metric.Metadata{
@@ -1242,11 +1226,11 @@ func (g *Gossip) hasOutgoingLocked(nodeID roachpb.NodeID) bool {
 // getNextBootstrapAddress returns the next available bootstrap
 // address. The caller must hold the lock.
 func (g *Gossip) getNextBootstrapAddressLocked() util.UnresolvedAddr {
-	// Run through addresses round-robin starting at last address index.
+	// Run through addresses round robin starting at last address index.
 	for range g.addresses {
 		g.addressIdx++
 		g.addressIdx %= len(g.addresses)
-		g.addressesTried[g.addressIdx] = struct{}{}
+		defer func(idx int) { g.addressesTried[idx] = struct{}{} }(g.addressIdx)
 		addr := g.addresses[g.addressIdx]
 		addrStr := addr.String()
 		if _, addrActive := g.bootstrapping[addrStr]; !addrActive {
@@ -1311,6 +1295,7 @@ func (g *Gossip) bootstrap(rpcContext *rpc.Context) {
 			log.Eventf(ctx, "sleeping %s until bootstrap", g.bootstrapInterval)
 			select {
 			case <-bootstrapTimer.C:
+				bootstrapTimer.Read = true
 				// continue
 			case <-g.server.stopper.ShouldQuiesce():
 				return
@@ -1356,6 +1341,7 @@ func (g *Gossip) manage(rpcContext *rpc.Context) {
 			case <-g.tighten:
 				g.tightenNetwork(ctx, rpcContext)
 			case <-cullTimer.C:
+				cullTimer.Read = true
 				cullTimer.Reset(jitteredInterval(g.cullInterval))
 				func() {
 					g.mu.Lock()
@@ -1386,6 +1372,7 @@ func (g *Gossip) manage(rpcContext *rpc.Context) {
 					g.mu.Unlock()
 				}()
 			case <-stallTimer.C:
+				stallTimer.Read = true
 				stallTimer.Reset(jitteredInterval(g.stallInterval))
 				func() {
 					g.mu.Lock()

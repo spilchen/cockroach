@@ -25,7 +25,6 @@ import (
 )
 
 type renameTableNode struct {
-	zeroInputPlanNode
 	n            *tree.RenameTable
 	oldTn, newTn *tree.TableName
 	tableDesc    *tabledesc.Mutable
@@ -88,7 +87,7 @@ func (p *planner) RenameTable(ctx context.Context, n *tree.RenameTable) (planNod
 	}
 
 	// Disallow schema changes if this table's schema is locked.
-	if err := checkSchemaChangeIsAllowed(tableDesc, n, p.ExecCfg().Settings); err != nil {
+	if err := checkSchemaChangeIsAllowed(tableDesc, n); err != nil {
 		return nil, err
 	}
 

@@ -53,6 +53,7 @@ var (
 		"bulkio.ingest.flush_delay",
 		"amount of time to wait before sending a file to the KV/Storage layer to ingest",
 		0,
+		settings.NonNegativeDuration,
 	)
 
 	senderConcurrency = settings.RegisterIntSetting(
@@ -338,23 +339,6 @@ func (b *SSTBatcher) AddMVCCKeyWithImportEpoch(
 	if canRetainBuffer {
 		b.valueScratch = buf
 	}
-	if err != nil {
-		return err
-	}
-	return b.AddMVCCKey(ctx, key, b.valueScratch)
-}
-
-func (b *SSTBatcher) AddMVCCKeyLDR(ctx context.Context, key storage.MVCCKey, value []byte) error {
-
-	mvccVal, err := storage.DecodeMVCCValue(value)
-	if err != nil {
-		return err
-	}
-	mvccVal.MVCCValueHeader.OriginTimestamp = key.Timestamp
-	mvccVal.OriginID = 1
-	// NOTE: since we are setting header values, EncodeMVCCValueToBuf will
-	// always use the sctarch buffer or return an error.
-	b.valueScratch, _, err = storage.EncodeMVCCValueToBuf(mvccVal, b.valueScratch[:0])
 	if err != nil {
 		return err
 	}
@@ -875,6 +859,7 @@ func (b *SSTBatcher) addSSTable(
 				req := &kvpb.AddSSTableRequest{
 					RequestHeader:                          kvpb.RequestHeader{Key: item.start, EndKey: item.end},
 					Data:                                   item.sstBytes,
+					DisallowShadowing:                      !b.disallowShadowingBelow.IsEmpty(),
 					DisallowShadowingBelow:                 b.disallowShadowingBelow,
 					MVCCStats:                              &item.stats,
 					IngestAsWrites:                         ingestAsWriteBatch,

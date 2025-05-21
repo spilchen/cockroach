@@ -44,7 +44,6 @@ func initIndexBackfillerSpec(
 	writeAtBatchTimestamp bool,
 	chunkSize int64,
 	indexesToBackfill []descpb.IndexID,
-	sourceIndexID descpb.IndexID,
 ) (execinfrapb.BackfillerSpec, error) {
 	return execinfrapb.BackfillerSpec{
 		Table:                 desc,
@@ -53,7 +52,6 @@ func initIndexBackfillerSpec(
 		Type:                  execinfrapb.BackfillerSpec_Index,
 		ChunkSize:             chunkSize,
 		IndexesToBackfill:     indexesToBackfill,
-		SourceIndexID:         sourceIndexID,
 	}, nil
 }
 
@@ -77,20 +75,12 @@ func initIndexBackfillMergerSpec(
 func (dsp *DistSQLPlanner) createBackfillerPhysicalPlan(
 	ctx context.Context, planCtx *PlanningCtx, spec execinfrapb.BackfillerSpec, spans []roachpb.Span,
 ) (*PhysicalPlan, error) {
-	spanPartitions, err := dsp.PartitionSpans(ctx, planCtx, spans, PartitionSpansBoundDefault)
+	spanPartitions, err := dsp.PartitionSpans(ctx, planCtx, spans)
 	if err != nil {
 		return nil, err
 	}
 
 	p := planCtx.NewPhysicalPlan()
-	var containsRemoteProcessor bool
-	for _, sp := range spanPartitions {
-		if sp.SQLInstanceID != p.GatewaySQLInstanceID {
-			containsRemoteProcessor = true
-			break
-		}
-	}
-	stageID := p.NewStage(containsRemoteProcessor, false /* allowPartialDistribution */)
 	p.ResultRouters = make([]physicalplan.ProcessorIdx, len(spanPartitions))
 	for i, sp := range spanPartitions {
 		ib := &execinfrapb.BackfillerSpec{}
@@ -103,7 +93,6 @@ func (dsp *DistSQLPlanner) createBackfillerPhysicalPlan(
 			Spec: execinfrapb.ProcessorSpec{
 				Core:        execinfrapb.ProcessorCoreUnion{Backfiller: ib},
 				Output:      []execinfrapb.OutputRouterSpec{{Type: execinfrapb.OutputRouterSpec_PASS_THROUGH}},
-				StageID:     stageID,
 				ResultTypes: []*types.T{},
 			},
 		}
@@ -155,20 +144,12 @@ func (dsp *DistSQLPlanner) createIndexBackfillerMergePhysicalPlan(
 		return idx
 	}
 
-	spanPartitions, err := dsp.PartitionSpans(ctx, planCtx, indexSpans, PartitionSpansBoundDefault)
+	spanPartitions, err := dsp.PartitionSpans(ctx, planCtx, indexSpans)
 	if err != nil {
 		return nil, err
 	}
 
 	p := planCtx.NewPhysicalPlan()
-	var containsRemoteProcessor bool
-	for _, sp := range spanPartitions {
-		if sp.SQLInstanceID != p.GatewaySQLInstanceID {
-			containsRemoteProcessor = true
-			break
-		}
-	}
-	stageID := p.NewStage(containsRemoteProcessor, false /* allowPartialDistribution */)
 	p.ResultRouters = make([]physicalplan.ProcessorIdx, len(spanPartitions))
 	for i, sp := range spanPartitions {
 		ibm := &execinfrapb.IndexBackfillMergerSpec{}
@@ -184,7 +165,6 @@ func (dsp *DistSQLPlanner) createIndexBackfillerMergePhysicalPlan(
 			Spec: execinfrapb.ProcessorSpec{
 				Core:        execinfrapb.ProcessorCoreUnion{IndexBackfillMerger: ibm},
 				Output:      []execinfrapb.OutputRouterSpec{{Type: execinfrapb.OutputRouterSpec_PASS_THROUGH}},
-				StageID:     stageID,
 				ResultTypes: []*types.T{},
 			},
 		}

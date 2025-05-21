@@ -1478,7 +1478,7 @@ func cmpOpFixups(
 	cmpOps map[treecmp.ComparisonOperatorSymbol]*CmpOpOverloads,
 ) map[treecmp.ComparisonOperatorSymbol]*CmpOpOverloads {
 	findVolatility := func(op treecmp.ComparisonOperatorSymbol, t *types.T) volatility.V {
-		for _, o := range cmpOps[op].overloads {
+		for _, o := range cmpOps[treecmp.EQ].overloads {
 			if o.LeftType.Equivalent(t) && o.RightType.Equivalent(t) {
 				return o.Volatility
 			}
@@ -1490,7 +1490,7 @@ func cmpOpFixups(
 	}
 
 	// Array equality comparisons.
-	for _, t := range append(types.Scalar, types.AnyEnum, types.AnyCollatedString) {
+	for _, t := range append(types.Scalar, types.AnyEnum) {
 		appendCmpOp := func(sym treecmp.ComparisonOperatorSymbol, cmpOp *CmpOp) {
 			s, ok := cmpOps[sym]
 			if !ok {
@@ -1834,7 +1834,6 @@ var CmpOps = cmpOpFixups(map[treecmp.ComparisonOperatorSymbol]*CmpOpOverloads{
 		makeIsFn(types.Int, types.Int, volatility.Leakproof),
 		makeIsFn(types.Interval, types.Interval, volatility.Leakproof),
 		makeIsFn(types.Jsonb, types.Jsonb, volatility.Immutable),
-		makeIsFn(types.Jsonpath, types.Jsonpath, volatility.Leakproof),
 		makeIsFn(types.Oid, types.Oid, volatility.Leakproof),
 		makeIsFn(types.PGLSN, types.PGLSN, volatility.Leakproof),
 		makeIsFn(types.PGVector, types.PGVector, volatility.Leakproof),

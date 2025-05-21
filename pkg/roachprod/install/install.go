@@ -109,16 +109,6 @@ rm /tmp/otelcol-contrib.deb;
 sudo apt-get update;
 sudo apt-get install -y bzip2;
 `,
-
-	"nmap": `
-sudo apt-get update;
-sudo apt-get install -y nmap;
-`,
-
-	"vmtouch": `
-sudo apt-get update;
-sudo apt-get install -y vmtouch;
-`,
 }
 
 // installLocalCmds is a map from software name to a map of strings that
@@ -130,9 +120,7 @@ var installLocalCmds = map[string]map[string]*exec.Cmd{
 	},
 }
 
-var sideEyeSecretCmd = exec.Command("gcloud",
-	"--project", "cockroach-ephemeral",
-	"secrets", "versions", "access", "latest", "--secret", "side-eye-key")
+var sideEyeSecretCmd = exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret", "side-eye-key")
 
 // SortedCmds TODO(peter): document
 func SortedCmds() []string {

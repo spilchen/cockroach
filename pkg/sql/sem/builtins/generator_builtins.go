@@ -39,10 +39,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/storage/enginepb"
 	"github.com/cockroachdb/cockroach/pkg/util/arith"
 	"github.com/cockroachdb/cockroach/pkg/util/duration"
-	"github.com/cockroachdb/cockroach/pkg/util/encoding"
 	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/util/json"
-	jsonpath "github.com/cockroachdb/cockroach/pkg/util/jsonpath/eval"
 	"github.com/cockroachdb/cockroach/pkg/util/mon"
 	"github.com/cockroachdb/cockroach/pkg/util/randident"
 	"github.com/cockroachdb/cockroach/pkg/util/randident/randidentcfg"
@@ -57,6 +55,7 @@ import (
 
 // See the comments at the start of generators.go for details about
 // this functionality.
+
 var _ eval.ValueGenerator = &seriesValueGenerator{}
 var _ eval.ValueGenerator = &arrayValueGenerator{}
 
@@ -299,16 +298,16 @@ var generators = map[string]builtinDefinition{
 	"workload_index_recs": makeBuiltin(genProps(),
 		makeGeneratorOverload(
 			tree.ParamTypes{},
-			WorkloadIndexRecsGeneratorType,
+			types.String,
 			makeWorkloadIndexRecsGeneratorFactory(false /* hasTimestamp */),
-			"Returns index recommendations and the fingerprint ids that the indexes will impact",
+			"Returns set of index recommendations",
 			volatility.Immutable,
 		),
 		makeGeneratorOverload(
 			tree.ParamTypes{{Name: "timestamptz", Typ: types.TimestampTZ}},
-			WorkloadIndexRecsGeneratorType,
+			types.String,
 			makeWorkloadIndexRecsGeneratorFactory(true /* hasTimestamp */),
-			"Returns index recommendations and the fingerprint ids that the indexes will impact",
+			"Returns set of index recommendations",
 			volatility.Immutable,
 		),
 	),
@@ -430,49 +429,6 @@ var generators = map[string]builtinDefinition{
 	"jsonb_to_record":    makeBuiltin(recordGenProps(), jsonToRecordImpl),
 	"json_to_recordset":  makeBuiltin(recordGenProps(), jsonToRecordSetImpl),
 	"jsonb_to_recordset": makeBuiltin(recordGenProps(), jsonToRecordSetImpl),
-
-	// See https://www.postgresql.org/docs/current/functions-json.html#SQLJSON-QUERY-FUNCTIONS
-	"jsonb_path_query": makeBuiltin(jsonpathProps(),
-		makeGeneratorOverload(
-			tree.ParamTypes{
-				{Name: "target", Typ: types.Jsonb},
-				{Name: "path", Typ: types.Jsonpath},
-			},
-			jsonPathQueryGeneratorType,
-			makeJsonpathQueryGenerator,
-			"Returns all JSON items returned by the JSON path for the specified JSON value.",
-			volatility.Immutable,
-		),
-		makeGeneratorOverload(
-			tree.ParamTypes{
-				{Name: "target", Typ: types.Jsonb},
-				{Name: "path", Typ: types.Jsonpath},
-				{Name: "vars", Typ: types.Jsonb},
-			},
-			jsonPathQueryGeneratorType,
-			makeJsonpathQueryGenerator,
-			`Returns all JSON items returned by the JSON path for the specified JSON value.
-			 The vars argument must be a JSON object, and its fields provide named values
-			 to be substituted into the jsonpath expression.`,
-			volatility.Immutable,
-		),
-		makeGeneratorOverload(
-			tree.ParamTypes{
-				{Name: "target", Typ: types.Jsonb},
-				{Name: "path", Typ: types.Jsonpath},
-				{Name: "vars", Typ: types.Jsonb},
-				{Name: "silent", Typ: types.Bool},
-			},
-			jsonPathQueryGeneratorType,
-			makeJsonpathQueryGenerator,
-			`Returns all JSON items returned by the JSON path for the specified JSON value.
-			 The vars argument must be a JSON object, and its fields provide named values
-			 to be substituted into the jsonpath expression. If the silent argument is true,
-			 the function suppresses the following errors: missing object field or array
-			 element, unexpected JSON item type, datetime and numeric errors.`,
-			volatility.Immutable,
-		),
-	),
 
 	"crdb_internal.check_consistency": makeBuiltin(
 		tree.FunctionProperties{
@@ -1244,9 +1200,9 @@ func (s *multipleArrayValueGenerator) Values() (tree.Datums, error) {
 	return s.datums, nil
 }
 
-// makeWorkloadIndexRecsGeneratorFactory uses the WorkloadIndexRecsGenerator to return
-// all the index recommendations with the associated fingerprints they impact. The
-// hasTimestamp represents whether there is a timestamp filter.
+// makeWorkloadIndexRecsGeneratorFactory uses the arrayValueGenerator to return
+// all the index recommendations as an array of strings. The hasTimestamp
+// represents whether there is a timestamp filter.
 func makeWorkloadIndexRecsGeneratorFactory(hasTimestamp bool) eval.GeneratorOverload {
 	return func(ctx context.Context, evalCtx *eval.Context, args tree.Datums) (eval.ValueGenerator, error) {
 		var ts tree.DTimestampTZ
@@ -1258,78 +1214,20 @@ func makeWorkloadIndexRecsGeneratorFactory(hasTimestamp bool) eval.GeneratorOver
 			ts = tree.DTimestampTZ{Time: tree.MinSupportedTime}
 		}
 
-		indexRecs, err := workloadindexrec.FindWorkloadRecs(ctx, evalCtx, &ts)
+		var indexRecs []string
+		indexRecs, err = workloadindexrec.FindWorkloadRecs(ctx, evalCtx, &ts)
 		if err != nil {
-			return &WorkloadIndexRecsGenerator{}, err
+			return &arrayValueGenerator{}, err
 		}
 
-		arr := tree.NewDArray(WorkloadIndexRecsGeneratorType)
+		arr := tree.NewDArray(types.String)
 		for _, indexRec := range indexRecs {
-			fingerprints := tree.NewDArray(types.Bytes)
-			for _, fingerprint := range indexRec.FingerprintIds {
-				fp := encoding.EncodeUint64Ascending(nil, fingerprint)
-				if err = fingerprints.Append(tree.NewDBytes(tree.DBytes(fp))); err != nil {
-					return nil, err
-				}
-			}
-			if err = arr.Append(
-				tree.NewDTuple(
-					WorkloadIndexRecsGeneratorType,
-					tree.NewDString(indexRec.Index),
-					fingerprints),
-			); err != nil {
+			if err = arr.Append(tree.NewDString(indexRec)); err != nil {
 				return nil, err
 			}
 		}
-		return &WorkloadIndexRecsGenerator{arr: arr}, nil
+		return &arrayValueGenerator{array: arr}, nil
 	}
-}
-
-var WorkloadIndexRecsGeneratorType = types.MakeLabeledTuple(
-	[]*types.T{types.String, types.BytesArray},
-	[]string{"index_rec", "fingerprint_ids"},
-)
-
-var _ eval.ValueGenerator = &WorkloadIndexRecsGenerator{}
-
-type WorkloadIndexRecsGenerator struct {
-	arr *tree.DArray
-	idx int
-}
-
-func (w *WorkloadIndexRecsGenerator) ResolvedType() *types.T {
-	return WorkloadIndexRecsGeneratorType
-}
-
-func (w *WorkloadIndexRecsGenerator) Start(ctx context.Context, txn *kv.Txn) error {
-	w.idx = -1
-	return nil
-}
-
-func (w *WorkloadIndexRecsGenerator) Next(ctx context.Context) (bool, error) {
-	w.idx++
-	if w.idx >= w.arr.Len() {
-		return false, nil
-	}
-	return true, nil
-}
-
-func (w *WorkloadIndexRecsGenerator) Values() (tree.Datums, error) {
-	elem := w.arr.Array[w.idx]
-
-	if elem == tree.DNull {
-		return nil, pgerror.Newf(
-			pgcode.InvalidParameterValue,
-			"null array element not allowed in this context",
-		)
-	}
-
-	ret := make(tree.Datums, 0, 2)
-	ret = append(ret, tree.MustBeDTuple(elem).D...)
-	return ret, nil
-}
-
-func (w *WorkloadIndexRecsGenerator) Close(ctx context.Context) {
 }
 
 func makeArrayGenerator(
@@ -1501,7 +1399,7 @@ func (s *subscriptsValueGenerator) Values() (tree.Datums, error) {
 // EmptyGenerator returns a new, empty generator. Used when a SRF
 // evaluates to NULL.
 func EmptyGenerator() eval.ValueGenerator {
-	return &arrayValueGenerator{array: tree.NewDArray(types.AnyElement)}
+	return &arrayValueGenerator{array: tree.NewDArray(types.Any)}
 }
 
 // NullGenerator returns a new generator that returns a single row of nulls
@@ -1678,64 +1576,6 @@ var jsonObjectKeysImpl = makeGeneratorOverload(
 	"Returns sorted set of keys in the outermost JSON object.",
 	volatility.Immutable,
 )
-
-var jsonPathQueryGeneratorType = types.Jsonb
-
-type jsonPathQueryGenerator struct {
-	target tree.DJSON
-	path   tree.DJsonpath
-	vars   tree.DJSON
-	silent tree.DBool
-
-	res     []tree.DJSON
-	iterIdx int
-}
-
-func makeJsonpathQueryGenerator(
-	_ context.Context, _ *eval.Context, args tree.Datums,
-) (eval.ValueGenerator, error) {
-	target, path, vars, silent, err := jsonpathArgs(args)
-	if err != nil {
-		return nil, err
-	}
-	return &jsonPathQueryGenerator{
-		target: target,
-		path:   path,
-		vars:   vars,
-		silent: silent,
-	}, nil
-}
-
-// ResolvedType implements the eval.ValueGenerator interface.
-func (g *jsonPathQueryGenerator) ResolvedType() *types.T {
-	return jsonPathQueryGeneratorType
-}
-
-// Start implements the eval.ValueGenerator interface.
-func (g *jsonPathQueryGenerator) Start(_ context.Context, _ *kv.Txn) error {
-	jsonb, err := jsonpath.JsonpathQuery(g.target, g.path, g.vars, g.silent)
-	if err != nil {
-		return err
-	}
-	g.res = jsonb
-	g.iterIdx = -1
-	return nil
-}
-
-// Close implements the eval.ValueGenerator interface.
-func (g *jsonPathQueryGenerator) Close(_ context.Context) {}
-
-// Next implements the eval.ValueGenerator interface.
-func (g *jsonPathQueryGenerator) Next(_ context.Context) (bool, error) {
-	g.iterIdx++
-	return g.iterIdx < len(g.res), nil
-}
-
-// Values implements the eval.ValueGenerator interface.
-func (g *jsonPathQueryGenerator) Values() (tree.Datums, error) {
-	jp := g.res[g.iterIdx]
-	return tree.Datums{tree.NewDJSON(jp.JSON)}, nil
-}
 
 var jsonObjectKeysGeneratorType = types.String
 
@@ -1919,19 +1759,13 @@ var jsonPopulateProps = tree.FunctionProperties{
 	Category: builtinconstants.CategoryJSON,
 }
 
-func jsonpathProps() tree.FunctionProperties {
-	return tree.FunctionProperties{
-		Category: builtinconstants.CategoryJsonpath,
-	}
-}
-
 func makeJSONPopulateImpl(gen eval.GeneratorWithExprsOverload, info string) tree.Overload {
 	return tree.Overload{
 		// The json{,b}_populate_record{,set} builtins all have a 2 argument
 		// structure. The first argument is an arbitrary tuple type, which is used
 		// to set the columns of the output when the builtin is used as a FROM
 		// source, or used as-is when it's used as an ordinary projection. To match
-		// PostgreSQL, the argument actually is types.AnyElement, and its tuple-ness is
+		// PostgreSQL, the argument actually is types.Any, and its tuple-ness is
 		// checked at execution time.
 		// The second argument is a JSON object or array of objects. The builtin
 		// transforms the JSON in the second argument into the tuple in the first
@@ -1942,7 +1776,7 @@ func makeJSONPopulateImpl(gen eval.GeneratorWithExprsOverload, info string) tree
 		// the default values of each field will be NULL.
 		// The second argument can also be null, in which case the first argument
 		// is returned as-is.
-		Types:              tree.ParamTypes{{Name: "base", Typ: types.AnyElement}, {Name: "from_json", Typ: types.Jsonb}},
+		Types:              tree.ParamTypes{{Name: "base", Typ: types.Any}, {Name: "from_json", Typ: types.Jsonb}},
 		ReturnType:         tree.IdentityReturnType(0),
 		GeneratorWithExprs: gen,
 		Class:              tree.GeneratorClass,

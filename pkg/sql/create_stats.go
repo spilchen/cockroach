@@ -25,7 +25,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqltelemetry"
 	"github.com/cockroachdb/cockroach/pkg/sql/stats"
@@ -73,7 +72,7 @@ var nonIndexJSONHistograms = settings.RegisterBoolSetting(
 	settings.ApplicationLevel,
 	"sql.stats.non_indexed_json_histograms.enabled",
 	"set to true to collect table statistics histograms on non-indexed JSON columns",
-	false,
+	true,
 	settings.WithPublic)
 
 var automaticJobCheckBeforeCreatingJob = settings.RegisterBoolSetting(
@@ -116,7 +115,6 @@ func StubTableStats(
 // CREATE STATISTICS planning and execution is performed within the jobs
 // framework.
 type createStatsNode struct {
-	zeroInputPlanNode
 	tree.CreateStats
 
 	// p is the "outer planner" from planning the CREATE STATISTICS
@@ -371,9 +369,6 @@ func (n *createStatsNode) makeJobRecord(ctx context.Context) (*jobs.Record, erro
 	if n.Name == jobspb.AutoStatsName {
 		// Use a user-friendly description for automatic statistics.
 		description = fmt.Sprintf("Table statistics refresh for %s", fqTableName)
-	} else if n.Name == jobspb.AutoPartialStatsName {
-		// Use a similar user-friendly description for partial statistics.
-		description = fmt.Sprintf("Partial statistics update for %s", fqTableName)
 	} else {
 		// This must be a user query, so use the statement (for consistency with
 		// other jobs triggered by statements).
@@ -536,7 +531,7 @@ func createStatsDefaultColumns(
 	// implicitly partitioned indexes.
 	if partialStats {
 		for _, idx := range desc.ActiveIndexes() {
-			if idx.GetType() != idxtype.FORWARD ||
+			if idx.GetType() != descpb.IndexDescriptor_FORWARD ||
 				idx.IsPartial() ||
 				idx.IsSharded() ||
 				idx.ImplicitPartitioningColumnCount() > 0 {
@@ -604,13 +599,9 @@ func createStatsDefaultColumns(
 
 	// Add column stats for each secondary index.
 	for _, idx := range desc.PublicNonPrimaryIndexes() {
-		if idx.GetType() == idxtype.VECTOR {
-			// Skip vector indexes for now.
-			continue
-		}
 		for j, n := 0, idx.NumKeyColumns(); j < n; j++ {
 			colID := idx.GetKeyColumnID(j)
-			isInverted := idx.GetType() == idxtype.INVERTED && colID == idx.InvertedColumnID()
+			isInverted := idx.GetType() == descpb.IndexDescriptor_INVERTED && colID == idx.InvertedColumnID()
 
 			// Generate stats for each indexed column.
 			if err := addIndexColumnStatsIfNotExists(colID, isInverted); err != nil {

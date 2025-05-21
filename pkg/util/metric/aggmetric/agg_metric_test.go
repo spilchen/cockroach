@@ -35,7 +35,7 @@ func TestExcludeAggregateMetrics(t *testing.T) {
 	// Flipping the includeAggregateMetrics flag should have no effect.
 	testutils.RunTrueAndFalse(t, "includeChildMetrics=false,includeAggregateMetrics", func(t *testing.T, includeAggregateMetrics bool) {
 		pe := metric.MakePrometheusExporter()
-		pe.ScrapeRegistry(r, metric.WithIncludeChildMetrics(false), metric.WithIncludeAggregateMetrics(includeAggregateMetrics))
+		pe.ScrapeRegistry(r, false, includeAggregateMetrics)
 		families, err := pe.Gather()
 		require.NoError(t, err)
 		require.Equal(t, 1, len(families))
@@ -46,7 +46,7 @@ func TestExcludeAggregateMetrics(t *testing.T) {
 
 	testutils.RunTrueAndFalse(t, "includeChildMetrics=true,includeAggregateMetrics", func(t *testing.T, includeAggregateMetrics bool) {
 		pe := metric.MakePrometheusExporter()
-		pe.ScrapeRegistry(r, metric.WithIncludeChildMetrics(true), metric.WithIncludeAggregateMetrics(includeAggregateMetrics))
+		pe.ScrapeRegistry(r, true, includeAggregateMetrics)
 		families, err := pe.Gather()
 		require.NoError(t, err)
 		require.Equal(t, 1, len(families))
@@ -71,7 +71,22 @@ func TestAggMetric(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	r := metric.NewRegistry()
-	writePrometheusMetrics := WritePrometheusMetricsFunc(r)
+	writePrometheusMetrics := func(t *testing.T) string {
+		var in bytes.Buffer
+		ex := metric.MakePrometheusExporter()
+		scrape := func(ex *metric.PrometheusExporter) {
+			ex.ScrapeRegistry(r, true /* includeChildMetrics */, true)
+		}
+		require.NoError(t, ex.ScrapeAndPrintAsText(&in, expfmt.FmtText, scrape))
+		var lines []string
+		for sc := bufio.NewScanner(&in); sc.Scan(); {
+			if !bytes.HasPrefix(sc.Bytes(), []byte{'#'}) {
+				lines = append(lines, sc.Text())
+			}
+		}
+		sort.Strings(lines)
+		return strings.Join(lines, "\n")
+	}
 
 	c := NewCounter(metric.Metadata{
 		Name: "foo_counter",
@@ -280,141 +295,4 @@ func TestAggHistogramRotate(t *testing.T) {
 		now = now.Add(time.Duration(i+1) * 10 * time.Second)
 		// Go to beginning.
 	}
-}
-
-func TestAggMetricClear(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-
-	r := metric.NewRegistry()
-	writePrometheusMetrics := WritePrometheusMetricsFunc(r)
-
-	c := NewCounter(metric.Metadata{
-		Name: "foo_counter",
-	}, "tenant_id")
-	r.AddMetric(c)
-
-	d := NewSQLCounter(metric.Metadata{
-		Name: "bar_counter",
-	})
-	r.AddMetric(d)
-	d.labelConfig.Store(uint64(metric.LabelConfigAppAndDB))
-	tenant2 := roachpb.MustMakeTenantID(2)
-	c1 := c.AddChild(tenant2.String())
-
-	t.Run("before clear", func(t *testing.T) {
-		c1.Inc(2)
-		d.Inc(2, "test-db", "test-app")
-		testFile := "aggMetric_pre_clear.txt"
-		echotest.Require(t, writePrometheusMetrics(t), datapathutils.TestDataPath(t, testFile))
-	})
-
-	c.clear()
-	d.mu.children.Clear()
-
-	t.Run("post clear", func(t *testing.T) {
-		testFile := "aggMetric_post_clear.txt"
-		echotest.Require(t, writePrometheusMetrics(t), datapathutils.TestDataPath(t, testFile))
-	})
-}
-
-func TestMetricKey(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-
-	defer leaktest.AfterTest(t)()
-
-	for _, tc := range []struct {
-		name              string
-		labelValues       []string
-		expectedHashValue uint64
-	}{
-		{
-			name:              "empty label values",
-			labelValues:       []string{},
-			expectedHashValue: 0xcbf29ce484222325,
-		},
-		{
-			name:              "single label value",
-			labelValues:       []string{"test_db"},
-			expectedHashValue: 0x7b629443ea81c091,
-		},
-		{
-			name:              "multiple label values",
-			labelValues:       []string{"test_db", "test_app", "test_tenant"},
-			expectedHashValue: 0xa1aaab8437836050,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.expectedHashValue, metricKey(tc.labelValues...))
-		})
-	}
-}
-
-func WritePrometheusMetricsFunc(r *metric.Registry) func(t *testing.T) string {
-	writePrometheusMetrics := func(t *testing.T) string {
-		var in bytes.Buffer
-		ex := metric.MakePrometheusExporter()
-		scrape := func(ex *metric.PrometheusExporter) {
-			ex.ScrapeRegistry(r, metric.WithIncludeChildMetrics(true), metric.WithIncludeAggregateMetrics(true))
-		}
-		require.NoError(t, ex.ScrapeAndPrintAsText(&in, expfmt.FmtText, scrape))
-		var lines []string
-		for sc := bufio.NewScanner(&in); sc.Scan(); {
-			if !bytes.HasPrefix(sc.Bytes(), []byte{'#'}) {
-				lines = append(lines, sc.Text())
-			}
-		}
-		sort.Strings(lines)
-		return strings.Join(lines, "\n")
-	}
-	return writePrometheusMetrics
-}
-
-func TestSQLMetricsReinitialise(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	r := metric.NewRegistry()
-	writePrometheusMetrics := WritePrometheusMetricsFunc(r)
-
-	counter := NewSQLCounter(metric.Metadata{Name: "test.counter"})
-	r.AddMetric(counter)
-
-	gauge := NewSQLGauge(metric.Metadata{Name: "test.gauge"})
-	r.AddMetric(gauge)
-
-	histogram := NewSQLHistogram(metric.HistogramOptions{
-		Metadata: metric.Metadata{
-			Name: "test.histogram",
-		},
-		Duration:     base.DefaultHistogramWindowInterval(),
-		MaxVal:       100,
-		SigFigs:      1,
-		BucketConfig: metric.Percent100Buckets,
-	})
-	r.AddMetric(histogram)
-
-	t.Run("before invoking reinitialise sql metrics", func(t *testing.T) {
-		counter.Inc(1, "test_db", "test_app")
-		gauge.Update(10, "test_db", "test_app")
-		histogram.RecordValue(10, "test_db", "test_app")
-
-		testFile := "sql_metric_pre_reinitialise_child_metrics.txt"
-		if metric.HdrEnabled() {
-			testFile = "sql_metric_pre_reinitialise_child_metrics_hdr.txt"
-		}
-		echotest.Require(t, writePrometheusMetrics(t), datapathutils.TestDataPath(t, testFile))
-	})
-
-	r.ReinitialiseChildMetrics(true, true)
-
-	t.Run("after invoking reinitialise sql metrics", func(t *testing.T) {
-		counter.Inc(1, "test_db", "test_app")
-		gauge.Update(10, "test_db", "test_app")
-		histogram.RecordValue(10, "test_db", "test_app")
-
-		testFile := "sql_metric_post_reinitialise_child_metrics.txt"
-		if metric.HdrEnabled() {
-			testFile = "sql_metric_post_reinitialise_child_metrics_hdr.txt"
-		}
-		echotest.Require(t, writePrometheusMetrics(t), datapathutils.TestDataPath(t, testFile))
-	})
-
 }

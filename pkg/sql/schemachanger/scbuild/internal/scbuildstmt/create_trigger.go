@@ -27,7 +27,7 @@ func CreateTrigger(b BuildCtx, n *tree.CreateTrigger) {
 	relationElements := b.ResolveRelation(n.TableName, ResolveParams{
 		RequiredPrivilege: privilege.TRIGGER,
 	})
-	checkTableSchemaChangePrerequisites(b, relationElements, n)
+	panicIfSchemaChangeIsDisallowed(relationElements, n)
 
 	// Check for cross-DB references.
 	_, _, namespace := scpb.FindNamespace(relationElements)

@@ -140,7 +140,7 @@ func NewPreServeConnHandler(
 		getTLSConfig:             getTLSConfig,
 
 		tenantIndependentConnMonitor: mon.NewMonitor(mon.Options{
-			Name:       mon.MakeName("pre-conn"),
+			Name:       "pre-conn",
 			CurCount:   metrics.PreServeCurBytes,
 			MaxHist:    metrics.PreServeMaxBytes,
 			Increment:  int64(connReservationBatchSize) * baseSQLMemoryBudget,
@@ -492,9 +492,8 @@ func (s *PreServeConnHandler) maybeUpgradeToSecureConn(
 		}
 		newConn = tls.Server(conn, tlsConfig)
 		// Conditionally perform handshake connection and determine additional restrictions.
-		serverErr = security.TLSCipherRestrict(newConn)
-		if serverErr != nil {
-			_ = newConn.Close()
+		if err := security.TLSCipherRestrict(newConn); err != nil {
+			clientErr = pgerror.Wrapf(err, pgcode.SQLserverRejectedEstablishmentOfSQLconnection, "cannot use SSL/TLS with the requested ciphers")
 			return
 		}
 		newConnType = hba.ConnHostSSL

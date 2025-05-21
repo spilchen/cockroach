@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
+	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvflowcontrol"
@@ -114,9 +115,11 @@ func (r *Replica) shouldReplicationAdmissionControlUsePullMode(ctx context.Conte
 		return knobs.OverridePullPushMode()
 	}
 
-	versionEnabled := true
+	var versionEnabled bool
 	if knobs := r.store.TestingKnobs().FlowControlTestingKnobs; knobs != nil && knobs.OverrideV2EnabledWhenLeaderLevel != nil {
 		versionEnabled = knobs.OverrideV2EnabledWhenLeaderLevel() == kvflowcontrol.V2EnabledWhenLeaderV2Encoding
+	} else {
+		versionEnabled = r.store.cfg.Settings.Version.IsActive(ctx, clusterversion.V24_3_UseRACV2Full)
 	}
 
 	return versionEnabled &&
@@ -145,8 +148,8 @@ func (r *Replica) updateProposalQuotaRaftMuLocked(
 	// need for a setting change callback, as handleRaftReady (the caller), will
 	// be called at least at the tick interval for a non-quiescent range.
 	shouldInitQuotaPool := false
-	if r.shMu.leaderID != lastLeaderID {
-		if r.replicaID == r.shMu.leaderID {
+	if r.mu.leaderID != lastLeaderID {
+		if r.replicaID == r.mu.leaderID {
 			r.mu.lastUpdateTimes = make(map[roachpb.ReplicaID]time.Time)
 			r.mu.lastUpdateTimes.updateOnBecomeLeader(r.shMu.state.Desc.Replicas().Descriptors(), now)
 			r.mu.replicaFlowControlIntegration.onBecameLeader(ctx)
@@ -176,10 +179,10 @@ func (r *Replica) updateProposalQuotaRaftMuLocked(
 			}
 			return
 		}
-	} else if r.replicaID == r.shMu.leaderID && r.mu.proposalQuota == nil && enabled {
+	} else if r.replicaID == r.mu.leaderID && r.mu.proposalQuota == nil && enabled {
 		r.mu.lastProposalAtTicks = r.mu.ticks // delay imminent quiescence
 		shouldInitQuotaPool = true
-	} else if r.replicaID != r.shMu.leaderID {
+	} else if r.replicaID != r.mu.leaderID {
 		// We're a follower and have been since the last update. Nothing to do.
 		return
 	}
