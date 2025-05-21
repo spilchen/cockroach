@@ -133,7 +133,7 @@ func MakeWorkload(platform Platform, opts BuildOptions, pkgDir string) error {
 	}
 	crossConfig := CrossConfigFromPlatform(platform)
 	configArg := fmt.Sprintf("--config=%s", crossConfig)
-	cmd := exec.Command("bazel", "build", "//pkg/cmd/workload", "-c", "opt", configArg, "--norun_validations")
+	cmd := exec.Command("bazel", "build", "//pkg/cmd/workload", "-c", "opt", configArg, "--config=ci")
 	cmd.Dir = pkgDir
 	cmd.Stderr = os.Stderr
 	log.Printf("%s", cmd.Args)
@@ -142,7 +142,7 @@ func MakeWorkload(platform Platform, opts BuildOptions, pkgDir string) error {
 		return errors.Wrapf(err, "failed to run %s: %s", cmd.Args, string(stdoutBytes))
 	}
 
-	bazelBin, err := getPathToBazelBin(opts.ExecFn, pkgDir, []string{"-c", "opt", configArg})
+	bazelBin, err := getPathToBazelBin(opts.ExecFn, pkgDir, []string{"-c", "opt", configArg, "--config=ci"})
 	if err != nil {
 		return err
 	}
@@ -176,9 +176,8 @@ func MakeRelease(platform Platform, opts BuildOptions, pkgDir string) error {
 		stampCommand = fmt.Sprintf("--workspace_status_command=./build/bazelutil/stamp.sh %s %s", targetTriple, opts.Channel)
 	}
 	buildArgs = append(buildArgs, stampCommand)
-	configs := []string{"-c", "opt", "--config=force_build_cdeps", "--config=pgo", fmt.Sprintf("--config=%s", CrossConfigFromPlatform(platform))}
+	configs := []string{"-c", "opt", "--config=ci", "--config=force_build_cdeps", fmt.Sprintf("--config=%s", CrossConfigFromPlatform(platform))}
 	buildArgs = append(buildArgs, configs...)
-	buildArgs = append(buildArgs, "--norun_validations")
 	cmd := exec.Command("bazel", buildArgs...)
 	cmd.Dir = pkgDir
 	cmd.Stderr = os.Stderr
@@ -361,8 +360,18 @@ func stageBinary(
 	}
 	dstBase = dstBase + suffix
 	dst := filepath.Join(dir, dstBase)
-
-	return copyFile(src, dst, 0755)
+	srcF, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer closeFileOrPanic(srcF)
+	dstF, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE, 0755)
+	if err != nil {
+		return err
+	}
+	defer closeFileOrPanic(dstF)
+	_, err = io.Copy(dstF, srcF)
+	return err
 }
 
 func stageLibraries(platform Platform, bazelBin string, dir string) error {
@@ -375,26 +384,28 @@ func stageLibraries(platform Platform, bazelBin string, dir string) error {
 	ext := SharedLibraryExtensionFromPlatform(platform)
 	for _, lib := range CRDBSharedLibraries {
 		src := filepath.Join(bazelBin, "c-deps", "libgeos_foreign", "lib", lib+ext)
+		srcF, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		defer closeFileOrPanic(srcF)
 		dst := filepath.Join(dir, filepath.Base(src))
-		if err := copyFile(src, dst, 0644); err != nil {
+		dstF, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE, 0644)
+		if err != nil {
+			return err
+		}
+		defer closeFileOrPanic(dstF)
+		_, err = io.Copy(dstF, srcF)
+		if err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func copyFile(srcPath, dstPath string, perm os.FileMode) error {
-	srcF, err := os.Open(srcPath)
+func closeFileOrPanic(f io.Closer) {
+	err := f.Close()
 	if err != nil {
-		return err
+		panic(errors.Wrapf(err, "could not close file"))
 	}
-	dstF, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE, perm)
-	if err != nil {
-		_ = srcF.Close()
-		return err
-	}
-	_, err = io.Copy(dstF, srcF)
-	err = errors.CombineErrors(err, dstF.Close())
-	err = errors.CombineErrors(err, srcF.Close())
-	return err
 }

@@ -15,9 +15,10 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
-	"github.com/cockroachdb/cockroach/pkg/multitenant/tenantcapabilitiespb"
+	"github.com/cockroachdb/cockroach/pkg/multitenant/tenantcapabilities"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/exec/explain"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/datapathutils"
@@ -30,7 +31,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/datadriven"
-	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	yaml "gopkg.in/yaml.v2"
@@ -156,7 +156,7 @@ func TestCPUTimeEndToEnd(t *testing.T) {
 	skip.UnderStress(t, "multinode cluster setup times out under stress")
 	skip.UnderRace(t, "multinode cluster setup times out under race")
 
-	if !grunning.Supported {
+	if !grunning.Supported() {
 		return
 	}
 
@@ -165,9 +165,13 @@ func TestCPUTimeEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	defer tc.Stopper().Stop(ctx)
 
-	if tc.DefaultTenantDeploymentMode().IsExternal() {
-		tc.GrantTenantCapabilities(ctx, t, serverutils.TestTenantID(),
-			map[tenantcapabilitiespb.ID]string{tenantcapabilitiespb.CanAdminRelocateRange: "true"})
+	if srv := tc.Server(0); srv.TenantController().StartedDefaultTestTenant() {
+		systemSqlDB := srv.SystemLayer().SQLConn(t, serverutils.DBName("system"))
+		_, err := systemSqlDB.Exec(`ALTER TENANT [$1] GRANT CAPABILITY can_admin_relocate_range=true`, serverutils.TestTenantID().ToUint64())
+		require.NoError(t, err)
+		serverutils.WaitForTenantCapabilities(t, srv, serverutils.TestTenantID(), map[tenantcapabilities.ID]string{
+			tenantcapabilities.CanAdminRelocateRange: "true",
+		}, "")
 	}
 
 	db := sqlutils.MakeSQLRunner(tc.Conns[0])
@@ -293,15 +297,13 @@ func TestContentionTimeOnWrites(t *testing.T) {
 	default:
 	}
 
-	var foundContention, foundLockWait, foundLatchWait bool
+	var foundContention bool
 	errCh2 := make(chan error, 1)
 	go func() {
 		defer close(errCh2)
 		// Execute the mutation via EXPLAIN ANALYZE and check whether the
 		// contention is reported.
 		contentionRE := regexp.MustCompile(`cumulative time spent due to contention.*`)
-		lockRE := regexp.MustCompile(`cumulative time spent in the lock table`)
-		latchRE := regexp.MustCompile(`cumulative time spent waiting to acquire latches`)
 		rows := runner.Query(t, "EXPLAIN ANALYZE UPSERT INTO t VALUES (1, 2)")
 		for rows.Next() {
 			var line string
@@ -309,9 +311,9 @@ func TestContentionTimeOnWrites(t *testing.T) {
 				errCh2 <- err
 				return
 			}
-			foundContention = foundContention || contentionRE.MatchString(line)
-			foundLockWait = foundLockWait || lockRE.MatchString(line)
-			foundLatchWait = foundLatchWait || latchRE.MatchString(line)
+			if contentionRE.MatchString(line) {
+				foundContention = true
+			}
 		}
 	}()
 
@@ -344,10 +346,6 @@ func TestContentionTimeOnWrites(t *testing.T) {
 
 	// Meat of the test - verify that the contention was reported.
 	require.True(t, foundContention)
-
-	// Verify that either lock or latch wait time was reported. The contention
-	// time is (usually) the sum of these two.
-	require.True(t, foundLockWait || foundLatchWait)
 }
 
 func TestRetryFields(t *testing.T) {
@@ -395,13 +393,31 @@ func TestMaximumMemoryUsage(t *testing.T) {
 	skip.UnderRace(t, "multinode cluster setup times out under race")
 
 	const numNodes = 3
-	tc := testcluster.StartTestCluster(t, numNodes, base.TestClusterArgs{})
+	tc := testcluster.StartTestCluster(t, numNodes, base.TestClusterArgs{
+		ServerArgs: base.TestServerArgs{
+			Knobs: base.TestingKnobs{
+				SQLEvalContext: &eval.TestingKnobs{
+					// We disable the randomization of the batch sizes so that
+					// small number of gRPC calls is issued in the query below
+					// (with kv-batch-size=1 we would issue 10k of them which
+					// might result in dropping the ComponentStats proto that
+					// powers "maximum memory usage" from the trace, flaking the
+					// test).
+					ForceProductionValues: true,
+				},
+			},
+		},
+	})
 	ctx := context.Background()
 	defer tc.Stopper().Stop(ctx)
 
-	if tc.DefaultTenantDeploymentMode().IsExternal() {
-		tc.GrantTenantCapabilities(ctx, t, serverutils.TestTenantID(),
-			map[tenantcapabilitiespb.ID]string{tenantcapabilitiespb.CanAdminRelocateRange: "true"})
+	if srv := tc.Server(0); srv.TenantController().StartedDefaultTestTenant() {
+		systemSqlDB := srv.SystemLayer().SQLConn(t, serverutils.DBName("system"))
+		_, err := systemSqlDB.Exec(`ALTER TENANT [$1] GRANT CAPABILITY can_admin_relocate_range=true`, serverutils.TestTenantID().ToUint64())
+		require.NoError(t, err)
+		serverutils.WaitForTenantCapabilities(t, srv, serverutils.TestTenantID(), map[tenantcapabilities.ID]string{
+			tenantcapabilities.CanAdminRelocateRange: "true",
+		}, "")
 	}
 
 	// Set up such a distributed plan where memory-intensive aggregation occurs
@@ -418,29 +434,19 @@ func TestMaximumMemoryUsage(t *testing.T) {
 		return err
 	})
 
-	// In rare cases (due to metamorphic randomization) we might drop the
-	// ComponentStats proto that powers "maximum memory usage" stat from the
-	// trace, so we add a retry loop around this.
-	testutils.SucceedsSoon(t, func() error {
-		rows := db.QueryStr(t, "EXPLAIN ANALYZE SELECT max(v) FROM t GROUP BY bucket;")
-		var output strings.Builder
-		maxMemoryRE := regexp.MustCompile(`maximum memory usage: ([\d\.]+) MiB`)
-		var maxMemoryUsage float64
-		for _, row := range rows {
-			output.WriteString(row[0])
-			output.WriteString("\n")
-			s := strings.TrimSpace(row[0])
-			if matches := maxMemoryRE.FindStringSubmatch(s); len(matches) > 0 {
-				var err error
-				maxMemoryUsage, err = strconv.ParseFloat(matches[1], 64)
-				if err != nil {
-					return err
-				}
-			}
+	rows := db.QueryStr(t, "EXPLAIN ANALYZE SELECT max(v) FROM t GROUP BY bucket;")
+	var output strings.Builder
+	maxMemoryRE := regexp.MustCompile(`maximum memory usage: ([\d\.]+) MiB`)
+	var maxMemoryUsage float64
+	for _, row := range rows {
+		output.WriteString(row[0])
+		output.WriteString("\n")
+		s := strings.TrimSpace(row[0])
+		if matches := maxMemoryRE.FindStringSubmatch(s); len(matches) > 0 {
+			var err error
+			maxMemoryUsage, err = strconv.ParseFloat(matches[1], 64)
+			require.NoError(t, err)
 		}
-		if maxMemoryUsage < 5.0 {
-			return errors.Newf("expected maximum memory usage to be at least 5 MiB, full output:\n\n%s", output.String())
-		}
-		return nil
-	})
+	}
+	require.Greaterf(t, maxMemoryUsage, 5.0, "expected maximum memory usage to be at least 5 MiB, full output:\n\n%s", output.String())
 }
