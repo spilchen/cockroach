@@ -2020,7 +2020,7 @@ root
                      ├── customer_id:14 = 2
                      └── customer_id:14 IS DISTINCT FROM CAST(NULL AS INT8)
 
-# Show that optimization barriers are added to prevent reording of predicates if
+# Show that optimization barriers are added to prevent reordering of predicates if
 # we use any non-leakproof functions in the WHERE clause.
 
 exec-ddl
@@ -2159,3 +2159,26 @@ project
       │              └── user_has_access:3
       └── filters
            └── (y:2 = 20) AND (power(1E+400, 1) > 0)
+
+# Barrier needed. Filters are added outside of a WHERE (as JOIN predicates).
+build
+SELECT * FROM ob t1 INNER JOIN ob t2 ON t1.y = 20 AND t2.y/0 = 0;
+----
+project
+ ├── columns: x:1!null y:2!null user_has_access:3!null x:6!null y:7 user_has_access:8!null
+ └── inner-join (cross)
+      ├── columns: x:1!null y:2!null user_has_access:3!null crdb_internal_mvcc_timestamp:4 tableoid:5 x:6!null y:7 user_has_access:8!null crdb_internal_mvcc_timestamp:9 tableoid:10
+      ├── select
+      │    ├── columns: x:1!null y:2 user_has_access:3!null crdb_internal_mvcc_timestamp:4 tableoid:5
+      │    ├── scan ob
+      │    │    └── columns: x:1!null y:2 user_has_access:3 crdb_internal_mvcc_timestamp:4 tableoid:5
+      │    └── filters
+      │         └── user_has_access:3
+      ├── select
+      │    ├── columns: x:6!null y:7 user_has_access:8!null crdb_internal_mvcc_timestamp:9 tableoid:10
+      │    ├── scan ob
+      │    │    └── columns: x:6!null y:7 user_has_access:8 crdb_internal_mvcc_timestamp:9 tableoid:10
+      │    └── filters
+      │         └── user_has_access:8
+      └── filters
+           └── (y:2 = 20) AND ((y:7 / 0) = 0)
