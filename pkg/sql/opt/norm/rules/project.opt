@@ -352,17 +352,14 @@ $input
     $passthrough
 )
 
-# SPILLY - fix up the priority of everything
-# SPILLY - make the names of all of the rules consistent
-# SPILLY comment
-[RemoveBarrierFromProjectionIfLeakProofExpressionsAreUsed, Normalize]
+# EliminateProjectBarrier removes a Barrier operator from under a Project when
+# all projection expressions are fully leak-proof and the Barrier is marked for
+# skipping.
+[EliminateProjectBarrier, Normalize]
 (Project
-  (Barrier
-    $input:*
-    $private:* & (SkipBarrierIfLeakProof $private)
-  )
-  $projections:* & (HasAllLeakProofProjections $projections)
-  $passthrough:*
+    (Barrier $input:* $private:* & (IsBarrierSkippable $private))
+    $projections:* & (HasAllLeakProofProjections $projections)
+    $passthrough:*
 )
 =>
 (Project $input $projections $passthrough)

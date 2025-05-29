@@ -2044,14 +2044,14 @@ sort
            └── y:2 IS NULL [as=nulls_ordering_y:7, outer=(2)]
 
 # --------------------------------------------------
-# RemoveBarrierFromProjectionIfLeakProofExpressionsAreUsed
+# EliminateProjectBarrier
 # --------------------------------------------------
 
 exec-ddl
 SET ROLE alice;
 ----
 
-norm expect=RemoveBarrierFromProjectionIfLeakProofExpressionsAreUsed
+norm expect=EliminateProjectBarrier
 SELECT * FROM rls;
 ----
 select
@@ -2065,11 +2065,11 @@ select
  └── filters
       └── alice_has_access:3 [outer=(3), constraints=(/3: [/true - /true]; tight), fd=()-->(3)]
 
-norm expect-not=RemoveBarrierFromProjectionIfLeakProofExpressionsAreUsed
+norm expect-not=EliminateProjectBarrier
 SELECT y AS bucket
 FROM rls
 GROUP BY bucket
-HAVING MAX(CASE WHEN y = 20 THEN y/0 ELSE 0 END) > 0;
+HAVING max(CASE WHEN y = 20 THEN y/0 ELSE 0 END) > 0;
 ----
 project
  ├── columns: bucket:2
@@ -2112,11 +2112,11 @@ project
       └── filters
            └── max:7 > 0 [outer=(7), immutable, constraints=(/7: (/0 - ]; tight)]
 
-norm expect=RemoveBarrierFromProjectionIfLeakProofExpressionsAreUsed
+norm expect=EliminateProjectBarrier
 SELECT y AS bucket
 FROM rls
 GROUP BY bucket
-HAVING MAX(CASE WHEN y = 20 THEN y ELSE 0 END) > 0;
+HAVING max(CASE WHEN y = 20 THEN y ELSE 0 END) > 0;
 ----
 project
  ├── columns: bucket:2

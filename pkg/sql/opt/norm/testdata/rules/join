@@ -4549,176 +4549,14 @@ sort
            └── s:4 [as=column3:10, outer=(4)]
 
 # --------------------------------------------------
-# RemoveBarriersFromJoinIfLeakProofFiltersAreUsed
+# EliminateJoinLeftBarrier / EliminateJoinRightBarrier
 # --------------------------------------------------
 
 exec-ddl
 SET ROLE alice;
 ----
 
-norm expect-not=RemoveBarriersFromJoinIfLeakProofFiltersAreUsed
-SELECT * FROM rls t1 INNER JOIN rls t2 ON t1.y = 20 AND t2.y/0 = 0;
-----
-project
- ├── columns: x:1!null y:2!null alice_has_access:3!null x:6!null y:7 alice_has_access:8!null
- ├── immutable
- ├── key: (1,6)
- ├── fd: ()-->(2,3,8), (6)-->(7)
- └── inner-join (cross)
-      ├── columns: x:1!null y:2!null alice_has_access:3!null x:6!null y:7 alice_has_access:8!null crdb_internal_mvcc_timestamp:9 tableoid:10
-      ├── immutable
-      ├── key: (1,6)
-      ├── fd: ()-->(2,3,8), (6)-->(7,9,10)
-      ├── select
-      │    ├── columns: x:1!null y:2!null alice_has_access:3!null
-      │    ├── key: (1)
-      │    ├── fd: ()-->(2,3)
-      │    ├── scan rls
-      │    │    ├── columns: x:1!null y:2 alice_has_access:3
-      │    │    ├── key: (1)
-      │    │    └── fd: (1)-->(2,3)
-      │    └── filters
-      │         ├── alice_has_access:3 [outer=(3), constraints=(/3: [/true - /true]; tight), fd=()-->(3)]
-      │         └── y:2 = 20 [outer=(2), constraints=(/2: [/20 - /20]; tight), fd=()-->(2)]
-      ├── select
-      │    ├── columns: x:6!null y:7 alice_has_access:8!null crdb_internal_mvcc_timestamp:9 tableoid:10
-      │    ├── immutable
-      │    ├── key: (6)
-      │    ├── fd: ()-->(8), (6)-->(7,9,10)
-      │    ├── barrier
-      │    │    ├── columns: x:6!null y:7 alice_has_access:8!null crdb_internal_mvcc_timestamp:9 tableoid:10
-      │    │    ├── key: (6)
-      │    │    ├── fd: ()-->(8), (6)-->(7,9,10)
-      │    │    └── select
-      │    │         ├── columns: x:6!null y:7 alice_has_access:8!null crdb_internal_mvcc_timestamp:9 tableoid:10
-      │    │         ├── key: (6)
-      │    │         ├── fd: ()-->(8), (6)-->(7,9,10)
-      │    │         ├── scan rls
-      │    │         │    ├── columns: x:6!null y:7 alice_has_access:8 crdb_internal_mvcc_timestamp:9 tableoid:10
-      │    │         │    ├── key: (6)
-      │    │         │    └── fd: (6)-->(7-10)
-      │    │         └── filters
-      │    │              └── alice_has_access:8 [outer=(8), constraints=(/8: [/true - /true]; tight), fd=()-->(8)]
-      │    └── filters
-      │         └── (y:7 / 0) = 0 [outer=(7), immutable]
-      └── filters (true)
-
-norm expect=RemoveBarriersFromJoinIfLeakProofFiltersAreUsed
-SELECT * FROM rls t1 INNER JOIN rls t2 ON t1.y = 20 AND true;
-----
-inner-join (cross)
- ├── columns: x:1!null y:2!null alice_has_access:3!null x:6!null y:7 alice_has_access:8!null
- ├── key: (1,6)
- ├── fd: ()-->(2,3,8), (6)-->(7)
- ├── select
- │    ├── columns: x:1!null y:2!null alice_has_access:3!null
- │    ├── key: (1)
- │    ├── fd: ()-->(2,3)
- │    ├── scan rls
- │    │    ├── columns: x:1!null y:2 alice_has_access:3
- │    │    ├── key: (1)
- │    │    └── fd: (1)-->(2,3)
- │    └── filters
- │         ├── alice_has_access:3 [outer=(3), constraints=(/3: [/true - /true]; tight), fd=()-->(3)]
- │         └── y:2 = 20 [outer=(2), constraints=(/2: [/20 - /20]; tight), fd=()-->(2)]
- ├── select
- │    ├── columns: x:6!null y:7 alice_has_access:8!null
- │    ├── key: (6)
- │    ├── fd: ()-->(8), (6)-->(7)
- │    ├── scan rls
- │    │    ├── columns: x:6!null y:7 alice_has_access:8
- │    │    ├── key: (6)
- │    │    └── fd: (6)-->(7,8)
- │    └── filters
- │         └── alice_has_access:8 [outer=(8), constraints=(/8: [/true - /true]; tight), fd=()-->(8)]
- └── filters (true)
-
-# --------------------------------------------------
-# RemoveLeftBarrierFromJoinIfLeakProofFiltersAreUsed
-# --------------------------------------------------
-
-norm expect-not=RemoveLeftBarrierFromJoinIfLeakProofFiltersAreUsed
-SELECT * FROM rls t1 INNER JOIN a t2 ON t1.y = 20 AND t1.y/0 = 0 AND t2.k > 0;
-----
-project
- ├── columns: x:1!null y:2!null alice_has_access:3!null k:6!null i:7 f:8!null s:9 j:10
- ├── immutable
- ├── key: (1,6)
- ├── fd: ()-->(2,3), (6)-->(7-10)
- └── inner-join (cross)
-      ├── columns: x:1!null y:2!null alice_has_access:3!null rls.crdb_internal_mvcc_timestamp:4 rls.tableoid:5 k:6!null i:7 f:8!null s:9 j:10
-      ├── immutable
-      ├── key: (1,6)
-      ├── fd: ()-->(2,3), (1)-->(4,5), (6)-->(7-10)
-      ├── select
-      │    ├── columns: x:1!null y:2!null alice_has_access:3!null rls.crdb_internal_mvcc_timestamp:4 rls.tableoid:5
-      │    ├── immutable
-      │    ├── key: (1)
-      │    ├── fd: ()-->(2,3), (1)-->(4,5)
-      │    ├── barrier
-      │    │    ├── columns: x:1!null y:2 alice_has_access:3!null rls.crdb_internal_mvcc_timestamp:4 rls.tableoid:5
-      │    │    ├── key: (1)
-      │    │    ├── fd: ()-->(3), (1)-->(2,4,5)
-      │    │    └── select
-      │    │         ├── columns: x:1!null y:2 alice_has_access:3!null rls.crdb_internal_mvcc_timestamp:4 rls.tableoid:5
-      │    │         ├── key: (1)
-      │    │         ├── fd: ()-->(3), (1)-->(2,4,5)
-      │    │         ├── scan rls
-      │    │         │    ├── columns: x:1!null y:2 alice_has_access:3 rls.crdb_internal_mvcc_timestamp:4 rls.tableoid:5
-      │    │         │    ├── key: (1)
-      │    │         │    └── fd: (1)-->(2-5)
-      │    │         └── filters
-      │    │              └── alice_has_access:3 [outer=(3), constraints=(/3: [/true - /true]; tight), fd=()-->(3)]
-      │    └── filters
-      │         ├── y:2 = 20 [outer=(2), constraints=(/2: [/20 - /20]; tight), fd=()-->(2)]
-      │         └── (20 / 0) = 0 [immutable]
-      ├── select
-      │    ├── columns: k:6!null i:7 f:8!null s:9 j:10
-      │    ├── key: (6)
-      │    ├── fd: (6)-->(7-10)
-      │    ├── scan a [as=t2]
-      │    │    ├── columns: k:6!null i:7 f:8!null s:9 j:10
-      │    │    ├── key: (6)
-      │    │    └── fd: (6)-->(7-10)
-      │    └── filters
-      │         └── k:6 > 0 [outer=(6), constraints=(/6: [/1 - ]; tight)]
-      └── filters (true)
-
-norm expect=RemoveLeftBarrierFromJoinIfLeakProofFiltersAreUsed
-SELECT * FROM rls t1 INNER JOIN a t2 ON t1.y = 20 AND true AND t2.k > 0;
-----
-inner-join (cross)
- ├── columns: x:1!null y:2!null alice_has_access:3!null k:6!null i:7 f:8!null s:9 j:10
- ├── key: (1,6)
- ├── fd: ()-->(2,3), (6)-->(7-10)
- ├── select
- │    ├── columns: x:1!null y:2!null alice_has_access:3!null
- │    ├── key: (1)
- │    ├── fd: ()-->(2,3)
- │    ├── scan rls
- │    │    ├── columns: x:1!null y:2 alice_has_access:3
- │    │    ├── key: (1)
- │    │    └── fd: (1)-->(2,3)
- │    └── filters
- │         ├── alice_has_access:3 [outer=(3), constraints=(/3: [/true - /true]; tight), fd=()-->(3)]
- │         └── y:2 = 20 [outer=(2), constraints=(/2: [/20 - /20]; tight), fd=()-->(2)]
- ├── select
- │    ├── columns: k:6!null i:7 f:8!null s:9 j:10
- │    ├── key: (6)
- │    ├── fd: (6)-->(7-10)
- │    ├── scan a [as=t2]
- │    │    ├── columns: k:6!null i:7 f:8!null s:9 j:10
- │    │    ├── key: (6)
- │    │    └── fd: (6)-->(7-10)
- │    └── filters
- │         └── k:6 > 0 [outer=(6), constraints=(/6: [/1 - ]; tight)]
- └── filters (true)
-
-# --------------------------------------------------
-# RemoveRightBarrierFromJoinIfLeakProofFiltersAreUsed
-# --------------------------------------------------
-
-norm expect-not=RemoveRightBarrierFromJoinIfLeakProofFiltersAreUsed
+norm expect-not=(EliminateJoinRightBarrier,EliminateJoinLeftBarrier)
 SELECT * FROM a t2 INNER JOIN rls t1 ON t1.y = 20 AND t1.y/0 = 0 AND t2.k > 0;
 ----
 project
@@ -4765,32 +4603,66 @@ project
       │         └── (20 / 0) = 0 [immutable]
       └── filters (true)
 
-norm expect=RemoveRightBarrierFromJoinIfLeakProofFiltersAreUsed
-SELECT * FROM a t2 INNER JOIN rls t1 ON t1.y = 20 AND true AND t2.k > 0;
+norm expect=EliminateJoinRightBarrier
+SELECT * FROM rls t1 INNER JOIN rls t2 ON t1.y = 20 AND t1.x = t2.x;
 ----
-inner-join (cross)
- ├── columns: k:1!null i:2 f:3!null s:4 j:5 x:8!null y:9!null alice_has_access:10!null
- ├── key: (1,8)
- ├── fd: ()-->(9,10), (1)-->(2-5)
+inner-join (hash)
+ ├── columns: x:1!null y:2!null alice_has_access:3!null x:6!null y:7 alice_has_access:8!null
+ ├── multiplicity: left-rows(zero-or-one), right-rows(zero-or-one)
+ ├── key: (6)
+ ├── fd: ()-->(2,3,7,8), (1)==(6), (6)==(1), (2)==(7), (7)==(2), (3)==(8), (8)==(3)
  ├── select
- │    ├── columns: k:1!null i:2 f:3!null s:4 j:5
+ │    ├── columns: x:1!null y:2!null alice_has_access:3!null
  │    ├── key: (1)
- │    ├── fd: (1)-->(2-5)
- │    ├── scan a [as=t2]
- │    │    ├── columns: k:1!null i:2 f:3!null s:4 j:5
- │    │    ├── key: (1)
- │    │    └── fd: (1)-->(2-5)
- │    └── filters
- │         └── k:1 > 0 [outer=(1), constraints=(/1: [/1 - ]; tight)]
- ├── select
- │    ├── columns: x:8!null y:9!null alice_has_access:10!null
- │    ├── key: (8)
- │    ├── fd: ()-->(9,10)
+ │    ├── fd: ()-->(2,3)
  │    ├── scan rls
- │    │    ├── columns: x:8!null y:9 alice_has_access:10
- │    │    ├── key: (8)
- │    │    └── fd: (8)-->(9,10)
+ │    │    ├── columns: x:1!null y:2 alice_has_access:3
+ │    │    ├── key: (1)
+ │    │    └── fd: (1)-->(2,3)
  │    └── filters
- │         ├── alice_has_access:10 [outer=(10), constraints=(/10: [/true - /true]; tight), fd=()-->(10)]
- │         └── y:9 = 20 [outer=(9), constraints=(/9: [/20 - /20]; tight), fd=()-->(9)]
- └── filters (true)
+ │         ├── alice_has_access:3 [outer=(3), constraints=(/3: [/true - /true]; tight), fd=()-->(3)]
+ │         └── y:2 = 20 [outer=(2), constraints=(/2: [/20 - /20]; tight), fd=()-->(2)]
+ ├── select
+ │    ├── columns: x:6!null y:7 alice_has_access:8!null
+ │    ├── key: (6)
+ │    ├── fd: ()-->(8), (6)-->(7)
+ │    ├── scan rls
+ │    │    ├── columns: x:6!null y:7 alice_has_access:8
+ │    │    ├── key: (6)
+ │    │    └── fd: (6)-->(7,8)
+ │    └── filters
+ │         └── alice_has_access:8 [outer=(8), constraints=(/8: [/true - /true]; tight), fd=()-->(8)]
+ └── filters
+      └── x:1 = x:6 [outer=(1,6), constraints=(/1: (/NULL - ]; /6: (/NULL - ]), fd=(1)==(6), (6)==(1)]
+
+norm expect=EliminateJoinLeftBarrier
+SELECT * FROM rls t1 INNER JOIN rls t2 ON t2.y = 20 AND t1.x = t2.x;
+----
+inner-join (hash)
+ ├── columns: x:1!null y:2 alice_has_access:3!null x:6!null y:7!null alice_has_access:8!null
+ ├── multiplicity: left-rows(zero-or-one), right-rows(zero-or-one)
+ ├── key: (6)
+ ├── fd: ()-->(2,3,7,8), (1)==(6), (6)==(1), (2)==(7), (7)==(2), (3)==(8), (8)==(3)
+ ├── select
+ │    ├── columns: x:1!null y:2 alice_has_access:3!null
+ │    ├── key: (1)
+ │    ├── fd: ()-->(3), (1)-->(2)
+ │    ├── scan rls
+ │    │    ├── columns: x:1!null y:2 alice_has_access:3
+ │    │    ├── key: (1)
+ │    │    └── fd: (1)-->(2,3)
+ │    └── filters
+ │         └── alice_has_access:3 [outer=(3), constraints=(/3: [/true - /true]; tight), fd=()-->(3)]
+ ├── select
+ │    ├── columns: x:6!null y:7!null alice_has_access:8!null
+ │    ├── key: (6)
+ │    ├── fd: ()-->(7,8)
+ │    ├── scan rls
+ │    │    ├── columns: x:6!null y:7 alice_has_access:8
+ │    │    ├── key: (6)
+ │    │    └── fd: (6)-->(7,8)
+ │    └── filters
+ │         ├── alice_has_access:8 [outer=(8), constraints=(/8: [/true - /true]; tight), fd=()-->(8)]
+ │         └── y:7 = 20 [outer=(7), constraints=(/7: [/20 - /20]; tight), fd=()-->(7)]
+ └── filters
+      └── x:1 = x:6 [outer=(1,6), constraints=(/1: (/NULL - ]; /6: (/NULL - ]), fd=(1)==(6), (6)==(1)]

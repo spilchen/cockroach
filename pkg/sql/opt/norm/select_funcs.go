@@ -118,38 +118,6 @@ func (c *CustomFuncs) CanConsolidateFilters(filters memo.FiltersExpr) bool {
 	return false
 }
 
-func (c *CustomFuncs) SkipBarrierIfLeakProof(priv *memo.BarrierPrivate) bool {
-	return priv.SkipIfLeakProof
-}
-
-// SPILLY - rename to be consistent
-func (c *CustomFuncs) HasAllLeakProof(filters memo.FiltersExpr) bool {
-	for i := range filters {
-		if !filters[i].ScalarProps().VolatilitySet.IsLeakproof() {
-			return false
-		}
-	}
-	return true
-}
-
-func (c *CustomFuncs) HasAllLeakProofProjections(projections memo.ProjectionsExpr) bool {
-	for i := range projections {
-		if !projections[i].ScalarProps().VolatilitySet.IsLeakproof() {
-			return false
-		}
-	}
-	return true
-}
-
-// SPILLY - function prologs and consider location depending on usage
-func (c *CustomFuncs) RemoveBarrierIfLeakProof(ip memo.RelExpr) memo.RelExpr {
-	barrier, _ := ip.(*memo.BarrierExpr)
-	if barrier == nil || !barrier.SkipIfLeakProof {
-		return ip
-	}
-	return barrier.Input
-}
-
 // canConsolidateFilter determines whether a filter condition can be
 // consolidated. Filters can be consolidated if they have tight constraints
 // and contain a single variable. Examples of such filters include x < 5 and

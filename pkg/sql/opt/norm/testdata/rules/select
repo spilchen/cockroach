@@ -2503,14 +2503,14 @@ project
            └── row_num:25 <= 100 [outer=(25), constraints=(/25: (/NULL - /100]; tight)]
 
 # --------------------------------------------------
-# RemoveBarrierIfLeakProofFilters
+# EliminateSelectBarrier
 # --------------------------------------------------
 
 exec-ddl
 SET ROLE alice;
 ----
 
-norm expect-not=RemoveBarrierIfLeakProofFilters
+norm expect-not=EliminateSelectBarrier
 SELECT * FROM rls WHERE y = 20 AND y/0 = 0;
 ----
 project
@@ -2541,7 +2541,7 @@ project
            ├── y:2 = 20 [outer=(2), constraints=(/2: [/20 - /20]; tight), fd=()-->(2)]
            └── (20 / 0) = 0 [immutable]
 
-norm expect=RemoveBarrierIfLeakProofFilters
+norm expect=EliminateSelectBarrier
 SELECT * FROM rls WHERE y = 20;
 ----
 select

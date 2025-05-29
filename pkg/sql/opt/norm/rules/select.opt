@@ -49,39 +49,6 @@
 =>
 (Select $input (ConsolidateFilters $filters))
 
-# SPILLY - comment and find proper location
-# [RemoveBarrierIfLeakProofFilters, Normalize, HighPriority]
-# (Select
-#   (Barrier
-#     $input:*
-#     $private:* & (SkipBarrierIfLeakProof $private)
-#   )
-#   $filters:* & (HasAllLeakProof $filters)
-# )
-# =>
-# (Select $input $filters)
-
-# Comment. I opted for this one because it's closer to the join case
-[RemoveBarrierIfLeakProofFilters, Normalize, HighPriority]
-(Select
-  (Barrier
-    $input:*
-    $private:* & (SkipBarrierIfLeakProof $private)
-  )
-  $filters:* & (HasAllLeakProof $filters)
-)
-=>
-(Select $input $filters)
-
-# I had this, but it got really slow!!!
-# [RemoveBarrierIfLeakProofFilters, Normalize, HighPriority]
-# (Select
-#   $input:*
-#   $filters:* & (HasAllLeakProof $filters)
-# )
-# =>
-# (Select (RemoveBarrierIfLeakProof $input) $filters)
-
 # DeduplicateSelectFilters removes duplicate filters in a Select. Duplicate
 # filters are usually eliminated by a combination of filter-simplifying rules,
 # like InlineConstVar, SimplifySelectFilters, and ConsolidateSelectFilters.
@@ -481,3 +448,14 @@ $input
     )
     (RemoveFiltersItem $filter $item)
 )
+
+# EliminateSelectBarrier removes a Barrier operator from under a Select when
+# all filter expressions are fully leak-proof and the Barrier is marked for
+# skipping.
+[EliminateSelectBarrier, Normalize]
+(Select
+    (Barrier $input:* $private:* & (IsBarrierSkippable $private))
+    $filters:* & (HasAllLeakProofFilters $filters)
+)
+=>
+(Select $input $filters)
