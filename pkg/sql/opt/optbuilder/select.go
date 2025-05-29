@@ -1363,11 +1363,12 @@ func (b *Builder) buildWhere(where *tree.Where, inScope *scope, colRefs *opt.Col
 	// leaking sensitive information. Since RLS metadata is updated lazily, we can
 	// check whether any RLS tables were referenced by seeing if the metadata has
 	// been initialized.
-	if b.factory.Metadata().GetRLSMeta().IsInitialized {
-		if !filterItem.ScalarProps().VolatilitySet.IsLeakproof() {
-			b.addBarrier(inScope)
-		}
-	}
+	// SPILLY - remove me
+	//if b.factory.Metadata().GetRLSMeta().IsInitialized {
+	//	if !filterItem.ScalarProps().VolatilitySet.IsLeakproof() {
+	//		b.addBarrier(inScope)
+	//	}
+	//}
 
 	// Wrap the filter in a FiltersOp.
 	inScope.expr = b.factory.ConstructSelect(

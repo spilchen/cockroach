@@ -113,6 +113,85 @@
     $private
 )
 
+# SPILLY - comment on usage
+# [RemoveBarriersFromJoinIfLeakProofFiltersAreUsed, Normalize, HighPriority]
+# (InnerJoin | InnerJoinApply | SemiJoin | SemiJoinApply
+#  $left:*
+#  $right:*
+#  $on:* & (HasAllLeakProof $on)
+#  $private:*
+# )
+# =>
+# ((OpName)
+#    (RemoveBarrierIfLeakProof $left)
+#    (RemoveBarrierIfLeakProof $right)
+#    $on
+#    $private
+# )
+
+# [RemoveBarriersFromJoinIfLeakProofFiltersAreUsed, Normalize, HighPriority]
+# (InnerJoin | InnerJoinApply | SemiJoin | SemiJoinApply
+#  (Barrier
+#    $left:*
+#    $leftBarrierPrivate:* & (SkipBarrierIfLeakProof $leftBarrierPrivate)
+#  )
+#  (Barrier
+#    $right:*
+#    $rightBarrierPrivate:* & (SkipBarrierIfLeakProof $rightBarrierPrivate)
+#  )
+#  $on:* & (HasAllLeakProof $on)
+#  $private:*
+# )
+# =>
+# ((OpName)
+#    (RemoveBarrierIfLeakProof $left)
+#    (RemoveBarrierIfLeakProof $right)
+#    $on
+#    $private
+# )
+
+[RemoveBarriersFromJoinIfLeakProofFiltersAreUsed, Normalize, HighPriority]
+(InnerJoin | InnerJoinApply | SemiJoin | SemiJoinApply
+ (Barrier
+   $left:*
+   $leftBarrierPrivate:* & (SkipBarrierIfLeakProof $leftBarrierPrivate)
+ )
+ (Barrier
+   $right:*
+   $rightBarrierPrivate:* & (SkipBarrierIfLeakProof $rightBarrierPrivate)
+ )
+ $on:* & (HasAllLeakProof $on)
+ $private:*
+)
+=>
+((OpName) $left $right $on $private)
+
+[RemoveLeftBarrierFromJoinIfLeakProofFiltersAreUsed, Normalize, HighPriority]
+(InnerJoin | InnerJoinApply | SemiJoin | SemiJoinApply
+ (Barrier
+   $left:*
+   $leftBarrierPrivate:* & (SkipBarrierIfLeakProof $leftBarrierPrivate)
+ )
+ $right:*
+ $on:* & (HasAllLeakProof $on)
+ $private:*
+)
+=>
+((OpName) $left $right $on $private)
+
+[RemoveRightBarrierFromJoinIfLeakProofFiltersAreUsed, Normalize, HighPriority]
+(InnerJoin | InnerJoinApply | SemiJoin | SemiJoinApply
+ $left:*
+ (Barrier
+   $right:*
+   $leftBarrierPrivate:* & (SkipBarrierIfLeakProof $leftBarrierPrivate)
+ )
+ $on:* & (HasAllLeakProof $on)
+ $private:*
+)
+=>
+((OpName) $left $right $on $private)
+
 # MapFilterIntoJoinLeft maps a filter that is not bound by the left side of
 # the join to use the columns from the left side. This will allow
 # the filter to be pushed down by the PushFilterIntoJoinLeft rule.

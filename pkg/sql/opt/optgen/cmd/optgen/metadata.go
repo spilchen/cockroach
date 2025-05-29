@@ -252,6 +252,7 @@ func newMetadata(compiled *lang.CompiledExpr, pkg string) *metadata {
 		"LiteralRows":          {fullName: "opt.LiteralRows", isExpr: true, isPointer: true},
 		"Distribution":         {fullName: "physical.Distribution", passByVal: true},
 		"TreeCreateView":       {fullName: "tree.CreateView", isPointer: true, usePointerIntern: true},
+		//"Barrier":              {fullName: "memo.Barrier"},
 	}
 
 	// Add types of generated op and private structs.

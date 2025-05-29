@@ -32,6 +32,8 @@ func (b *Builder) addRowLevelSecurityFilter(
 	if scalar != nil {
 		tableScope.expr = b.factory.ConstructSelect(tableScope.expr,
 			memo.FiltersExpr{b.factory.ConstructFiltersItem(scalar)})
+		// SPILLY - comment on this
+		tableScope.expr = b.factory.ConstructBarrier(tableScope.expr, &memo.BarrierPrivate{SkipIfLeakProof: true})
 	}
 }
 

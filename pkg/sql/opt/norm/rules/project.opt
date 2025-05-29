@@ -351,3 +351,18 @@ $input
     (FoldIsNullProjectionsItems $projections $input)
     $passthrough
 )
+
+# SPILLY - fix up the priority of everything
+# SPILLY - make the names of all of the rules consistent
+# SPILLY comment
+[RemoveBarrierFromProjectionIfLeakProofExpressionsAreUsed, Normalize]
+(Project
+  (Barrier
+    $input:*
+    $private:* & (SkipBarrierIfLeakProof $private)
+  )
+  $projections:* & (HasAllLeakProofProjections $projections)
+  $passthrough:*
+)
+=>
+(Project $input $projections $passthrough)
