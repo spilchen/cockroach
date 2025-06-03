@@ -297,7 +297,10 @@ func ReplaceColumnVars(
 
 		colExists, colIsAccessible, colID, colType := columnLookupFn(c.ColumnName)
 		if !colExists {
-			return false, nil, pgerror.Newf(pgcode.UndefinedColumn,
+			//return false, nil, pgerror.Newf(pgcode.UndefinedColumn,
+			//	"column %q does not exist, referenced in %q", c.ColumnName, rootExpr.String())
+			// SPILLY - switch to an assertion to get a big callstack
+			return false, nil, errors.AssertionFailedf(
 				"column %q does not exist, referenced in %q", c.ColumnName, rootExpr.String())
 		}
 		if !colIsAccessible {

@@ -6,6 +6,8 @@
 package tabledesc
 
 import (
+	"regexp"
+
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -1200,6 +1202,13 @@ func (desc *wrapper) validateColumns() error {
 	for _, column := range desc.DeletableColumns() {
 		if len(column.GetName()) == 0 {
 			return pgerror.Newf(pgcode.Syntax, "empty column name")
+		}
+		if column.Public() {
+			// SPILLY - consider leaving this in full time maybe with a test guard?
+			var placeholderPattern = regexp.MustCompile(`^crdb_internal_column_\d+_name_placeholder$`)
+			if placeholderPattern.MatchString(column.GetName()) {
+				return errors.AssertionFailedf("column made public with placeholder name: %s", column.GetName())
+			}
 		}
 		if column.GetID() == 0 {
 			return errors.AssertionFailedf("invalid column ID %d", errors.Safe(column.GetID()))

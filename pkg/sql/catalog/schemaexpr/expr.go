@@ -306,7 +306,7 @@ func formatExprForDisplayImpl(
 ) (string, error) {
 	replacedExpr, err := parseExprForDisplayImpl(ctx, lookupFn, exprStr, evalCtx, semaCtx, fmtFlags)
 	if err != nil {
-		return "", err
+		return "", errors.Wrapf(err, "failed to parse expression %s", exprStr)
 	}
 	f := tree.NewFmtCtx(
 		fmtFlags,
@@ -334,7 +334,7 @@ func parseExprForDisplayImpl(
 ) (tree.Expr, error) {
 	expr, err := deserializeExprForFormatting(ctx, lookupFn, exprStr, evalCtx, semaCtx, fmtFlags)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to deserialize expression %s", exprStr)
 	}
 	// Replace any IDs in the expr with their fully qualified names.
 	return ReplaceSequenceIDsWithFQNames(ctx, expr, semaCtx)
@@ -357,7 +357,7 @@ func deserializeExprForFormatting(
 	// type-checked.
 	replacedExpr, _, err := ReplaceColumnVars(expr, lookupFn)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to replace column variables in expression %s", exprStr)
 	}
 
 	// Type-check the expression to resolve user defined types.

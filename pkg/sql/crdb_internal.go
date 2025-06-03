@@ -4186,7 +4186,8 @@ CREATE TABLE crdb_internal.table_columns (
 								ctx, table, col.GetDefaultExpr(), p.EvalContext(), &p.semaCtx, p.SessionData(), tree.FmtParsable,
 							)
 							if err != nil {
-								return err
+								fmt.Printf("SPILLY: hit the issue. Column %q (public %t) on table %q (id %d; version %v)\n", col.GetName(), col.Public(), table.GetName(), table.GetID(), table.GetVersion())
+								return errors.Wrapf(err, "failed to format default expression for column %q (public %t) in table %q (id %d; version %v)", col.GetName(), col.Public(), table.GetName(), table.GetID(), table.GetVersion())
 							}
 							defStr = tree.NewDString(defExpr)
 						}
