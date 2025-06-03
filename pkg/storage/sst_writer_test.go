@@ -56,7 +56,7 @@ func makePebbleSST(t testing.TB, kvs []MVCCKeyValue, ingestion bool) []byte {
 	if ingestion {
 		w = MakeIngestionSSTWriter(ctx, st, f)
 	} else {
-		w = MakeTransportSSTWriter(ctx, st, &f.Buffer)
+		w = MakeBackupSSTWriter(ctx, st, &f.Buffer)
 	}
 	defer w.Close()
 
@@ -87,7 +87,6 @@ func TestMakeIngestionWriterOptions(t *testing.T) {
 			st: func() *cluster.Settings {
 				st := cluster.MakeTestingClusterSettings()
 				IngestionValueBlocksEnabled.Override(context.Background(), &st.SV, true)
-				ColumnarBlocksEnabled.Override(context.Background(), &st.SV, false)
 				return st
 			}(),
 			want: want{
@@ -100,38 +99,11 @@ func TestMakeIngestionWriterOptions(t *testing.T) {
 			st: func() *cluster.Settings {
 				st := cluster.MakeTestingClusterSettings()
 				IngestionValueBlocksEnabled.Override(context.Background(), &st.SV, false)
-				ColumnarBlocksEnabled.Override(context.Background(), &st.SV, false)
 				return st
 			}(),
 			want: want{
 				format:             sstable.TableFormatPebblev4,
 				disableValueBlocks: true,
-			},
-		},
-		{
-			name: "enable columnar blocks",
-			st: func() *cluster.Settings {
-				st := cluster.MakeTestingClusterSettings()
-				IngestionValueBlocksEnabled.Override(context.Background(), &st.SV, false)
-				ColumnarBlocksEnabled.Override(context.Background(), &st.SV, true)
-				return st
-			}(),
-			want: want{
-				format:             sstable.TableFormatPebblev5,
-				disableValueBlocks: true,
-			},
-		},
-		{
-			name: "enable columnar blocks with value blocks",
-			st: func() *cluster.Settings {
-				st := cluster.MakeTestingClusterSettings()
-				IngestionValueBlocksEnabled.Override(context.Background(), &st.SV, true)
-				ColumnarBlocksEnabled.Override(context.Background(), &st.SV, true)
-				return st
-			}(),
-			want: want{
-				format:             sstable.TableFormatPebblev5,
-				disableValueBlocks: false,
 			},
 		},
 	}
@@ -192,7 +164,7 @@ func TestSSTWriterOption(t *testing.T) {
 	// cluster setting that has been set to the given algorithm as the basis for
 	// determining which compression algorithm is used when the SSTWriterOption
 	// runs over an sstable.WriterOptions.
-	makeCompressionWriterOpt := func(alg CompressionAlgorithm) SSTWriterOption {
+	makeCompressionWriterOpt := func(alg compressionAlgorithm) SSTWriterOption {
 		ctx := context.Background()
 		st := cluster.MakeTestingClusterSettings()
 		CompressionAlgorithmStorage.Override(ctx, &st.SV, alg)
@@ -213,23 +185,16 @@ func TestSSTWriterOption(t *testing.T) {
 		},
 		{
 			"with snappy compression",
-			makeCompressionWriterOpt(CompressionAlgorithmSnappy),
+			makeCompressionWriterOpt(compressionAlgorithmSnappy),
 			func(t *testing.T, opts *sstable.WriterOptions) {
 				require.Equal(t, block.SnappyCompression, opts.Compression)
 			},
 		},
 		{
 			"with zstd compression",
-			makeCompressionWriterOpt(CompressionAlgorithmZstd),
+			makeCompressionWriterOpt(compressionAlgorithmZstd),
 			func(t *testing.T, opts *sstable.WriterOptions) {
 				require.Equal(t, block.ZstdCompression, opts.Compression)
-			},
-		},
-		{
-			"with minlz compression",
-			makeCompressionWriterOpt(CompressionAlgorithmMinLZ),
-			func(t *testing.T, opts *sstable.WriterOptions) {
-				require.Equal(t, block.MinLZCompression, opts.Compression)
 			},
 		},
 	}

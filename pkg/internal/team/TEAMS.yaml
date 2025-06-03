@@ -54,9 +54,6 @@ cockroachdb/spatial:
 cockroachdb/dev-inf:
   triage_column_id: 10210759
   label: T-dev-inf
-cockroachdb/drp-eng:
-  triage_column_id: 14041337
-  label: T-drpeng
 cockroachdb/multiregion:
   triage_column_id: 11926170
   label: T-multiregion
@@ -71,7 +68,9 @@ cockroachdb/test-eng:
 cockroachdb/test-eng-prs:
   triage_column_id: 14041337
   label: T-testeng
-cockroachdb/security-engineering:
+cockroachdb/security:
+  label: T-security-engineering
+cockroachdb/prodsec:
   label: T-security-engineering
 cockroachdb/product-security:
   label: T-product-security

@@ -21,7 +21,6 @@ import (
 )
 
 type alterTableSetSchemaNode struct {
-	zeroInputPlanNode
 	newSchema string
 	prefix    catalog.ResolvedObjectPrefix
 	tableDesc *tabledesc.Mutable
@@ -85,7 +84,7 @@ func (p *planner) AlterTableSetSchema(
 	}
 
 	// Disallow schema changes if this table's schema is locked.
-	if err := p.checkSchemaChangeIsAllowed(ctx, tableDesc, n); err != nil {
+	if err := checkSchemaChangeIsAllowed(tableDesc, n); err != nil {
 		return nil, err
 	}
 

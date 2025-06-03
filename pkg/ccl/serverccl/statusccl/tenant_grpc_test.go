@@ -15,7 +15,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/rpc"
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats"
-	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/persistedsqlstats/sqlstatstestutil"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
@@ -55,15 +54,6 @@ func TestTenantGRPCServices(t *testing.T) {
 	})
 	defer connTenant.Close()
 
-	// Wait for some statements to appear.
-	pgUrl, cleanup := tenant.PGUrl(t)
-	defer cleanup()
-	obsConn, cleanupConn := sqlstatstestutil.MakeObserverConnection(t, pgUrl)
-	defer cleanupConn()
-	sqlstatstestutil.WaitForStatementEntriesAtLeast(t, obsConn, 1, sqlstatstestutil.StatementFilter{
-		AllowInternal: true,
-	})
-
 	t.Logf("subtests starting")
 
 	t.Run("gRPC is running", func(t *testing.T) {
@@ -89,7 +79,6 @@ func TestTenantGRPCServices(t *testing.T) {
 	sqlRunner := sqlutils.MakeSQLRunner(connTenant)
 	sqlRunner.Exec(t, "CREATE TABLE test (id int)")
 	sqlRunner.Exec(t, "INSERT INTO test VALUES (1)")
-	sqlstatstestutil.WaitForStatementEntriesEqual(t, obsConn, 2)
 
 	tenant2, connTenant2 := serverutils.StartTenant(t, server, base.TestTenantArgs{
 		TenantID:     tenantID,

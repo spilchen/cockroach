@@ -103,33 +103,33 @@ func (m schemaChangerMode) String() string {
 }
 
 const (
-	// StatusWaitingForMVCCGC is used for the GC job when it has cleared
+	// RunningStatusWaitingForMVCCGC is used for the GC job when it has cleared
 	// the data but is waiting for MVCC GC to remove the data.
-	StatusWaitingForMVCCGC jobs.StatusMessage = "waiting for MVCC GC"
-	// StatusDeletingData is used for the GC job when it is about
+	RunningStatusWaitingForMVCCGC jobs.RunningStatus = "waiting for MVCC GC"
+	// RunningStatusDeletingData is used for the GC job when it is about
 	// to clear the data.
-	StatusDeletingData jobs.StatusMessage = "deleting data"
-	// StatusWaitingGC is for jobs that are currently in progress and
+	RunningStatusDeletingData jobs.RunningStatus = "deleting data"
+	// RunningStatusWaitingGC is for jobs that are currently in progress and
 	// are waiting for the GC interval to expire
-	StatusWaitingGC jobs.StatusMessage = "waiting for GC TTL"
-	// StatusDeleteOnly is for jobs that are currently waiting on
+	RunningStatusWaitingGC jobs.RunningStatus = "waiting for GC TTL"
+	// RunningStatusDeleteOnly is for jobs that are currently waiting on
 	// the cluster to converge to seeing the schema element in the DELETE_ONLY
 	// state.
-	StatusDeleteOnly jobs.StatusMessage = "waiting in DELETE-ONLY"
-	// StatusWriteOnly is for jobs that are currently waiting on
+	RunningStatusDeleteOnly jobs.RunningStatus = "waiting in DELETE-ONLY"
+	// RunningStatusWriteOnly is for jobs that are currently waiting on
 	// the cluster to converge to seeing the schema element in the
 	// WRITE_ONLY state.
-	StatusWriteOnly jobs.StatusMessage = "waiting in WRITE_ONLY"
-	// StatusMerging is for jobs that are currently waiting on
+	RunningStatusWriteOnly jobs.RunningStatus = "waiting in WRITE_ONLY"
+	// RunningStatusMerging is for jobs that are currently waiting on
 	// the cluster to converge to seeing the schema element in the
 	// MERGING state.
-	StatusMerging jobs.StatusMessage = "waiting in MERGING"
-	// StatusBackfill is for jobs that are currently running a backfill
+	RunningStatusMerging jobs.RunningStatus = "waiting in MERGING"
+	// RunningStatusBackfill is for jobs that are currently running a backfill
 	// for a schema element.
-	StatusBackfill jobs.StatusMessage = "populating schema"
-	// StatusValidation is for jobs that are currently validating
+	RunningStatusBackfill jobs.RunningStatus = "populating schema"
+	// RunningStatusValidation is for jobs that are currently validating
 	// a schema element.
-	StatusValidation jobs.StatusMessage = "validating schema"
+	RunningStatusValidation jobs.RunningStatus = "validating schema"
 )
 
 // SchemaChanger is used to change the schema on a table.
@@ -211,12 +211,6 @@ func IsPermanentSchemaChangeError(err error) bool {
 	// Any error with a permanent job error wrapper on it should not be
 	// retried.
 	if jobs.IsPermanentJobError(err) {
-		return true
-	}
-
-	// Any error with a schema changer user error wrapper on it should not be
-	// retried.
-	if scerrors.HasSchemaChangerUserError(err) {
 		return true
 	}
 
@@ -308,11 +302,7 @@ func (sc *SchemaChanger) refreshMaterializedView(
 const schemaChangerBackfillTxnDebugName = "schemaChangerBackfill"
 
 func (sc *SchemaChanger) backfillQueryIntoTable(
-	ctx context.Context,
-	table catalog.TableDescriptor,
-	query string,
-	ts hlc.Timestamp,
-	opName redact.SafeString,
+	ctx context.Context, table catalog.TableDescriptor, query string, ts hlc.Timestamp, desc string,
 ) (err error) {
 	if fn := sc.testingKnobs.RunBeforeQueryBackfill; fn != nil {
 		if err := fn(); err != nil {
@@ -346,14 +336,10 @@ func (sc *SchemaChanger) backfillQueryIntoTable(
 		sd.SessionData = *sc.sessionData
 		// Create an internal planner as the planner used to serve the user query
 		// would have committed by this point.
-		//
-		// Note: the planner is created using the session’s user. This is important
-		// for row-level security (RLS), ensuring that the backfill query runs with
-		// the same visibility and access restrictions as the user who initiated it.
 		p, cleanup := NewInternalPlanner(
-			opName,
+			desc,
 			txn.KV(),
-			sc.sessionData.User(),
+			username.NodeUserName(),
 			&MemoryMetrics{},
 			sc.execCfg,
 			sd,
@@ -372,7 +358,7 @@ func (sc *SchemaChanger) backfillQueryIntoTable(
 				},
 			}
 			tableSpan := table.TableSpan(localPlanner.EvalContext().Codec)
-			request.Add(kvpb.NewDeleteRange(tableSpan.Key, tableSpan.EndKey, false /* returnKeys */))
+			request.Add(kvpb.NewDeleteRange(tableSpan.Key, tableSpan.EndKey, false))
 			if _, err := localPlanner.execCfg.DB.NonTransactionalSender().Send(ctx, &request); err != nil {
 				return err.GoError()
 			}
@@ -383,17 +369,6 @@ func (sc *SchemaChanger) backfillQueryIntoTable(
 			return err
 		}
 
-		// If we are backfilling with AS OF SYSTEM TIME, we must update the
-		// evalCtx for the new planner that was created.
-		asOf, err := localPlanner.isAsOf(ctx, stmt.AST)
-		if err != nil {
-			return err
-		}
-		if asOf != nil {
-			localPlanner.extendedEvalCtx.AsOfSystemTime = asOf
-		}
-
-		localPlanner.MaybeReallocateAnnotations(stmt.NumAnnotations)
 		// Construct an optimized logical plan of the AS source stmt.
 		localPlanner.stmt = makeStatement(stmt, clusterunique.ID{}, /* queryID */
 			tree.FmtFlags(queryFormattingForFingerprintsMask.Get(&localPlanner.execCfg.Settings.SV)))
@@ -479,7 +454,7 @@ func (sc *SchemaChanger) backfillQueryIntoTable(
 
 			planDistribution, _ := getPlanDistribution(
 				ctx, localPlanner.Descriptors().HasUncommittedTypes(),
-				localPlanner.extendedEvalCtx.SessionData(),
+				localPlanner.extendedEvalCtx.SessionData().DistSQLMode,
 				localPlanner.curPlan.main, &localPlanner.distSQLVisitor,
 			)
 			isLocal := !planDistribution.WillDistribute()
@@ -791,6 +766,9 @@ func (sc *SchemaChanger) checkForMVCCCompliantAddIndexMutations(
 // If the txn that queued the schema changer did not commit, this will be a
 // no-op, as we'll fail to find the job for our mutation in the jobs registry.
 func (sc *SchemaChanger) exec(ctx context.Context) (retErr error) {
+	sc.metrics.RunningSchemaChanges.Inc(1)
+	defer sc.metrics.RunningSchemaChanges.Dec(1)
+
 	ctx = logtags.AddTags(ctx, sc.execLogTags())
 
 	// Pull out the requested descriptor.
@@ -1087,7 +1065,7 @@ func (sc *SchemaChanger) initJobRunningStatus(ctx context.Context) error {
 			return err
 		}
 
-		var statusMessage jobs.StatusMessage
+		var runStatus jobs.RunningStatus
 		for _, mutation := range desc.AllMutations() {
 			if mutation.MutationID() != sc.mutationID {
 				// Mutations are applied in a FIFO order. Only apply the first set of
@@ -1096,13 +1074,13 @@ func (sc *SchemaChanger) initJobRunningStatus(ctx context.Context) error {
 			}
 
 			if mutation.Adding() && mutation.DeleteOnly() {
-				statusMessage = StatusDeleteOnly
+				runStatus = RunningStatusDeleteOnly
 			} else if mutation.Dropped() && mutation.WriteAndDeleteOnly() {
-				statusMessage = StatusWriteOnly
+				runStatus = RunningStatusWriteOnly
 			}
 		}
-		if statusMessage != "" && !desc.Dropped() {
-			if err := sc.job.WithTxn(txn).UpdateStatusMessage(ctx, statusMessage); err != nil {
+		if runStatus != "" && !desc.Dropped() {
+			if err := sc.job.WithTxn(txn).RunningStatus(ctx, runStatus); err != nil {
 				return errors.Wrapf(err, "failed to update job status")
 			}
 		}
@@ -1276,7 +1254,7 @@ func (sc *SchemaChanger) rollbackSchemaChange(ctx context.Context, err error) er
 func (sc *SchemaChanger) RunStateMachineBeforeBackfill(ctx context.Context) error {
 	log.Info(ctx, "stepping through state machine")
 
-	var runStatus jobs.StatusMessage
+	var runStatus jobs.RunningStatus
 	if err := sc.txn(ctx, func(
 		ctx context.Context, txn descs.Txn,
 	) error {
@@ -1305,13 +1283,13 @@ func (sc *SchemaChanger) RunStateMachineBeforeBackfill(ctx context.Context) erro
 					// WRITE_ONLY state to fill in the missing elements of the
 					// index (INSERT and UPDATE that happened in the interim).
 					tbl.Mutations[m.MutationOrdinal()].State = descpb.DescriptorMutation_WRITE_ONLY
-					runStatus = StatusWriteOnly
+					runStatus = RunningStatusWriteOnly
 				}
 				// else if WRITE_ONLY, then the state change has already moved forward.
 			} else if m.Dropped() {
 				if m.WriteAndDeleteOnly() || m.Merging() {
 					tbl.Mutations[m.MutationOrdinal()].State = descpb.DescriptorMutation_DELETE_ONLY
-					runStatus = StatusDeleteOnly
+					runStatus = RunningStatusDeleteOnly
 				}
 				// else if DELETE_ONLY, then the state change has already moved forward.
 			}
@@ -1340,7 +1318,7 @@ func (sc *SchemaChanger) RunStateMachineBeforeBackfill(ctx context.Context) erro
 			return err
 		}
 		if sc.job != nil {
-			if err := sc.job.WithTxn(txn).UpdateStatusMessage(ctx, runStatus); err != nil {
+			if err := sc.job.WithTxn(txn).RunningStatus(ctx, runStatus); err != nil {
 				return errors.Wrap(err, "failed to update job status")
 			}
 		}
@@ -1377,7 +1355,7 @@ func (sc *SchemaChanger) RunStateMachineAfterIndexBackfill(ctx context.Context) 
 func (sc *SchemaChanger) stepStateMachineAfterIndexBackfill(ctx context.Context) error {
 	log.Info(ctx, "stepping through state machine")
 
-	var runStatus jobs.StatusMessage
+	var runStatus jobs.RunningStatus
 	if err := sc.txn(ctx, func(
 		ctx context.Context, txn descs.Txn,
 	) error {
@@ -1401,10 +1379,10 @@ func (sc *SchemaChanger) stepStateMachineAfterIndexBackfill(ctx context.Context)
 			if m.Adding() {
 				if m.Backfilling() {
 					tbl.Mutations[m.MutationOrdinal()].State = descpb.DescriptorMutation_DELETE_ONLY
-					runStatus = StatusDeleteOnly
+					runStatus = RunningStatusDeleteOnly
 				} else if m.DeleteOnly() {
 					tbl.Mutations[m.MutationOrdinal()].State = descpb.DescriptorMutation_MERGING
-					runStatus = StatusMerging
+					runStatus = RunningStatusMerging
 				}
 			}
 		}
@@ -1417,7 +1395,7 @@ func (sc *SchemaChanger) stepStateMachineAfterIndexBackfill(ctx context.Context)
 			return err
 		}
 		if sc.job != nil {
-			if err := sc.job.WithTxn(txn).UpdateStatusMessage(ctx, runStatus); err != nil {
+			if err := sc.job.WithTxn(txn).RunningStatus(ctx, runStatus); err != nil {
 				return errors.Wrap(err, "failed to update job status")
 			}
 		}
@@ -2489,14 +2467,14 @@ func CreateGCJobRecord(
 			descriptorIDs = append(descriptorIDs, table.ID)
 		}
 	}
-	runningStatus := StatusDeletingData
+	runningStatus := RunningStatusDeletingData
 	return jobs.Record{
 		Description:   fmt.Sprintf("GC for %s", originalDescription),
 		Username:      userName,
 		DescriptorIDs: descriptorIDs,
 		Details:       details,
 		Progress:      jobspb.SchemaChangeGCProgress{},
-		StatusMessage: runningStatus,
+		RunningStatus: runningStatus,
 		NonCancelable: true,
 	}
 }
@@ -2545,7 +2523,7 @@ type SchemaChangerTestingKnobs struct {
 	// fixing the index backfill scan timestamp.
 	RunBeforeIndexBackfill func()
 
-	// RunAfterIndexBackfill is called after the index backfill
+	// RunBeforeIndexBackfill is called after the index backfill
 	// process is complete (including the temporary index merge)
 	// but before the final validation of the indexes.
 	RunAfterIndexBackfill func()
@@ -2765,6 +2743,7 @@ func (r schemaChangeResumer) Resume(ctx context.Context, execCtx interface{}) er
 			scErr = sc.exec(ctx)
 			switch {
 			case scErr == nil:
+				sc.metrics.Successes.Inc(1)
 				return nil
 			case errors.Is(scErr, catalog.ErrDescriptorNotFound):
 				// If the table descriptor for the ID can't be found, we assume that
@@ -2781,12 +2760,16 @@ func (r schemaChangeResumer) Resume(ctx context.Context, execCtx interface{}) er
 				// Check if the error is on a allowlist of errors we should retry on,
 				// including the schema change not having the first mutation in line.
 				log.Warningf(ctx, "error while running schema change, retrying: %v", scErr)
+				sc.metrics.RetryErrors.Inc(1)
 				if IsConstraintError(scErr) {
 					telemetry.Inc(sc.metrics.ConstraintErrors)
 				} else {
 					telemetry.Inc(sc.metrics.UncategorizedErrors)
 				}
 			default:
+				if ctx.Err() == nil {
+					sc.metrics.PermanentErrors.Inc(1)
+				}
 				if IsConstraintError(scErr) {
 					telemetry.Inc(sc.metrics.ConstraintErrors)
 				} else {

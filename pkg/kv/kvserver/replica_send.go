@@ -463,7 +463,7 @@ func (r *Replica) executeBatchWithConcurrencyRetries(
 			Requests:        ba.Requests,
 			LatchSpans:      latchSpans, // nil if g != nil
 			LockSpans:       lockSpans,  // nil if g != nil
-			Batch:           ba,
+			BaFmt:           ba,
 		}, requestEvalKind)
 		if pErr != nil {
 			if poisonErr := (*poison.PoisonedError)(nil); errors.As(pErr.GoError(), &poisonErr) {
@@ -986,6 +986,11 @@ func (r *Replica) executeAdminBatch(
 
 	case *kvpb.AdminScatterRequest:
 		reply, err := r.adminScatter(ctx, *tArgs)
+		pErr = kvpb.NewError(err)
+		resp = &reply
+
+	case *kvpb.AdminVerifyProtectedTimestampRequest:
+		reply, err := r.adminVerifyProtectedTimestamp(ctx, *tArgs)
 		pErr = kvpb.NewError(err)
 		resp = &reply
 

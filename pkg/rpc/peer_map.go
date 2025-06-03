@@ -37,37 +37,35 @@ func (c peerKey) SafeFormat(p redact.SafePrinter, _ rune) {
 	p.Printf("{n%d: %s (%v)}", c.NodeID, c.TargetAddr, c.Class)
 }
 
-type peerMap[Conn rpcConn] struct {
+type peerMap struct {
 	mu struct {
 		syncutil.RWMutex
-		m map[peerKey]*peer[Conn]
+		m map[peerKey]*peer
 	}
 }
 
-func (peers *peerMap[Conn]) getWithBreaker(
-	k peerKey,
-) (PeerSnap[Conn], peerMetrics, *circuit.Breaker, bool) {
+func (peers *peerMap) getWithBreaker(k peerKey) (PeerSnap, peerMetrics, *circuit.Breaker, bool) {
 	peers.mu.RLock()
 	defer peers.mu.RUnlock()
 	p := peers.mu.m[k]
 	if p == nil {
-		return PeerSnap[Conn]{}, peerMetrics{}, nil, false
+		return PeerSnap{}, peerMetrics{}, nil, false
 	}
 	return p.snap(), p.peerMetrics, p.b, true
 }
 
 // Conn returns a read-only version of the peer and a boolean indicating
 // whether the peer exists.
-func (peers *peerMap[Conn]) get(k peerKey) (PeerSnap[Conn], bool) {
+func (peers *peerMap) get(k peerKey) (PeerSnap, bool) {
 	peers.mu.RLock()
 	defer peers.mu.RUnlock()
 	return peers.getRLocked(k)
 }
 
-func (peers *peerMap[Conn]) getRLocked(k peerKey) (PeerSnap[Conn], bool) {
+func (peers *peerMap) getRLocked(k peerKey) (PeerSnap, bool) {
 	p, ok := peers.mu.m[k]
 	if !ok {
-		return PeerSnap[Conn]{}, false
+		return PeerSnap{}, false
 	}
 	return p.snap(), true
 }

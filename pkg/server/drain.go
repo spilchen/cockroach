@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/server/serverpb"
 	"github.com/cockroachdb/cockroach/pkg/server/srverrors"
 	"github.com/cockroachdb/cockroach/pkg/settings"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/persistedsqlstats"
 	"github.com/cockroachdb/cockroach/pkg/util/grpcutil"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/stop"
@@ -119,7 +120,6 @@ type drainServer struct {
 	// stopTrigger is used to request that the server is shut down.
 	stopTrigger  *stopTrigger
 	grpc         *grpcServer
-	drpc         *drpcServer
 	sqlServer    *SQLServer
 	drainSleepFn func(time.Duration)
 	serverCtl    *serverController
@@ -136,7 +136,6 @@ func newDrainServer(
 	stopper *stop.Stopper,
 	stopTrigger *stopTrigger,
 	grpc *grpcServer,
-	drpc *drpcServer,
 	sqlServer *SQLServer,
 ) *drainServer {
 	var drainSleepFn = time.Sleep
@@ -149,7 +148,6 @@ func newDrainServer(
 		stopper:      stopper,
 		stopTrigger:  stopTrigger,
 		grpc:         grpc,
-		drpc:         drpc,
 		sqlServer:    sqlServer,
 		drainSleepFn: drainSleepFn,
 	}
@@ -387,7 +385,6 @@ func (s *drainServer) drainClients(
 	// Set the gRPC mode of the node to "draining" and mark the node as "not ready".
 	// Probes to /health?ready=1 will now notice the change in the node's readiness.
 	s.grpc.setMode(modeDraining)
-	s.drpc.setMode(modeDraining)
 	s.sqlServer.isReady.Store(false)
 
 	// Log the number of connections periodically.
@@ -446,7 +443,7 @@ func (s *drainServer) drainClients(
 	s.sqlServer.distSQLServer.Drain(ctx, queryMaxWait, reporter)
 
 	// Flush in-memory SQL stats into the statement stats system table.
-	statsProvider := s.sqlServer.pgServer.SQLServer.GetSQLStatsProvider()
+	statsProvider := s.sqlServer.pgServer.SQLServer.GetSQLStatsProvider().(*persistedsqlstats.PersistedSQLStats)
 	// If the SQL server is disabled there is nothing to drain here.
 	if !s.sqlServer.cfg.DisableSQLServer {
 		statsProvider.MaybeFlush(ctx, s.stopper)

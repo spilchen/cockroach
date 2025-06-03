@@ -1,5 +1,3 @@
-# LogicTest: !local-schema-locked
-
 statement error pgcode 42P01 relation "kv" does not exist
 INSERT INTO kv VALUES ('a', 'b')
 
@@ -495,7 +493,7 @@ CREATE TABLE public.sw (
   fc STRING(3) COLLATE en NULL,
   rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
   CONSTRAINT sw_pkey PRIMARY KEY (rowid ASC)
-);
+)
 
 statement ok
 INSERT INTO sw VALUES (
@@ -598,7 +596,6 @@ CREATE TABLE t29494(x INT); INSERT INTO t29494 VALUES (12)
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl=off;
 ALTER TABLE t29494 ADD COLUMN y INT NOT NULL DEFAULT 123
 
 # Check that the new column is not visible
@@ -609,7 +606,7 @@ CREATE TABLE public.t29494 (
   x INT8 NULL,
   rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
   CONSTRAINT t29494_pkey PRIMARY KEY (rowid ASC)
-);
+)
 
 # Check that the new column is not usable in RETURNING.
 statement error column "y" does not exist
@@ -620,7 +617,6 @@ ROLLBACK
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl=off;
 ALTER TABLE t29494 ADD COLUMN y INT NOT NULL DEFAULT 123
 
 query I
@@ -641,7 +637,6 @@ CREATE TABLE t32759 (
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl=off;
 ALTER TABLE t32759 DROP COLUMN y
 
 # Check that the dropped column is not visible
@@ -653,7 +648,7 @@ CREATE TABLE public.t32759 (
   z INT8 NULL,
   rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
   CONSTRAINT t32759_pkey PRIMARY KEY (rowid ASC)
-);
+)
 
 # Check that values cannot be inserted into the dropped column.
 statement error column "y" does not exist
@@ -664,7 +659,6 @@ ROLLBACK
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl=off;
 ALTER TABLE t32759 DROP COLUMN y
 
 query II colnames
@@ -699,7 +693,6 @@ CREATE TABLE t35611(a INT PRIMARY KEY, CHECK (a > 0))
 
 statement ok
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SET LOCAL autocommit_before_ddl=off;
 ALTER TABLE t35611 ADD COLUMN b INT
 
 statement ok

@@ -88,9 +88,8 @@ func Get(
 		}
 	}
 
-	shouldLockKey := getRes.Value != nil || args.LockNonExisting
 	var res result.Result
-	if args.KeyLockingStrength != lock.None && shouldLockKey {
+	if args.KeyLockingStrength != lock.None && getRes.Value != nil {
 		acq, err := acquireLockOnKey(ctx, readWriter, h.Txn, args.KeyLockingStrength,
 			args.KeyLockingDurability, args.Key, cArgs.Stats, cArgs.EvalCtx.ClusterSettings())
 		if err != nil {

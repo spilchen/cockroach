@@ -7,12 +7,9 @@ package rpc
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
-	"reflect"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,7 +21,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
-	"github.com/cockroachdb/cockroach/pkg/testutils/grpcutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/cockroach/pkg/util/circuit"
@@ -39,7 +35,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
-	"github.com/gogo/protobuf/types"
 	gogostatus "github.com/gogo/status"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -207,7 +202,7 @@ func testClockOffsetInPingRequestInternal(t *testing.T, clientOnly bool) {
 	clientOpts := opts
 	// Experimentally, values below 50ms seem to incur flakiness.
 	clientOpts.RPCHeartbeatInterval = 100 * time.Millisecond
-	clientOpts.RPCHeartbeatTimeout = 200 * time.Millisecond
+	clientOpts.RPCHeartbeatTimeout = 100 * time.Millisecond
 	clientOpts.ClientOnly = clientOnly
 	clientOpts.OnOutgoingPing = func(ctx context.Context, req *PingRequest) error {
 		select {
@@ -288,6 +283,10 @@ type rangefeedEventSink struct {
 
 var _ kvpb.RangeFeedEventSink = (*rangefeedEventSink)(nil)
 
+func (s *rangefeedEventSink) Context() context.Context {
+	return s.ctx
+}
+
 // Note that SendUnbuffered itself is not thread-safe (grpc stream is not
 // thread-safe), but tests were written in a way that sends sequentially,
 // ensuring thread-safety for SendUnbuffered.
@@ -309,10 +308,6 @@ func (s *internalServer) MuxRangeFeed(stream kvpb.Internal_MuxRangeFeedServer) e
 
 func (*internalServer) Batch(context.Context, *kvpb.BatchRequest) (*kvpb.BatchResponse, error) {
 	return nil, nil
-}
-
-func (*internalServer) BatchStream(stream kvpb.Internal_BatchStreamServer) error {
-	panic("unimplemented")
 }
 
 func (*internalServer) RangeLookup(
@@ -435,7 +430,7 @@ func TestInternalClientAdapterRunsInterceptors(t *testing.T) {
 	serverCtx.AdvertiseAddr = "127.0.0.1:8888"
 	serverCtx.NodeID.Set(context.Background(), 1)
 
-	_ /* gRPC server */, serverInterceptors, err := NewServerEx(ctx, serverCtx)
+	_ /* server */, serverInterceptors, err := NewServerEx(ctx, serverCtx)
 	require.NoError(t, err)
 
 	// Pile on one more interceptor to make sure it's called.
@@ -536,7 +531,7 @@ func TestInternalClientAdapterWithClientStreamInterceptors(t *testing.T) {
 	serverCtx.AdvertiseAddr = "127.0.0.1:8888"
 	serverCtx.NodeID.Set(context.Background(), 1)
 
-	_ /* gRPC server */, serverInterceptors, err := NewServerEx(ctx, serverCtx)
+	_ /* server */, serverInterceptors, err := NewServerEx(ctx, serverCtx)
 	require.NoError(t, err)
 	var clientInterceptors ClientInterceptorInfo
 	var s *testClientStream
@@ -599,7 +594,7 @@ func TestInternalClientAdapterWithServerStreamInterceptors(t *testing.T) {
 	serverCtx.AdvertiseAddr = "127.0.0.1:8888"
 	serverCtx.NodeID.Set(context.Background(), 1)
 
-	_ /* gRPC server */, serverInterceptors, err := NewServerEx(ctx, serverCtx)
+	_ /* server */, serverInterceptors, err := NewServerEx(ctx, serverCtx)
 	require.NoError(t, err)
 
 	const int1Name = "interceptor 1"
@@ -737,7 +732,7 @@ func BenchmarkInternalClientAdapter(b *testing.B) {
 	serverCtx.AdvertiseAddr = "127.0.0.1:8888"
 	serverCtx.NodeID.Set(context.Background(), 1)
 
-	_ /* gRPC server */, interceptors, err := NewServerEx(ctx, serverCtx)
+	_, interceptors, err := NewServerEx(ctx, serverCtx)
 	require.NoError(b, err)
 
 	internal := &internalServer{}
@@ -1554,7 +1549,7 @@ func TestGRPCDialClass(t *testing.T) {
 	sys2 := clientCtx.GRPCDialNode(remoteAddr, serverNodeID, roachpb.Locality{}, SystemClass)
 	require.True(t, sys1 == sys2, "expected connections dialed with the same "+
 		"class to the same target to be the same")
-	for _, c := range []*GRPCConnection{def2, sys2} {
+	for _, c := range []*Connection{def2, sys2} {
 		require.Nil(t, c.Health(), "expected connections to be healthy")
 	}
 }
@@ -1969,8 +1964,8 @@ func TestVerifyDialback(t *testing.T) {
 		})
 	}
 
-	mkConn := func() *GRPCConnection {
-		c := &GRPCConnection{
+	mkConn := func() *Connection {
+		c := &Connection{
 			breakerSignalFn: func() circuit.Signal {
 				return &neverTripSignal{}
 			},
@@ -2005,7 +2000,7 @@ func TestVerifyDialback(t *testing.T) {
 			func(t *testing.T, mockRPCCtx *MockDialbacker, sv *settings.Values) {
 
 				mockRPCCtx.EXPECT().GRPCDialNode("1.1.1.1", roachpb.NodeID(2), roachpb.Locality{}, SystemClass).
-					DoAndReturn(func(string, roachpb.NodeID, roachpb.Locality, ConnectionClass) *GRPCConnection {
+					DoAndReturn(func(string, roachpb.NodeID, roachpb.Locality, ConnectionClass) *Connection {
 						healthyConn := mkConn()
 						close(healthyConn.connFuture.ready)
 						return healthyConn
@@ -2024,7 +2019,7 @@ func TestVerifyDialback(t *testing.T) {
 		// If reverse system class connection is not healthy, non-blocking dial attempt
 		// interprets this as success.
 		mockRPCCtx.EXPECT().GRPCDialNode("1.1.1.1", roachpb.NodeID(2), roachpb.Locality{}, SystemClass).
-			DoAndReturn(func(string, roachpb.NodeID, roachpb.Locality, ConnectionClass) *GRPCConnection {
+			DoAndReturn(func(string, roachpb.NodeID, roachpb.Locality, ConnectionClass) *Connection {
 				tmpConn := mkConn()
 				assert.Equal(t, ErrNotHeartbeated, tmpConn.Health())
 				return tmpConn
@@ -2042,7 +2037,7 @@ func TestVerifyDialback(t *testing.T) {
 			// If reverse system class connection is not healthy, blocking dial attempt
 			// will do a one-off dialback.
 			mockRPCCtx.EXPECT().GRPCDialNode("1.1.1.1", roachpb.NodeID(2), roachpb.Locality{}, SystemClass).
-				DoAndReturn(func(string, roachpb.NodeID, roachpb.Locality, ConnectionClass) *GRPCConnection {
+				DoAndReturn(func(string, roachpb.NodeID, roachpb.Locality, ConnectionClass) *Connection {
 					tmpConn := mkConn()
 					assert.Equal(t, ErrNotHeartbeated, tmpConn.Health())
 					return tmpConn
@@ -2078,7 +2073,7 @@ func TestVerifyDialback(t *testing.T) {
 		req := ping(PingRequest_BLOCKING)
 		req.OriginNodeID = 0
 		mockRPCCtx.EXPECT().GRPCUnvalidatedDial("1.1.1.1", roachpb.Locality{}).
-			DoAndReturn(func(string, roachpb.Locality) *GRPCConnection {
+			DoAndReturn(func(string, roachpb.Locality) *Connection {
 				tmpConn := mkConn()
 				assert.Equal(t, ErrNotHeartbeated, tmpConn.Health())
 				return tmpConn
@@ -2238,143 +2233,4 @@ func TestInitialHeartbeatFailedError(t *testing.T) {
 		}
 		return err
 	})
-}
-
-func BenchmarkGRPCPing(b *testing.B) {
-	for _, bytes := range []int{1, 1 << 8, 1 << 10, 1 << 11, 1 << 12, 1 << 13, 1 << 14, 1 << 15, 1 << 16, 1 << 18, 1 << 20} {
-		bstr := fmt.Sprintf("%d", bytes)
-		bname := strings.Repeat("_", 7-len(bstr)) + bstr
-		b.Run("bytes="+bname, func(b *testing.B) {
-			stopper := stop.NewStopper()
-			ctx := context.Background()
-			defer stopper.Stop(ctx)
-
-			clock := &timeutil.DefaultTimeSource{}
-			maxOffset := 250 * time.Millisecond
-			srvRPCCtx := newTestContext(uuid.MakeV4(), clock, maxOffset, stopper)
-			const serverNodeID = 1
-			srvRPCCtx.NodeID.Set(ctx, serverNodeID)
-			s := newTestServer(b, srvRPCCtx)
-
-			randBytes := make([]byte, bytes)
-			_, err := rand.Read(randBytes)
-			require.NoError(b, err)
-
-			req := &PingRequest{Ping: string(randBytes)}
-			resp := &PingResponse{Pong: string(randBytes)}
-			anyreq, err := types.MarshalAny(req)
-			require.NoError(b, err)
-			anyresp, err := types.MarshalAny(resp)
-			require.NoError(b, err)
-
-			require.NoError(b, err)
-			b.Logf("marshaled request size: %d bytes (%d bytes of overhead)", req.Size(), req.Size()-bytes)
-
-			tsi := &grpcutils.TestServerImpl{
-				UU: func(ctx context.Context, req *types.Any) (*types.Any, error) {
-					return anyresp, nil
-				},
-				SS: func(srv grpcutils.GRPCTest_StreamStreamServer) error {
-					for {
-						if _, err := srv.Recv(); err != nil {
-							return err
-						}
-						if err := srv.Send(anyresp); err != nil {
-							return err
-						}
-					}
-				},
-			}
-
-			grpcutils.RegisterGRPCTestServer(s, tsi)
-
-			ln, err := netutil.ListenAndServeGRPC(srvRPCCtx.Stopper, s, util.TestAddr)
-			if err != nil {
-				b.Fatal(err)
-			}
-			remoteAddr := ln.Addr().String()
-
-			cliRPCCtx := newTestContext(uuid.MakeV4(), clock, maxOffset, stopper)
-			cliRPCCtx.NodeID.Set(ctx, 2)
-			cc, err := cliRPCCtx.grpcDialRaw(ctx, remoteAddr, DefaultClass)
-			require.NoError(b, err)
-
-			for _, tc := range []struct {
-				name   string
-				invoke func(c grpcutils.GRPCTestClient, N int) error
-			}{
-				{"UnaryUnary", func(c grpcutils.GRPCTestClient, N int) error {
-					for i := 0; i < N; i++ {
-						_, err := c.UnaryUnary(ctx, anyreq)
-						if err != nil {
-							return err
-						}
-					}
-					return nil
-				}},
-				{
-					"StreamStream", func(c grpcutils.GRPCTestClient, N int) error {
-						sc, err := c.StreamStream(ctx)
-						if err != nil {
-							return err
-						}
-						for i := 0; i < N; i++ {
-							if err := sc.Send(anyreq); err != nil {
-								return err
-							}
-							if _, err := sc.Recv(); err != nil {
-								return err
-							}
-						}
-						return nil
-					}},
-			} {
-
-				b.Run("rpc="+tc.name, func(b *testing.B) {
-
-					c := grpcutils.NewGRPCTestClient(cc)
-
-					b.SetBytes(int64(req.Size() + resp.Size()))
-					b.ResetTimer()
-					if err := tc.invoke(c, b.N); err != nil {
-						b.Fatal(err)
-					}
-				})
-			}
-		})
-	}
-}
-
-func TestMetricsInterceptor(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	ctx := context.Background()
-
-	stopper := stop.NewStopper()
-	defer stopper.Stop(context.Background())
-	stopper.SetTracer(tracing.NewTracer())
-
-	clock := timeutil.NewManualTime(timeutil.Unix(0, 1))
-	maxOffset := time.Duration(0)
-
-	serverCtx := newTestContext(uuid.MakeV4(), clock, maxOffset, stopper)
-	serverCtx.AdvertiseAddr = "127.0.0.1:8888"
-	serverCtx.NodeID.Set(context.Background(), 1)
-
-	var interceptor RequestMetricsInterceptor = func(
-		ctx context.Context,
-		req interface{},
-		info *grpc.UnaryServerInfo,
-		handler grpc.UnaryHandler,
-	) (interface{}, error) {
-		return nil, nil
-	}
-
-	_, serverInterceptors, err := NewServerEx(ctx, serverCtx, WithMetricsServerInterceptor(interceptor))
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(serverInterceptors.UnaryInterceptors), 2)
-	// make sure that the RequestMetricsInterceptor is the second registered
-	// interceptor.
-	require.Equal(t,
-		reflect.ValueOf(interceptor).Pointer(),
-		reflect.ValueOf(serverInterceptors.UnaryInterceptors[1]).Pointer())
 }

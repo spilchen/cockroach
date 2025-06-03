@@ -50,9 +50,6 @@ func TryDelegate(
 	case *tree.ShowDatabases:
 		return d.delegateShowDatabases(t)
 
-	case *tree.ShowPolicies:
-		return d.delegateShowPolicies(t)
-
 	case *tree.ShowEnums:
 		return d.delegateShowEnums(t)
 

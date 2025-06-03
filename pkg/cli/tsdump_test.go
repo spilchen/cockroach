@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/ts/tspb"
@@ -164,12 +163,11 @@ func parseDDInput(t *testing.T, input string, w *datadogWriter) {
 			(data != nil && data.Metric != metricName ||
 				(data != nil && source != nameValueTimestamp[1])) {
 			if data != nil {
-				_, err := w.emitDataDogMetrics([]DatadogSeries{*data})
+				err := w.emitDataDogMetrics([]DatadogSeries{*data})
 				require.NoError(t, err)
 			}
 			data = &DatadogSeries{
 				Metric: metricName,
-				Type:   w.resolveMetricType(metricName),
 			}
 			source = nameValueTimestamp[1]
 			data.Tags = append(data.Tags, fmt.Sprintf("%s:%s", storeNodeKey, nameValueTimestamp[1]))
@@ -183,36 +181,30 @@ func parseDDInput(t *testing.T, input string, w *datadogWriter) {
 			Timestamp: ts,
 		})
 	}
-	_, err := w.emitDataDogMetrics([]DatadogSeries{*data})
+	err := w.emitDataDogMetrics([]DatadogSeries{*data})
 	require.NoError(t, err)
 }
 
 func TestTsDumpFormatsDataDriven(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
-	defer testutils.TestingHook(&getCurrentTime, func() time.Time {
-		return time.Date(2024, 11, 14, 0, 0, 0, 0, time.UTC)
+	defer testutils.TestingHook(&newUploadID, func(cluster string) string {
+		return fmt.Sprintf("%s-1234", cluster)
 	})()
 
 	datadriven.Walk(t, "testdata/tsdump", func(t *testing.T, path string) {
 		datadriven.RunTest(t, path, func(t *testing.T, d *datadriven.TestData) string {
 			var w tsWriter
 			switch d.Cmd {
-			case "format-datadog", "format-datadog-init":
+			case "format-datadog":
 				debugTimeSeriesDumpOpts.clusterLabel = "test-cluster"
-				debugTimeSeriesDumpOpts.clusterID = "test-cluster-id"
-				debugTimeSeriesDumpOpts.zendeskTicket = "zd-test"
-				debugTimeSeriesDumpOpts.organizationName = "test-org"
-				debugTimeSeriesDumpOpts.userName = "test-user"
 				var testReqs []*http.Request
 				var series int
 				d.ScanArgs(t, "series-threshold", &series)
-				var ddwriter = makeDatadogWriter(
-					"https://example.com/data", d.Cmd == "format-datadog-init", "api-key", series, func(req *http.Request,
-					) error {
-						testReqs = append(testReqs, req)
-						return nil
-					})
+				var ddwriter = makeDatadogWriter("https://example.com/data", false, "api-key", series, func(req *http.Request) error {
+					testReqs = append(testReqs, req)
+					return nil
+				})
 
 				parseDDInput(t, d.Input, ddwriter)
 
