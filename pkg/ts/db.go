@@ -152,6 +152,7 @@ func (p *poller) start() (firstDone <-chan struct{}) {
 		for {
 			select {
 			case <-ticker.C:
+				ticker.Read = true
 				ticker.Reset(p.frequency)
 				p.poll(ctx)
 				if ch != nil {

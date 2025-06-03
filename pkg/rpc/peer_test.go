@@ -12,10 +12,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/circuit"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/errors"
-	"google.golang.org/grpc"
 )
 
-type pmb map[peerKey]*peer[*grpc.ClientConn] // peer map builder
+type pmb map[peerKey]*peer // peer map builder
 
 func (m pmb) k(k peerKey) pmb {
 	return m.kh(k, true /* healthy */)
@@ -25,7 +24,7 @@ func (m pmb) kh(k peerKey, healthy bool) pmb {
 	if m == nil {
 		m = pmb{}
 	}
-	p := &peer[*grpc.ClientConn]{}
+	p := &peer{}
 	p.b = circuit.NewBreaker(circuit.Options{
 		Name: "test",
 	})

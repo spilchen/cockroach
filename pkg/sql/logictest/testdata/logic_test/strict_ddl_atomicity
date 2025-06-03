@@ -1,9 +1,4 @@
-# LogicTest: !local-schema-locked
-
 # Default behavior, where atomicity violations are allowed
-
-statement ok
-SET autocommit_before_ddl=off;
 
 statement ok
 CREATE TABLE testing (k int, v string);
@@ -12,7 +7,7 @@ CREATE TABLE testing (k int, v string);
 
 
 statement ok
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+BEGIN
 
 statement ok
 ALTER TABLE testing ADD CONSTRAINT "unique_values" UNIQUE(v)
@@ -49,7 +44,7 @@ statement ok
 SET strict_ddl_atomicity = true
 
 statement ok
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+BEGIN
 
 statement error unimplemented: cannot run this DDL statement inside a multi-statement transaction as its atomicity cannot be guaranteed.*\n.*\n.*issue-v/42061
 ALTER TABLE testing ADD CONSTRAINT "unique_values" UNIQUE(v)
@@ -57,16 +52,10 @@ ALTER TABLE testing ADD CONSTRAINT "unique_values" UNIQUE(v)
 statement ok
 ROLLBACK
 
-statement ok
-SET autocommit_before_ddl = false
-
-skipif config weak-iso-level-configs
+skipif config local-read-committed
 statement error unimplemented: cannot run this DDL statement inside a multi-statement transaction as its atomicity cannot be guaranteed.*\n.*\n.*issue-v/42061
 SELECT 1; ALTER TABLE testing ADD CONSTRAINT "unique_values" UNIQUE(v)
 
-onlyif config weak-iso-level-configs
+onlyif config local-read-committed
 statement error to use multi-statement transactions involving a schema change under weak isolation levels, enable the autocommit_before_ddl setting
 SELECT 1; ALTER TABLE testing ADD CONSTRAINT "unique_values" UNIQUE(v)
-
-statement ok
-RESET autocommit_before_ddl

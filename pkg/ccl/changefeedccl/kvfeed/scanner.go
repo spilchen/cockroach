@@ -30,7 +30,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/retry"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
-	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
 )
 
@@ -57,9 +56,6 @@ type scanRequestScanner struct {
 var _ kvScanner = (*scanRequestScanner)(nil)
 
 func (p *scanRequestScanner) Scan(ctx context.Context, sink kvevent.Writer, cfg scanConfig) error {
-	ctx, sp := tracing.ChildSpan(ctx, "changefeed.kvfeed.scanner.scan")
-	defer sp.Finish()
-
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -177,9 +173,6 @@ func (p *scanRequestScanner) exportSpan(
 	sink kvevent.Writer,
 	knobs TestingKnobs,
 ) error {
-	ctx, sp := tracing.ChildSpan(ctx, "changefeed.kvfeed.scanner.export_span")
-	defer sp.Finish()
-
 	txn := p.db.NewTxn(ctx, "changefeed backfill")
 	if log.V(2) {
 		log.Infof(ctx, `sending ScanRequest %s at %s`, span, ts)

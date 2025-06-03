@@ -6,12 +6,10 @@
 package changefeedccl
 
 import (
-	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"hash/fnv"
-	"io"
 	"net"
 	"strings"
 	"time"
@@ -27,7 +25,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
-	"github.com/klauspost/compress/zstd"
 	"github.com/rcrowley/go-metrics"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -301,19 +298,14 @@ type kafkaBuffer struct {
 	batchCfg sinkBatchConfig
 }
 
-func (b *kafkaBuffer) Append(key []byte, value []byte, attrs attributes) {
+func (b *kafkaBuffer) Append(key []byte, value []byte, _ attributes) {
 	// HACK: kafka sink v1 encodes nil keys as sarama.ByteEncoder(key) which is != nil, and unit tests rely on this.
 	// So do something equivalent.
 	if key == nil {
 		key = []byte{}
 	}
 
-	var headers []kgo.RecordHeader
-	for k, v := range attrs.headers {
-		headers = append(headers, kgo.RecordHeader{Key: k, Value: v})
-	}
-
-	b.messages = append(b.messages, &kgo.Record{Key: key, Value: value, Topic: b.topic, Headers: headers})
+	b.messages = append(b.messages, &kgo.Record{Key: key, Value: value, Topic: b.topic})
 	b.byteCount += len(value)
 }
 
@@ -365,7 +357,7 @@ func makeKafkaSinkV2(
 
 	topicNamer, err := MakeTopicNamer(
 		targets,
-		WithPrefix(kafkaTopicPrefix), WithSingleName(kafkaTopicName), WithSanitizeFn(changefeedbase.SQLNameToKafkaName))
+		WithPrefix(kafkaTopicPrefix), WithSingleName(kafkaTopicName), WithSanitizeFn(SQLNameToKafkaName))
 
 	if err != nil {
 		return nil, err
@@ -484,29 +476,20 @@ func buildKgoConfig(
 
 	// TODO(#126991): Remove this sarama dependency.
 	// NOTE: kgo lets you give multiple compression options in preference order, which is cool but the config json doesnt support that. Should we?
-	var comp kgo.CompressionCodec
 	switch sarama.CompressionCodec(sinkCfg.Compression) {
 	case sarama.CompressionNone:
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.NoCompression()))
 	case sarama.CompressionGZIP:
-		comp = kgo.GzipCompression()
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.GzipCompression()))
 	case sarama.CompressionSnappy:
-		comp = kgo.SnappyCompression()
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.SnappyCompression()))
 	case sarama.CompressionLZ4:
-		comp = kgo.Lz4Compression()
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.Lz4Compression()))
 	case sarama.CompressionZSTD:
-		comp = kgo.ZstdCompression()
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.ZstdCompression()))
 	default:
 		return nil, errors.Errorf(`unknown compression codec: %v`, sinkCfg.Compression)
 	}
-
-	if level := sinkCfg.CompressionLevel; level != sarama.CompressionLevelDefault {
-		if err := validateCompressionLevel(sinkCfg.Compression, level); err != nil {
-			return nil, err
-		}
-		comp = comp.WithLevel(level)
-	}
-
-	opts = append(opts, kgo.ProducerBatchCompression(comp))
 
 	if version := sinkCfg.Version; version != "" {
 		if !strings.HasPrefix(version, `v`) {
@@ -523,34 +506,6 @@ func buildKgoConfig(
 	}
 
 	return opts, nil
-}
-
-// NOTE: kgo will ignore invalid compression levels, but the v1 sinks will fail validations. So we have to validate these ourselves.
-func validateCompressionLevel(compressionType compressionCodec, level int) error {
-	switch sarama.CompressionCodec(compressionType) {
-	case sarama.CompressionNone:
-		return nil
-	case sarama.CompressionGZIP:
-		if level < gzip.HuffmanOnly || level > gzip.BestCompression {
-			return errors.Errorf(`invalid gzip compression level: %d`, level)
-		}
-	case sarama.CompressionSnappy:
-		return errors.Errorf(`snappy does not support compression levels`)
-	case sarama.CompressionLZ4:
-		// The v1 sink ignores `level` for lz4, So let's use kgo's default
-		// behavior, which is to apply the level if it's valid, and fall back to
-		// the default otherwise.
-		return nil
-	case sarama.CompressionZSTD:
-		w, err := zstd.NewWriter(io.Discard, zstd.WithEncoderLevel(zstd.EncoderLevel(level)))
-		if err != nil {
-			return errors.Errorf(`invalid zstd compression level: %d`, level)
-		}
-		_ = w.Close()
-	default:
-		return errors.Errorf(`unknown compression codec: %v`, compressionType)
-	}
-	return nil
 }
 
 type kgoLogAdapter struct {
