@@ -687,6 +687,16 @@ func TestAlterTableDMLInjection(t *testing.T) {
 									sqlDB.Exec(t, tc.query)
 								}
 
+								// Run a query against crdb_internal.create_statements. We don't
+								// care about the result — only that it doesn't fail. This is
+								// valuable during schema changes because create_statements performs
+								// descriptor introspection, including rendering expressions for
+								// computed columns, check constraints, and defaults. If a
+								// column in one of those expressions hasn't been fully named yet
+								// (e.g., has a placeholder like crdb_internal_column_3_name_placeholder),
+								// the introspection can fail with an unexpected error.
+								sqlDB.Exec(t, `SELECT * FROM "".crdb_internal.create_statements`)
+
 								for i := 0; i < poIdx; i++ {
 									insertPO := poSlice[i]
 									// Verify 1 row is correctly deleted.
