@@ -281,8 +281,10 @@ func (p *planner) dropTableImpl(
 	//
 	// NOTE: we don't have to explicitly do this for other types of backreferences
 	// because they use the "GetAll..." methods.
+	fmt.Printf("SPILLY: table %s (%d) has %d triggers\n", tableDesc.GetName(), tableDesc.GetID(), len(tableDesc.Triggers))
 	for i := range tableDesc.Triggers {
 		trigger := &tableDesc.Triggers[i]
+		fmt.Printf("SPILLY: removing trigger (%s) \n", trigger.Name)
 		for _, id := range trigger.DependsOn {
 			fmt.Printf("SPILLY: removing trigger (%s) forward ref on  %d\n", trigger.Name, id)
 			if err := p.removeTriggerBackReference(ctx, tableDesc, id, trigger.Name); err != nil {
