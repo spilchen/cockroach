@@ -7,6 +7,7 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
@@ -234,6 +235,17 @@ func (d *dropCascadeState) resolveCollectedObjects(
 }
 
 func (d *dropCascadeState) dropAllCollectedObjects(ctx context.Context, p *planner) error {
+	for _, toDel := range d.td {
+		desc := toDel.desc
+		if desc.IsView() || desc.IsSequence() {
+			continue
+		}
+		numTriggers := len(desc.GetTriggers())
+		if numTriggers == 0 {
+			continue
+		}
+		fmt.Printf("SPILLY: planner has table %s (%d) with %d triggers\n", desc.GetName(), desc.GetID(), numTriggers)
+	}
 	// Delete all of the function first since we don't allow function references
 	// from other objects yet.
 	// TODO(chengxiong): rework dropCascadeState logic to add function into the

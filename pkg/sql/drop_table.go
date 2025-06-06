@@ -235,6 +235,7 @@ func (p *planner) dropTableImpl(
 	if catalog.HasConcurrentDeclarativeSchemaChange(tableDesc) {
 		return nil, scerrors.ConcurrentSchemaChangeError(tableDesc)
 	}
+	fmt.Printf("SPILLY: table %s (%d) has %d triggers\n", tableDesc.GetName(), tableDesc.GetID(), len(tableDesc.Triggers))
 	// Early out if the table is already dropped. This can happen during a cascade
 	// with a trigger.
 	if tableDesc.Dropped() {
