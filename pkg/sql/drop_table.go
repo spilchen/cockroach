@@ -240,6 +240,7 @@ func (p *planner) dropTableImpl(
 	if tableDesc.Dropped() {
 		return droppedViews, nil
 	}
+	fmt.Printf("SPILLY: dropping table %s\n", tableDesc.GetName())
 	// Remove foreign key back references from tables that this table has foreign
 	// keys to.
 	// Copy out the set of outbound fks as it may be overwritten in the loop.
