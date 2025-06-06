@@ -240,7 +240,7 @@ func (p *planner) dropTableImpl(
 	if tableDesc.Dropped() {
 		return droppedViews, nil
 	}
-	fmt.Printf("SPILLY: dropping table %s\n", tableDesc.GetName())
+	fmt.Printf("SPILLY: dropping table %s (%d)\n", tableDesc.GetName(), tableDesc.GetID())
 	// Remove foreign key back references from tables that this table has foreign
 	// keys to.
 	// Copy out the set of outbound fks as it may be overwritten in the loop.
@@ -284,6 +284,7 @@ func (p *planner) dropTableImpl(
 	for i := range tableDesc.Triggers {
 		trigger := &tableDesc.Triggers[i]
 		for _, id := range trigger.DependsOn {
+			fmt.Printf("SPILLY: removing trigger (%s) forward ref on  %d\n", trigger.Name, id)
 			if err := p.removeTriggerBackReference(ctx, tableDesc, id, trigger.Name); err != nil {
 				return droppedViews, err
 			}
@@ -314,6 +315,7 @@ func (p *planner) dropTableImpl(
 		if depDesc.Dropped() {
 			continue
 		}
+		fmt.Printf("SPILLY: dropping backref table %s (%d)\n", depDesc.GetName(), depDesc.GetID())
 
 		switch t := depDesc.(type) {
 		case *tabledesc.Mutable:
