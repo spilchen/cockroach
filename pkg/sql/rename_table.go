@@ -22,11 +22,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/log/eventpb"
 	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/redact"
 )
 
 type renameTableNode struct {
-	zeroInputPlanNode
 	n            *tree.RenameTable
 	oldTn, newTn *tree.TableName
 	tableDesc    *tabledesc.Mutable
@@ -89,7 +87,7 @@ func (p *planner) RenameTable(ctx context.Context, n *tree.RenameTable) (planNod
 	}
 
 	// Disallow schema changes if this table's schema is locked.
-	if err := p.checkSchemaChangeIsAllowed(ctx, tableDesc, n); err != nil {
+	if err := checkSchemaChangeIsAllowed(tableDesc, n); err != nil {
 		return nil, err
 	}
 
@@ -270,7 +268,7 @@ func (p *planner) dependentError(
 	}
 	switch desc.DescriptorType() {
 	case catalog.Table:
-		return p.dependentRelationError(ctx, typeName, objName, parentID, desc.(catalog.TableDescriptor), op)
+		return p.dependentViewError(ctx, typeName, objName, parentID, desc.(catalog.TableDescriptor), op)
 	case catalog.Function:
 		return p.dependentFunctionError(typeName, objName, desc.(catalog.FunctionDescriptor), op)
 	default:
@@ -287,25 +285,25 @@ func (p *planner) dependentFunctionError(
 	return sqlerrors.NewDependentBlocksOpError(op, typeName, objName, "function", fnDesc.GetName())
 }
 
-func (p *planner) dependentRelationError(
+func (p *planner) dependentViewError(
 	ctx context.Context,
 	typeName, objName string,
 	parentID descpb.ID,
-	desc catalog.TableDescriptor,
+	viewDesc catalog.TableDescriptor,
 	op string,
 ) error {
-	viewName := desc.GetName()
-	if desc.GetParentID() != parentID {
-		viewFQName, err := p.getQualifiedTableName(ctx, desc)
+	viewName := viewDesc.GetName()
+	if viewDesc.GetParentID() != parentID {
+		viewFQName, err := p.getQualifiedTableName(ctx, viewDesc)
 		if err != nil {
-			log.Warningf(ctx, "unable to retrieve name of relation %d: %v", desc.GetID(), err)
+			log.Warningf(ctx, "unable to retrieve name of view %d: %v", viewDesc.GetID(), err)
 			return sqlerrors.NewDependentObjectErrorf(
-				"cannot %s %s %q because a %s depends on it",
-				redact.SafeString(op), redact.SafeString(typeName), objName, redact.SafeString(desc.GetObjectTypeString()))
+				"cannot %s %s %q because a view depends on it",
+				op, typeName, objName)
 		}
 		viewName = viewFQName.FQString()
 	}
-	return sqlerrors.NewDependentBlocksOpError(op, typeName, objName, desc.GetObjectTypeString(), viewName)
+	return sqlerrors.NewDependentBlocksOpError(op, typeName, objName, "view", viewName)
 }
 
 // checkForCrossDbReferences validates if any cross DB references

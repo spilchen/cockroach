@@ -126,7 +126,7 @@ export const ActivateStatementDiagnosticsModal = React.forwardRef<
     };
   });
 
-  if (planGists && selectedPlanGist === "" && !!planGists[0]) {
+  if (planGists && selectedPlanGist === "") {
     setSelectedPlanGist(planGists[0]);
   }
 

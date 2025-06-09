@@ -651,7 +651,7 @@ var _ eval.ClientNoticeSender = &DummyClientNoticeSender{}
 func (c *DummyClientNoticeSender) BufferClientNotice(context.Context, pgnotice.Notice) {}
 
 // SendClientNotice is part of the eval.ClientNoticeSender interface.
-func (c *DummyClientNoticeSender) SendClientNotice(context.Context, pgnotice.Notice, bool) error {
+func (c *DummyClientNoticeSender) SendClientNotice(context.Context, pgnotice.Notice) error {
 	return nil
 }
 
@@ -705,11 +705,8 @@ func (ps *DummyPreparedStatementState) HasActivePortals() bool {
 }
 
 // MigratablePreparedStatements is part of the tree.PreparedStatementState interface.
-func (ps *DummyPreparedStatementState) MigratablePreparedStatements() (
-	[]sessiondatapb.MigratableSession_PreparedStatement,
-	error,
-) {
-	return nil, nil
+func (ps *DummyPreparedStatementState) MigratablePreparedStatements() []sessiondatapb.MigratableSession_PreparedStatement {
+	return nil
 }
 
 // HasPortal is part of the tree.PreparedStatementState interface.

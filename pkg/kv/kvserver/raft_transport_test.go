@@ -16,6 +16,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/gossip"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvflowcontrol"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvflowcontrol/kvflowdispatch"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvflowcontrol/node_rac2"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverpb"
 	"github.com/cockroachdb/cockroach/pkg/raft/raftpb"
@@ -159,6 +161,8 @@ func (rttc *raftTransportTestContext) Stop() {
 func (rttc *raftTransportTestContext) AddNode(nodeID roachpb.NodeID) *kvserver.RaftTransport {
 	transport, addr := rttc.AddNodeWithoutGossip(
 		nodeID, util.TestAddr, rttc.stopper,
+		kvflowdispatch.NewDummyDispatch(), kvserver.NoopStoresFlowControlIntegration{},
+		kvserver.NoopRaftTransportDisconnectListener{},
 		(*node_rac2.AdmittedPiggybacker)(nil),
 		nil, nil,
 	)
@@ -174,6 +178,9 @@ func (rttc *raftTransportTestContext) AddNodeWithoutGossip(
 	nodeID roachpb.NodeID,
 	addr net.Addr,
 	stopper *stop.Stopper,
+	kvflowTokenDispatch kvflowcontrol.DispatchReader,
+	kvflowHandles kvflowcontrol.Handles,
+	disconnectListener kvserver.RaftTransportDisconnectListener,
 	piggybacker node_rac2.PiggybackMsgReader,
 	piggybackedResponseScheduler kvserver.PiggybackedAdmittedResponseScheduler,
 	knobs *kvserver.RaftTransportTestingKnobs,
@@ -190,6 +197,9 @@ func (rttc *raftTransportTestContext) AddNodeWithoutGossip(
 		clock,
 		nodedialer.New(rttc.nodeRPCContext, gossip.AddressResolver(rttc.gossip)),
 		grpcServer,
+		kvflowTokenDispatch,
+		kvflowHandles,
+		disconnectListener,
 		piggybacker,
 		piggybackedResponseScheduler,
 		knobs,
@@ -464,6 +474,9 @@ func TestRaftTransportCircuitBreaker(t *testing.T) {
 		serverReplica.NodeID,
 		util.TestAddr,
 		rttc.stopper,
+		kvflowdispatch.NewDummyDispatch(),
+		kvserver.NoopStoresFlowControlIntegration{},
+		kvserver.NoopRaftTransportDisconnectListener{},
 		(*node_rac2.AdmittedPiggybacker)(nil),
 		nil, nil,
 	)
@@ -581,6 +594,9 @@ func TestReopenConnection(t *testing.T) {
 			serverReplica.NodeID,
 			util.TestAddr,
 			serverStopper,
+			kvflowdispatch.NewDummyDispatch(),
+			kvserver.NoopStoresFlowControlIntegration{},
+			kvserver.NoopRaftTransportDisconnectListener{},
 			(*node_rac2.AdmittedPiggybacker)(nil),
 			nil, nil,
 		)
@@ -618,6 +634,9 @@ func TestReopenConnection(t *testing.T) {
 		replacementReplica.NodeID,
 		serverAddr,
 		rttc.stopper,
+		kvflowdispatch.NewDummyDispatch(),
+		kvserver.NoopStoresFlowControlIntegration{},
+		kvserver.NoopRaftTransportDisconnectListener{},
 		(*node_rac2.AdmittedPiggybacker)(nil),
 		nil, nil,
 	)

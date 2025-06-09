@@ -211,9 +211,11 @@ const (
 	spanConfigTenantLimit = 50000
 )
 
-// clusterSettingMutators includes a list of all
-// cluster setting mutator implementations.
-var clusterSettingMutators = []mutator{
+// planMutators includes a list of all known `mutator`
+// implementations. A subset of these mutations might be enabled in
+// any mixedversion test plan.
+var planMutators = []mutator{
+	preserveDowngradeOptionRandomizerMutator{},
 	newClusterSettingMutator(
 		"kv.expiration_leases_only.enabled",
 		[]bool{true, false},
@@ -225,36 +227,16 @@ var clusterSettingMutators = []mutator{
 		clusterSettingMinimumVersion("v23.2.0"),
 	),
 	newClusterSettingMutator(
+		"kv.snapshot_receiver.excise.enabled",
+		[]bool{true, false},
+		clusterSettingMinimumVersion("v23.2.0"),
+	),
+	newClusterSettingMutator(
 		"storage.sstable.compression_algorithm",
 		[]string{"snappy", "zstd"},
 		clusterSettingMinimumVersion("v24.1.0-alpha.0"),
 	),
-	// These two settings are newly introduced, so their probabilities
-	// are temporarily raised to increase testing on them specifically.
-	// The 50% matches the metamorphic probability of these settings
-	// being enabled in non mixed version tests.
-	newClusterSettingMutator(
-		"kv.transaction.write_buffering.enabled",
-		[]bool{true, false},
-		clusterSettingMinimumVersion("v25.2.0"),
-		clusterSettingProbability(0.5),
-	),
-	newClusterSettingMutator(
-		"kv.rangefeed.buffered_sender.enabled",
-		[]bool{true, false},
-		clusterSettingMinimumVersion("v25.2.0"),
-		clusterSettingProbability(0.5),
-	),
 }
-
-// planMutators includes a list of all known `mutator`
-// implementations. A subset of these mutations might be enabled in
-// any mixedversion test plan.
-var planMutators = append([]mutator{
-	preserveDowngradeOptionRandomizerMutator{},
-},
-	clusterSettingMutators...,
-)
 
 // Plan returns the TestPlan used to upgrade the cluster from the
 // first to the final version in the `versions` field. The test plan
@@ -575,11 +557,6 @@ func (p *testPlanner) systemSetupSteps() []testStep {
 	}
 
 	setupContext := p.nonUpgradeContext(initialVersion, SystemSetupStage)
-
-	clusterStartHooks := p.hooks.BeforeClusterStartSteps(setupContext, p.prng)
-	if len(clusterStartHooks) > 0 {
-		steps = append(steps, p.concurrently(beforeClusterStartLabel, clusterStartHooks)...)
-	}
 	return append(steps,
 		p.newSingleStepWithContext(setupContext, startStep{
 			version:            initialVersion,
@@ -602,7 +579,6 @@ func (p *testPlanner) systemSetupSteps() []testStep {
 // passed is the version in which the tenant is created.
 func (p *testPlanner) tenantSetupSteps(v *clusterupgrade.Version) []testStep {
 	setupContext := p.nonUpgradeContext(v, TenantSetupStage)
-	var steps []testStep
 	shouldGrantCapabilities := p.deploymentMode == SeparateProcessDeployment ||
 		(p.deploymentMode == SharedProcessDeployment && !v.AtLeast(TenantsAndSystemAlignedSettingsVersion))
 
@@ -622,15 +598,11 @@ func (p *testPlanner) tenantSetupSteps(v *clusterupgrade.Version) []testStep {
 		}
 	}
 
-	clusterStartHooks := p.hooks.BeforeClusterStartSteps(setupContext, p.prng)
-	if len(clusterStartHooks) > 0 {
-		steps = append(steps, p.concurrently(beforeClusterStartLabel, clusterStartHooks)...)
-	}
 	// We are creating a virtual cluster: we first create it, then wait
 	// for the cluster version to match the expected version, then set
 	// it as the default cluster, and finally give it all capabilities
 	// if necessary.
-	steps = append(steps,
+	steps := []testStep{
 		p.newSingleStepWithContext(setupContext, startStep),
 		p.newSingleStepWithContext(setupContext, waitForStableClusterVersionStep{
 			nodes:              p.currentContext.Tenant.Descriptor.Nodes,
@@ -638,7 +610,7 @@ func (p *testPlanner) tenantSetupSteps(v *clusterupgrade.Version) []testStep {
 			desiredVersion:     versionToClusterVersion(v),
 			virtualClusterName: p.tenantName(),
 		}),
-	)
+	}
 
 	// We only use the 'default tenant' cluster setting in
 	// shared-process deployments. For separate-process deployments, we

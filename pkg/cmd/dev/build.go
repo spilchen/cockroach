@@ -25,9 +25,7 @@ import (
 
 const (
 	crossFlag       = "cross"
-	lintFlag        = "lint"
 	cockroachTarget = "//pkg/cmd/cockroach:cockroach"
-	nogoEnableFlag  = "--run_validations"
 	nogoDisableFlag = "--norun_validations"
 	geosTarget      = "//c-deps:libgeos"
 	devTarget       = "//pkg/cmd/dev:dev"
@@ -61,7 +59,6 @@ func makeBuildCmd(runE func(cmd *cobra.Command, args []string) error) *cobra.Com
 		RunE: runE,
 	}
 	buildCmd.Flags().String(volumeFlag, "bzlhome", "the Docker volume to use as the container home directory (only used for cross builds)")
-	buildCmd.Flags().BoolP(lintFlag, "l", false, "perform linting (nogo) as part of the build process (i.e. override nolintonbuild config)")
 	buildCmd.Flags().String(crossFlag, "", "cross-compiles using the builder image (options: linux, linuxarm, macos, macosarm, windows)")
 	buildCmd.Flags().Lookup(crossFlag).NoOptDefVal = "linux"
 	buildCmd.Flags().StringArray(dockerArgsFlag, []string{}, "additional arguments to pass to Docker (only used for cross builds)")
@@ -92,7 +89,6 @@ var buildTargetMapping = map[string]string{
 	"geos":                 geosTarget,
 	"langgen":              "//pkg/sql/opt/optgen/cmd/langgen:langgen",
 	"libgeos":              geosTarget,
-	"microbench-ci":        "//pkg/cmd/microbench-ci:microbench-ci",
 	"optgen":               "//pkg/sql/opt/optgen/cmd/optgen:optgen",
 	"optfmt":               "//pkg/sql/opt/optgen/cmd/optfmt:optfmt",
 	"reduce":               "//pkg/cmd/reduce:reduce",
@@ -108,7 +104,6 @@ var buildTargetMapping = map[string]string{
 	"sql-bootstrap-data":   "//pkg/cmd/sql-bootstrap-data:sql-bootstrap-data",
 	"staticcheck":          "@co_honnef_go_tools//cmd/staticcheck:staticcheck",
 	"tests":                "//pkg:all_tests",
-	"whoownsit":            "//pkg/cmd/whoownsit:whoownsit",
 	"workload":             "//pkg/cmd/workload:workload",
 }
 
@@ -146,15 +141,11 @@ func (d *dev) build(cmd *cobra.Command, commandLine []string) error {
 	targets, additionalBazelArgs := splitArgsAtDash(cmd, commandLine)
 	ctx := cmd.Context()
 	cross := mustGetFlagString(cmd, crossFlag)
-	lint := mustGetFlagBool(cmd, lintFlag)
 	dockerArgs := mustGetFlagStringArray(cmd, dockerArgsFlag)
 
 	args, buildTargets, err := d.getBasicBuildArgs(ctx, targets)
 	if err != nil {
 		return err
-	}
-	if lint {
-		args = append(args, nogoEnableFlag)
 	}
 	args = append(args, additionalBazelArgs...)
 	configArgs := getConfigArgs(args)
@@ -190,7 +181,7 @@ func (d *dev) crossBuild(
 	volume string,
 	dockerArgs []string,
 ) error {
-	bazelArgs = append(bazelArgs, fmt.Sprintf("--config=%s", crossConfig), "--config=nolintonbuild", "-c", "opt", "--config=pgo")
+	bazelArgs = append(bazelArgs, fmt.Sprintf("--config=%s", crossConfig), "--config=nolintonbuild", "-c", "opt")
 	configArgs := getConfigArgs(bazelArgs)
 	dockerArgs, err := d.getDockerRunArgs(ctx, volume, false, dockerArgs)
 	if err != nil {
@@ -379,7 +370,9 @@ func (d *dev) getBasicBuildArgs(
 	}
 
 	args = append(args, "build")
-	addCommonBazelArguments(&args)
+	if numCPUs != 0 {
+		args = append(args, fmt.Sprintf("--local_cpu_resources=%d", numCPUs))
+	}
 
 	canDisableNogo := true
 	shouldBuildWithTestConfig := false
