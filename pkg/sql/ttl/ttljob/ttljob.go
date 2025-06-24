@@ -32,6 +32,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/errors"
+	pbtypes "github.com/gogo/protobuf/types"
 )
 
 var replanThreshold = settings.RegisterFloatSetting(
@@ -55,8 +56,10 @@ var replanFrequency = settings.RegisterDurationSetting(
 // nodes. DistSQL divides work into spans that each ttlProcessor scans in a
 // SELECT/DELETE loop.
 type rowLevelTTLResumer struct {
-	job *jobs.Job
-	st  *cluster.Settings
+	job          *jobs.Job
+	st           *cluster.Settings
+	physicalPlan *sql.PhysicalPlan
+	planCtx      *sql.PlanningCtx
 }
 
 var _ jobs.Resumer = (*rowLevelTTLResumer)(nil)
@@ -254,35 +257,24 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 		return physicalPlan, planCtx, nil
 	}
 
-	metadataCallbackWriter := sql.NewMetadataOnlyMetadataCallbackWriter()
-
-	physicalPlan, planCtx, err := makePlan(ctx, distSQLPlanner)
+	var err error
+	t.physicalPlan, t.planCtx, err = makePlan(ctx, distSQLPlanner)
 	if err != nil {
 		return err
 	}
 
-	if err := t.job.NoTxn().Update(ctx,
-		func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-			progress := md.Progress
-			rowLevelTTL := progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
-			rowLevelTTL.JobTotalSpanCount = int64(jobSpanCount)
-			rowLevelTTL.JobProcessedSpanCount = 0
-			progress.Progress = &jobspb.Progress_FractionCompleted{
-				FractionCompleted: 0,
-			}
-			ju.UpdateProgress(progress)
-			return nil
-		},
-	); err != nil {
+	if err := t.initProgress(ctx, int64(jobSpanCount)); err != nil {
 		return err
 	}
+
+	metadataCallbackWriter := sql.NewMetadataOnlyMetadataCallbackWriter(t.refreshProgress)
 
 	// Get a function to be used in a goroutine to monitor whether a replan is
 	// needed due to changes in node membership. This is important because if
 	// there are idle nodes that become available, it's more efficient to restart
 	// the TTL job to utilize those nodes for parallel work.
 	replanChecker, cancelReplanner := sql.PhysicalPlanChangeChecker(
-		ctx, physicalPlan, makePlan, jobExecCtx,
+		ctx, t.physicalPlan, makePlan, jobExecCtx,
 		sql.ReplanOnChangedFraction(func() float64 { return replanThreshold.Get(&execCfg.Settings.SV) }),
 		func() time.Duration { return replanFrequency.Get(&execCfg.Settings.SV) },
 	)
@@ -311,9 +303,9 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 		evalCtxCopy := jobExecCtx.ExtendedEvalContext().Context.Copy()
 		distSQLPlanner.Run(
 			ctx,
-			planCtx,
+			t.planCtx,
 			nil, /* txn */
-			physicalPlan,
+			t.physicalPlan,
 			distSQLReceiver,
 			evalCtxCopy,
 			nil, /* finishedSetupFn */
@@ -349,6 +341,87 @@ func (t rowLevelTTLResumer) OnFailOrCancel(
 // CollectProfile implements the jobs.Resumer interface.
 func (t rowLevelTTLResumer) CollectProfile(_ context.Context, _ interface{}) error {
 	return nil
+}
+
+// initProgress initializes the RowLevelTTL job progress metadata, including
+// total span count and per-processor progress entries, based on the physical plan.
+// This should be called before the job starts execution.
+func (t rowLevelTTLResumer) initProgress(ctx context.Context, jobSpanCount int64) error {
+	return t.job.NoTxn().Update(ctx,
+		func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+			rowLevelTTL := &jobspb.RowLevelTTLProgress{
+				JobTotalSpanCount:     jobSpanCount,
+				JobProcessedSpanCount: 0,
+			}
+
+			for _, proc := range t.physicalPlan.Processors {
+				rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, jobspb.RowLevelTTLProcessorProgress{
+					ProcessorID:   proc.Spec.ProcessorID,
+					SQLInstanceID: proc.SQLInstanceID,
+				})
+			}
+
+			progress := md.Progress
+			progress.Details = &jobspb.Progress_RowLevelTTL{RowLevelTTL: rowLevelTTL}
+			progress.Progress = &jobspb.Progress_FractionCompleted{
+				FractionCompleted: 0,
+			}
+			ju.UpdateProgress(progress)
+			return nil
+		},
+	)
+}
+
+// refreshProgress ingests per-processor metadata pushed from TTL processors
+// and updates the job level progress. It recomputes total spans processed
+// and rows deleted, and sets the job level fraction completed.
+func (t rowLevelTTLResumer) refreshProgress(
+	ctx context.Context, meta *execinfrapb.ProducerMetadata,
+) error {
+	var incomingProcProgress jobspb.RowLevelTTLProcessorProgress
+	if err := pbtypes.UnmarshalAny(&meta.BulkProcessorProgress.ProgressDetails, &incomingProcProgress); err != nil {
+		return errors.Wrapf(err, "unable to unmarshal ttl progress details")
+	}
+
+	return t.job.NoTxn().Update(ctx,
+		func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+			rowLevelTTL := md.Progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
+
+			// Reset job level counters before recomputing them from processor-level data.
+			rowLevelTTL.JobDeletedRowCount = 0
+			rowLevelTTL.JobProcessedSpanCount = 0
+			totalSpanCount := int64(0)
+
+			foundMatchingProcessor := false
+			for i := range rowLevelTTL.ProcessorProgresses {
+				existingProcProgress := &rowLevelTTL.ProcessorProgresses[i]
+				if existingProcProgress.ProcessorID == incomingProcProgress.ProcessorID {
+					*existingProcProgress = incomingProcProgress
+					foundMatchingProcessor = true
+				}
+				rowLevelTTL.JobDeletedRowCount += existingProcProgress.DeletedRowCount
+				rowLevelTTL.JobProcessedSpanCount += existingProcProgress.ProcessedSpanCount
+				totalSpanCount += existingProcProgress.TotalSpanCount
+			}
+			if !foundMatchingProcessor {
+				return errors.Errorf(
+					"received progress for unknown processor: %v; known processors: %v",
+					incomingProcProgress, rowLevelTTL)
+			}
+			if totalSpanCount != rowLevelTTL.JobTotalSpanCount {
+				return errors.Errorf(
+					"mismatch in span totals: computed=%d jobRecorded=%d",
+					totalSpanCount, rowLevelTTL.JobTotalSpanCount)
+			}
+
+			md.Progress.Progress = &jobspb.Progress_FractionCompleted{
+				FractionCompleted: float32(rowLevelTTL.JobProcessedSpanCount) / float32(rowLevelTTL.JobTotalSpanCount),
+			}
+
+			ju.UpdateProgress(md.Progress)
+			return nil
+		},
+	)
 }
 
 func init() {
