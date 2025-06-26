@@ -156,6 +156,7 @@ func (h *rowLevelTTLTestJobTestHelper) waitForScheduledJob(
 
 	var rows [][]string
 	testutils.SucceedsWithin(t, func() error {
+		// Force newly created job to be adopted and verify it succeeds.
 		h.server.JobRegistry().(*jobs.Registry).TestingNudgeAdoptionQueue()
 		rows = h.sqlDB.QueryStr(t, query)
 		if len(rows) == 0 {
@@ -890,7 +891,7 @@ func TestRowLevelTTLJobRandomEntries(t *testing.T) {
 					AOSTDuration: &zeroDuration,
 				},
 				tc.numSplits == 0 && !tc.forceNonMultiTenant, // SPLIT AT does not work with multi-tenant
-				1, /* numNodes */
+				1,                                            /* numNodes */
 			)
 			defer cleanupFunc()
 
