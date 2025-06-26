@@ -251,6 +251,35 @@ func (m *metadataCache) Push(
 // ProducerDone is part of the execinfra.RowReceiver interface.
 func (m *metadataCache) ProducerDone() {}
 
+func (m *metadataCache) GetLatest() *execinfrapb.ProducerMetadata {
+	if len(m.bufferedMeta) == 0 {
+		return nil
+	}
+	return &m.bufferedMeta[len(m.bufferedMeta)-1]
+}
+
+func mockProcessor(processorID int32, nodeID roachpb.NodeID, totalSpanCount int64) *ttlProcessor {
+	var c base.NodeIDContainer
+	if nodeID != 0 {
+		c.Set(context.Background(), nodeID)
+	}
+	flowCtx := &execinfra.FlowCtx{
+		Cfg:    &execinfra.ServerConfig{},
+		NodeID: base.NewSQLIDContainerForNode(&c),
+		ID:     execinfrapb.FlowID{UUID: uuid.MakeV4()},
+	}
+	processor := &ttlProcessor{
+		totalSpanCount: totalSpanCount,
+	}
+	processor.ProcessorBase = execinfra.ProcessorBase{
+		ProcessorBaseNoHelper: execinfra.ProcessorBaseNoHelper{
+			ProcessorID: processorID,
+			FlowCtx:     flowCtx,
+		},
+	}
+	return processor
+}
+
 func TestSendProgressMeta(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -272,25 +301,7 @@ func TestSendProgressMeta(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			var c base.NodeIDContainer
-			if tc.nodeID != 0 {
-				c.Set(context.Background(), tc.nodeID)
-			}
-			nodeID := base.NewSQLIDContainerForNode(&c)
-			flowCtx := &execinfra.FlowCtx{
-				Cfg:    &execinfra.ServerConfig{},
-				NodeID: nodeID,
-				ID:     execinfrapb.FlowID{UUID: uuid.MakeV4()},
-			}
-			processor := &ttlProcessor{
-				totalSpanCount: tc.totalSpanCount,
-			}
-			processor.ProcessorBase = execinfra.ProcessorBase{
-				ProcessorBaseNoHelper: execinfra.ProcessorBaseNoHelper{
-					ProcessorID: 42,
-					FlowCtx:     flowCtx,
-				},
-			}
+			processor := mockProcessor(42, tc.nodeID, tc.totalSpanCount)
 			mockRowReceiver := metadataCache{pushResult: tc.outputResult}
 			err := processor.sendProgressMetadata(&mockRowReceiver, tc.deletedRowCount, tc.spansCompleted)
 
@@ -302,7 +313,7 @@ func TestSendProgressMeta(t *testing.T) {
 			require.Len(t, mockRowReceiver.bufferedMeta, 1)
 			md := mockRowReceiver.bufferedMeta[0]
 			require.NotNil(t, md.BulkProcessorProgress)
-			require.Equal(t, nodeID.SQLInstanceID(), md.BulkProcessorProgress.NodeID)
+			require.Equal(t, processor.FlowCtx.NodeID.SQLInstanceID(), md.BulkProcessorProgress.NodeID)
 			var ttlProgress jobspb.RowLevelTTLProcessorProgress
 			require.NoError(t, pbtypes.UnmarshalAny(&md.BulkProcessorProgress.ProgressDetails, &ttlProgress))
 			require.Equal(t, tc.totalSpanCount, ttlProgress.TotalSpanCount)

@@ -280,14 +280,13 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 		return err
 	}
 
-	updater := ttlJobProgressUpdater{job: t.job}
-	if err := t.initProgress(ctx, updater, int64(jobSpanCount)); err != nil {
+	if err := t.initProgressInJob(ctx, int64(jobSpanCount)); err != nil {
 		return err
 	}
 
 	metadataCallbackWriter := sql.NewMetadataOnlyMetadataCallbackWriter(
 		func(ctx context.Context, meta *execinfrapb.ProducerMetadata) error {
-			return t.refreshProgress(ctx, updater, meta)
+			return t.refreshProgressInJob(ctx, meta)
 		},
 	)
 
@@ -365,20 +364,36 @@ func (t *rowLevelTTLResumer) CollectProfile(_ context.Context, _ interface{}) er
 	return nil
 }
 
-// . SPILLY remove this interface
-type jobProgressUpdater interface {
-	Update(ctx context.Context, updateFn func(md jobs.JobMetadata, ju *jobs.JobUpdater) error) error
-}
-
-type ttlJobProgressUpdater struct {
-	job *jobs.Job
-}
-
-func (u ttlJobProgressUpdater) Update(
-	ctx context.Context, fn func(md jobs.JobMetadata, ju *jobs.JobUpdater) error,
+// initProgressInJob initializes and persists the initial RowLevelTTL job progress state.
+// It computes throttling thresholds and writes an empty progress object to the job record.
+// This should be called once before job execution starts.
+func (t *rowLevelTTLResumer) initProgressInJob(
+	ctx context.Context, jobSpanCount int64,
 ) error {
-	return u.job.NoTxn().Update(ctx, func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-		return fn(md, ju)
+	return t.job.NoTxn().Update(ctx, func(_ isql.Txn, _ jobs.JobMetadata, ju *jobs.JobUpdater) error {
+		newProgress, err := t.initProgress(jobSpanCount)
+		if err != nil {
+			return err
+		}
+		ju.UpdateProgress(newProgress)
+		return nil
+	})
+}
+
+// refreshProgressInJob updates the job progress metadata based on input
+// from the last producer metadata received.
+func (t *rowLevelTTLResumer) refreshProgressInJob(
+	ctx context.Context, meta *execinfrapb.ProducerMetadata,
+) error {
+	return t.job.NoTxn().Update(ctx, func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+		progress, err := t.refreshProgress(ctx, &md, meta)
+		if err != nil {
+			return err
+		}
+		if progress != nil {
+			ju.UpdateProgress(progress)
+		}
+		return nil
 	})
 }
 
@@ -386,109 +401,107 @@ func (u ttlJobProgressUpdater) Update(
 // total span count and per-processor progress entries, based on the physical plan.
 // This should be called before the job starts execution.
 func (t *rowLevelTTLResumer) initProgress(
-	ctx context.Context, updater jobProgressUpdater, jobSpanCount int64,
-) error {
-	return updater.Update(ctx, func(md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		// To avoid too many progress updates, especially if a lot of the spans don't
-		// have expired rows, we will gate the updates to approximately every 1% of
-		// spans processed, and at least 60 seconds apart with jitter. This gating is
-		// done in refreshProgress.
-		t.mu.updateEvery = max(1, jobSpanCount/100)
-		t.mu.updateEveryDuration = 60*time.Second + time.Duration(rand.Int63n(10*1000))*time.Millisecond
-		t.mu.lastUpdateTime = timeutil.Now()
-		t.mu.lastSpanCount = 0
+	jobSpanCount int64,
+) (*jobspb.Progress, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// To avoid too many progress updates, especially if a lot of the spans don't
+	// have expired rows, we will gate the updates to approximately every 1% of
+	// spans processed, and at least 60 seconds apart with jitter. This gating is
+	// done in refreshProgress.
+	t.mu.updateEvery = max(1, jobSpanCount/100)
+	t.mu.updateEveryDuration = 60*time.Second + time.Duration(rand.Int63n(10*1000))*time.Millisecond
+	t.mu.lastUpdateTime = timeutil.Now()
+	t.mu.lastSpanCount = 0
 
-		rowLevelTTL := &jobspb.RowLevelTTLProgress{
-			JobTotalSpanCount:     jobSpanCount,
-			JobProcessedSpanCount: 0,
-		}
+	rowLevelTTL := &jobspb.RowLevelTTLProgress{
+		JobTotalSpanCount:     jobSpanCount,
+		JobProcessedSpanCount: 0,
+	}
 
-		progress := md.Progress
-		progress.Details = &jobspb.Progress_RowLevelTTL{RowLevelTTL: rowLevelTTL}
-		progress.Progress = &jobspb.Progress_FractionCompleted{
+	progress := &jobspb.Progress{
+		Details: &jobspb.Progress_RowLevelTTL{RowLevelTTL: rowLevelTTL},
+		Progress: &jobspb.Progress_FractionCompleted{
 			FractionCompleted: 0,
-		}
-		ju.UpdateProgress(progress)
-		return nil
-	})
+		},
+	}
+	return progress, nil
 }
 
 // refreshProgress ingests per-processor metadata pushed from TTL processors
 // and updates the job level progress. It recomputes total spans processed
 // and rows deleted, and sets the job level fraction completed.
 func (t *rowLevelTTLResumer) refreshProgress(
-	ctx context.Context, updater jobProgressUpdater, meta *execinfrapb.ProducerMetadata,
-) error {
+	ctx context.Context, md *jobs.JobMetadata, meta *execinfrapb.ProducerMetadata,
+) (*jobspb.Progress, error) {
 	if meta.BulkProcessorProgress == nil {
-		return nil
+		return nil, nil
 	}
-	return updater.Update(ctx, func(md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-		var incomingProcProgress jobspb.RowLevelTTLProcessorProgress
-		if err := pbtypes.UnmarshalAny(&meta.BulkProcessorProgress.ProgressDetails, &incomingProcProgress); err != nil {
-			return errors.Wrapf(err, "unable to unmarshal ttl progress details")
-		}
+	var incomingProcProgress jobspb.RowLevelTTLProcessorProgress
+	if err := pbtypes.UnmarshalAny(&meta.BulkProcessorProgress.ProgressDetails, &incomingProcProgress); err != nil {
+		return nil, errors.Wrapf(err, "unable to unmarshal ttl progress details")
+	}
 
-		orig := md.Progress.GetRowLevelTTL()
-		if orig == nil {
-			return errors.New("job progress does not contain RowLevelTTL details")
-		}
-		rowLevelTTL := protoutil.Clone(orig).(*jobspb.RowLevelTTLProgress)
+	orig := md.Progress.GetRowLevelTTL()
+	if orig == nil {
+		return nil, errors.New("job progress does not contain RowLevelTTL details")
+	}
+	rowLevelTTL := protoutil.Clone(orig).(*jobspb.RowLevelTTLProgress)
 
-		// Reset job level counters before recomputing them from processor-level data.
-		rowLevelTTL.JobDeletedRowCount = 0
-		rowLevelTTL.JobProcessedSpanCount = 0
-		totalSpanCount := int64(0)
+	// Reset job level counters before recomputing them from processor-level data.
+	rowLevelTTL.JobDeletedRowCount = 0
+	rowLevelTTL.JobProcessedSpanCount = 0
+	totalSpanCount := int64(0)
 
-		foundMatchingProcessor := false
-		for i := range rowLevelTTL.ProcessorProgresses {
-			existingProcProgress := &rowLevelTTL.ProcessorProgresses[i]
-			if existingProcProgress.ProcessorID == incomingProcProgress.ProcessorID {
-				*existingProcProgress = incomingProcProgress
-				foundMatchingProcessor = true
-			}
-			rowLevelTTL.JobDeletedRowCount += existingProcProgress.DeletedRowCount
-			rowLevelTTL.JobProcessedSpanCount += existingProcProgress.ProcessedSpanCount
-			totalSpanCount += existingProcProgress.TotalSpanCount
+	foundMatchingProcessor := false
+	for i := range rowLevelTTL.ProcessorProgresses {
+		existingProcProgress := &rowLevelTTL.ProcessorProgresses[i]
+		if existingProcProgress.ProcessorID == incomingProcProgress.ProcessorID {
+			*existingProcProgress = incomingProcProgress
+			foundMatchingProcessor = true
 		}
-		if !foundMatchingProcessor {
-			rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, incomingProcProgress)
-			rowLevelTTL.JobDeletedRowCount += incomingProcProgress.DeletedRowCount
-			rowLevelTTL.JobProcessedSpanCount += incomingProcProgress.ProcessedSpanCount
-			totalSpanCount += incomingProcProgress.TotalSpanCount
-		}
-		if totalSpanCount > rowLevelTTL.JobTotalSpanCount {
-			return errors.Errorf(
-				"computed span total cannot exceed job total: computed=%d jobRecorded=%d",
-				totalSpanCount, rowLevelTTL.JobTotalSpanCount)
-		}
+		rowLevelTTL.JobDeletedRowCount += existingProcProgress.DeletedRowCount
+		rowLevelTTL.JobProcessedSpanCount += existingProcProgress.ProcessedSpanCount
+		totalSpanCount += existingProcProgress.TotalSpanCount
+	}
+	if !foundMatchingProcessor {
+		rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, incomingProcProgress)
+		rowLevelTTL.JobDeletedRowCount += incomingProcProgress.DeletedRowCount
+		rowLevelTTL.JobProcessedSpanCount += incomingProcProgress.ProcessedSpanCount
+		totalSpanCount += incomingProcProgress.TotalSpanCount
+	}
+	if totalSpanCount > rowLevelTTL.JobTotalSpanCount {
+		return nil, errors.Errorf(
+			"computed span total cannot exceed job total: computed=%d jobRecorded=%d",
+			totalSpanCount, rowLevelTTL.JobTotalSpanCount)
+	}
 
-		// Avoid the update if doing this too frequently.
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		processedDelta := rowLevelTTL.JobProcessedSpanCount - t.mu.lastSpanCount
-		processorComplete := incomingProcProgress.ProcessedSpanCount == incomingProcProgress.TotalSpanCount
-		if !(processedDelta >= t.mu.updateEvery ||
-			timeutil.Since(t.mu.lastUpdateTime) >= t.mu.updateEveryDuration ||
-			processorComplete) {
-			return nil // Skip the update
-		}
-		t.mu.lastSpanCount = rowLevelTTL.JobProcessedSpanCount
-		t.mu.lastUpdateTime = timeutil.Now()
+	// Avoid the update if doing this too frequently.
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	processedDelta := rowLevelTTL.JobProcessedSpanCount - t.mu.lastSpanCount
+	processorComplete := incomingProcProgress.ProcessedSpanCount == incomingProcProgress.TotalSpanCount
+	firstProgressForProcessor := !foundMatchingProcessor
 
-		newProgress := &jobspb.Progress{
-			Details: &jobspb.Progress_RowLevelTTL{
-				RowLevelTTL: rowLevelTTL,
-			},
-			Progress: &jobspb.Progress_FractionCompleted{
-				FractionCompleted: float32(rowLevelTTL.JobProcessedSpanCount) /
-					float32(rowLevelTTL.JobTotalSpanCount),
-			},
-		}
-		ju.UpdateProgress(newProgress)
-		return nil
-	})
+	if !(processedDelta >= t.mu.updateEvery ||
+		timeutil.Since(t.mu.lastUpdateTime) >= t.mu.updateEveryDuration ||
+		processorComplete ||
+		firstProgressForProcessor) {
+		return nil, nil // Skip the update
+	}
+	t.mu.lastSpanCount = rowLevelTTL.JobProcessedSpanCount
+	t.mu.lastUpdateTime = timeutil.Now()
+
+	newProgress := &jobspb.Progress{
+		Details: &jobspb.Progress_RowLevelTTL{
+			RowLevelTTL: rowLevelTTL,
+		},
+		Progress: &jobspb.Progress_FractionCompleted{
+			FractionCompleted: float32(rowLevelTTL.JobProcessedSpanCount) /
+				float32(rowLevelTTL.JobTotalSpanCount),
+		},
+	}
+	return newProgress, nil
 }
 
 func init() {

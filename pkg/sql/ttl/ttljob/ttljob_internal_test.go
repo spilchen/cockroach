@@ -10,14 +10,11 @@ import (
 	"fmt"
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
-	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/physicalplan"
-	pbtypes "github.com/gogo/protobuf/types"
 	"github.com/stretchr/testify/require"
-	"sync"
 	"testing"
 )
 
@@ -26,40 +23,6 @@ import (
 // specifically part of the ttljob package to access non-exported functions and
 // structs. Hence, the name '_internal_' in the file to signify that it accesses
 // internal functions.
-
-type mockJobUpdater struct {
-	mu       sync.Mutex
-	metadata jobs.JobMetadata
-	updates  []jobspb.Progress
-}
-
-func newMockJobUpdater() *mockJobUpdater {
-	return &mockJobUpdater{
-		metadata: jobs.JobMetadata{
-			Progress: &jobspb.Progress{},
-		},
-	}
-}
-
-func (f *mockJobUpdater) Update(_ context.Context, fn func(md jobs.JobMetadata, ju *jobs.JobUpdater) error) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	// SPILLY - this is really close, but we cannot define jobs.JobUpdater ourselves.
-	ju := &jobs.JobUpdater{
-		// SPILLY?
-		//UpdateProgress: func(p jobspb.Progress) {
-		//	f.metadata.Progress = p
-		//	f.updates = append(f.updates, *proto.Clone(&p).(*jobspb.Progress))
-		//},
-	}
-	return fn(f.metadata, ju)
-}
-
-func (f *mockJobUpdater) getLatestProgress() *jobspb.Progress {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.metadata.Progress
-}
 
 func makeFakeSpans(n int) []roachpb.Span {
 	spans := make([]roachpb.Span, n)
@@ -110,60 +73,76 @@ func TestTTLProgressLifecycle(t *testing.T) {
 		physicalPlan: &sqlPlan,
 	}
 
-	updater := newMockJobUpdater()
+	// Create two processors to match the IDs used in the physical plan
+	proc1 := mockProcessor(1, roachpb.NodeID(11), 100)
+	proc2 := mockProcessor(2, roachpb.NodeID(12), 100)
+	mockRowReceiver := metadataCache{}
 
 	// Step 1: initProgress
-	err := resumer.initProgress(ctx, updater, 200)
+	progress, err := resumer.initProgress(200)
 	require.NoError(t, err)
-
-	progress := updater.getLatestProgress()
-	require.NotNil(t, progress.Details)
+	require.NotNil(t, progress)
+	require.Equal(t, float32(0), progress.GetFractionCompleted())
 	ttlProgress := progress.GetRowLevelTTL()
 	require.Equal(t, int64(200), ttlProgress.JobTotalSpanCount)
-	require.Equal(t, 2, len(ttlProgress.ProcessorProgresses))
 	require.Zero(t, ttlProgress.JobProcessedSpanCount)
 	require.Zero(t, ttlProgress.JobDeletedRowCount)
-	require.Equal(t, float32(0), progress.GetFractionCompleted())
-
-	// Step 2: simulate a partial update from one processor
-	sendProgress := func(id int32, spans, rows int64, total int64) *execinfrapb.ProducerMetadata {
-		enc, err := pbtypes.MarshalAny(&jobspb.RowLevelTTLProcessorProgress{
-			ProcessorID:        id,
-			ProcessedSpanCount: spans,
-			DeletedRowCount:    rows,
-			TotalSpanCount:     total,
-		})
-		require.NoError(t, err)
-		return &execinfrapb.ProducerMetadata{
-			BulkProcessorProgress: &execinfrapb.RemoteProducerMetadata_BulkProcessorProgress{
-				ProgressDetails: *enc,
-			},
-		}
+	require.Len(t, ttlProgress.ProcessorProgresses, 0)
+	md := jobs.JobMetadata{
+		Progress: progress,
 	}
 
-	// First refresh (processor 1)
-	err = resumer.refreshProgress(ctx, updater, sendProgress(1, 50, 100, 100))
+	// First refresh (processor 1 partial)
+	err = proc1.sendProgressMetadata(&mockRowReceiver, 100, 50)
 	require.NoError(t, err)
-	p1 := updater.getLatestProgress().GetRowLevelTTL()
-	require.Equal(t, int64(50), p1.JobProcessedSpanCount)
-	require.Equal(t, int64(100), p1.JobDeletedRowCount)
-	require.InEpsilon(t, 0.25, updater.getLatestProgress().GetFractionCompleted(), 0.001)
-
-	// Second refresh (processor 2)
-	err = resumer.refreshProgress(ctx, updater, sendProgress(2, 100, 50, 100))
+	progress, err = resumer.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
 	require.NoError(t, err)
-	p2 := updater.getLatestProgress()
-	ttl := p2.GetRowLevelTTL()
-	require.Equal(t, int64(150), ttl.JobProcessedSpanCount)
-	require.Equal(t, int64(150), ttl.JobDeletedRowCount)
-	require.InEpsilon(t, 0.75, p2.GetFractionCompleted(), 0.001)
+	require.NotNil(t, progress)
+	md.Progress = progress
 
-	// SPILLY - temporarily comment out to get things working. Need to revisit.
-	//// Final refresh (back with processor 1)
-	//err = resumer.refreshProgress(ctx, updater, sendProgress(1, 50, 25, 100))
-	//require.NoError(t, err)
-	//p1 = updater.getLatestProgress().GetRowLevelTTL()
-	//require.Equal(t, int64(100), p1.JobProcessedSpanCount)
-	//require.Equal(t, int64(125), p1.JobDeletedRowCount)
-	//require.InEpsilon(t, 1, updater.getLatestProgress().GetFractionCompleted(), 0.001)
+	require.NoError(t, err)
+	require.InEpsilon(t, 0.25, progress.GetFractionCompleted(), 0.001)
+	ttlProgress = progress.GetRowLevelTTL()
+	require.Equal(t, int64(200), ttlProgress.JobTotalSpanCount)
+	require.Equal(t, int64(50), ttlProgress.JobProcessedSpanCount)
+	require.Equal(t, int64(100), ttlProgress.JobDeletedRowCount)
+	require.Len(t, ttlProgress.ProcessorProgresses, 1)
+
+	// Second refresh (processor 2 full)
+	err = proc2.sendProgressMetadata(&mockRowReceiver, 400, 100)
+	require.NoError(t, err)
+	progress, err = resumer.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
+	require.NoError(t, err)
+	require.NotNil(t, progress)
+	md.Progress = progress
+
+	require.NoError(t, err)
+	require.InEpsilon(t, 0.75, progress.GetFractionCompleted(), 0.001)
+	ttlProgress = progress.GetRowLevelTTL()
+	require.Equal(t, int64(200), ttlProgress.JobTotalSpanCount)
+	require.Equal(t, int64(150), ttlProgress.JobProcessedSpanCount)
+	require.Equal(t, int64(500), ttlProgress.JobDeletedRowCount)
+	require.Len(t, ttlProgress.ProcessorProgresses, 2)
+
+	// No update refresh (processor 1 empty)
+	err = proc1.sendProgressMetadata(&mockRowReceiver, 100, 50) // Same values as first progress
+	require.NoError(t, err)
+	progress, err = resumer.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
+	require.NoError(t, err)
+	require.Nil(t, progress)
+
+	// Final refresh (processor 1 remaining)
+	err = proc1.sendProgressMetadata(&mockRowReceiver, 600, 100)
+	require.NoError(t, err)
+	progress, err = resumer.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
+	require.NoError(t, err)
+	require.NotNil(t, progress)
+
+	require.NoError(t, err)
+	require.InEpsilon(t, 1, progress.GetFractionCompleted(), 0.001)
+	ttlProgress = progress.GetRowLevelTTL()
+	require.Equal(t, int64(200), ttlProgress.JobTotalSpanCount)
+	require.Equal(t, int64(200), ttlProgress.JobProcessedSpanCount)
+	require.Equal(t, int64(1000), ttlProgress.JobDeletedRowCount)
+	require.Len(t, ttlProgress.ProcessorProgresses, 2)
 }
