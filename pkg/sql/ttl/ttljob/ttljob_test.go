@@ -138,7 +138,10 @@ func (h *rowLevelTTLTestJobTestHelper) waitForScheduledJob(
 		`SELECT status, error FROM [SHOW JOBS]
 		WHERE job_id IN (
 			SELECT id FROM %s
-			WHERE created_by_id IN (SELECT schedule_id FROM %s WHERE executor_type = 'scheduled-row-level-ttl-executor')
+			WHERE created_by_id IN (
+				SELECT schedule_id FROM %s
+				WHERE executor_type = 'scheduled-row-level-ttl-executor'
+			)
 		)`,
 		h.env.SystemJobsTableName(),
 		h.env.ScheduledJobsTableName(),
@@ -150,29 +153,49 @@ func (h *rowLevelTTLTestJobTestHelper) waitForScheduledJob(
 		regex, err = regexp.Compile(expectedErrorRe)
 		require.NoError(t, err)
 	}
+
+	var rows [][]string
 	testutils.SucceedsWithin(t, func() error {
-		// Force newly created job to be adopted and verify it succeeds.
 		h.server.JobRegistry().(*jobs.Registry).TestingNudgeAdoptionQueue()
-		rows := h.sqlDB.QueryStr(t, query)
-		var actualStatuses []string
-		var actualErrors []string
-		for _, row := range rows {
-			actualStatus := row[0]
-			actualError := row[1]
-			if actualStatus == string(expectedStatus) && (regex == nil || regex.MatchString(actualError)) {
-				return nil
-			}
-			actualStatuses = append(actualStatuses, actualStatus)
-			actualErrors = append(actualErrors, actualError)
+		rows = h.sqlDB.QueryStr(t, query)
+		if len(rows) == 0 {
+			return errors.New("no job rows found yet")
 		}
-		return errors.Newf(`
+		for _, row := range rows {
+			status := row[0]
+			switch jobs.State(status) {
+			case jobs.StatePending:
+				return errors.New("job is pending")
+			case jobs.StateRunning:
+				return errors.New("job still running")
+			case jobs.StateReverting:
+				return errors.New("job is reverting")
+			}
+		}
+		return nil // job is done
+	}, 3*time.Minute)
+
+	// At this point, job has completed (not running). Assert correctness.
+	var actualStatuses []string
+	var actualErrors []string
+	matched := false
+	for _, row := range rows {
+		status := row[0]
+		errStr := row[1]
+		actualStatuses = append(actualStatuses, status)
+		actualErrors = append(actualErrors, errStr)
+		if status == string(expectedStatus) && (regex == nil || regex.MatchString(errStr)) {
+			matched = true
+			break
+		}
+	}
+
+	require.True(t, matched, `
 expectedStatus="%s"
 actualStatuses="%s"
  expectedError="%s"
   actualErrors="%s"`,
-			expectedStatus, strings.Join(actualStatuses, `", "`), expectedErrorRe, strings.Join(actualErrors, `", "`),
-		)
-	}, 3*time.Minute)
+		expectedStatus, strings.Join(actualStatuses, `", "`), expectedErrorRe, strings.Join(actualErrors, `", "`))
 }
 
 func (h *rowLevelTTLTestJobTestHelper) verifyNonExpiredRows(
@@ -247,7 +270,6 @@ func (h *rowLevelTTLTestJobTestHelper) verifyExpiredRows(
 		rowLevelTTLProgress := progress.UnwrapDetails().(jobspb.RowLevelTTLProgress)
 
 		processorProgresses := rowLevelTTLProgress.ProcessorProgresses
-		fmt.Printf("SPILLY: we have %d processors\n", len(processorProgresses))
 		processorIDs := make(map[int32]struct{}, len(processorProgresses))
 		sqlInstanceIDs := make(map[base.SQLInstanceID]struct{}, len(processorProgresses))
 		expectedJobSpanCount := int64(0)
@@ -600,6 +622,7 @@ func TestRowLevelTTLJobRandomEntries(t *testing.T) {
 	defer log.Scope(t).Close(t)
 
 	skip.UnderDuress(t, "this test is very slow")
+	skip.UnderShort(t, "slow test")
 
 	rng, _ := randutil.NewTestRand()
 

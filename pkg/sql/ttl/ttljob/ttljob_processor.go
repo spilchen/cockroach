@@ -8,7 +8,6 @@ package ttljob
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"math"
 	"runtime"
 	"sync/atomic"
@@ -148,8 +147,6 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 	// Note: the ttl-restart test depends on this message to know what nodes are
 	// involved in a TTL job.
 	log.Infof(ctx, "TTL processor started processorID=%d tableID=%d", t.ProcessorID, tableID)
-	nodeID := t.FlowCtx.NodeID.SQLInstanceID()
-	fmt.Printf("SPILLY: TTL processor started processorID=%d SQLInstanceID=%d spans=%d\n", t.ProcessorID, nodeID, len(ttlSpec.Spans))
 
 	selectRateLimit := ttlSpec.SelectRateLimit
 	// Default 0 value to "unlimited" in case job started on node <= v23.2.
@@ -236,7 +233,6 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 					deletedRowCount.Add(spanDeletedRowCount)
 					processedSpanCount.Add(1)
 					if err != nil {
-						fmt.Printf("SPILLY: got an error: %v\n", err)
 						// Continue until channel is fully read.
 						// Otherwise, the keys input will be blocked.
 						for bounds = range boundsChan {
@@ -326,19 +322,6 @@ func (t *ttlProcessor) sendProgressMetadata(
 	}
 	return nil
 }
-
-// SPILLY - create a unit test just for this function
-// - setup a mock ttlProcessor
-// 	- setup a mock FlowCtx, need to set NodeID and ID
-// - setup a mock execinfra.RowReceiver
-// - cases to test:
-//   - output.Push fails
-//   - drained is set when processed == total
-//   - unpack progress and see that:
-// 			- nodeID matches
-//      - row counts match
-
-// SPILLY - combine this with the coordinator flow to ensure proper tracking of completion %
 
 // runTTLOnQueryBounds runs the SELECT/DELETE loop for a single DistSQL span.
 // spanRowCount should be checked even if the function returns an error
