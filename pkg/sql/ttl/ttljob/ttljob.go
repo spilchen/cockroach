@@ -7,6 +7,7 @@ package ttljob
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
@@ -263,11 +264,16 @@ func (t rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (re
 		return err
 	}
 
-	if err := t.initProgress(ctx, int64(jobSpanCount)); err != nil {
+	updater := ttlJobProgressUpdater{job: t.job}
+	if err := t.initProgress(ctx, updater, int64(jobSpanCount)); err != nil {
 		return err
 	}
 
-	metadataCallbackWriter := sql.NewMetadataOnlyMetadataCallbackWriter(t.refreshProgress)
+	metadataCallbackWriter := sql.NewMetadataOnlyMetadataCallbackWriter(
+		func(ctx context.Context, meta *execinfrapb.ProducerMetadata) error {
+			return t.refreshProgress(ctx, updater, meta)
+		},
+	)
 
 	// Get a function to be used in a goroutine to monitor whether a replan is
 	// needed due to changes in node membership. This is important because if
@@ -343,85 +349,118 @@ func (t rowLevelTTLResumer) CollectProfile(_ context.Context, _ interface{}) err
 	return nil
 }
 
+type jobProgressUpdater interface {
+	Update(ctx context.Context, updateFn func(md jobs.JobMetadata, ju *jobs.JobUpdater) error) error
+}
+
+type ttlJobProgressUpdater struct {
+	job *jobs.Job
+}
+
+func (u ttlJobProgressUpdater) Update(
+	ctx context.Context, fn func(md jobs.JobMetadata, ju *jobs.JobUpdater) error,
+) error {
+	return u.job.NoTxn().Update(ctx, func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+		return fn(md, ju)
+	})
+}
+
 // initProgress initializes the RowLevelTTL job progress metadata, including
 // total span count and per-processor progress entries, based on the physical plan.
 // This should be called before the job starts execution.
-func (t rowLevelTTLResumer) initProgress(ctx context.Context, jobSpanCount int64) error {
-	return t.job.NoTxn().Update(ctx,
-		func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-			rowLevelTTL := &jobspb.RowLevelTTLProgress{
-				JobTotalSpanCount:     jobSpanCount,
-				JobProcessedSpanCount: 0,
-			}
+func (t rowLevelTTLResumer) initProgress(
+	ctx context.Context, updater jobProgressUpdater, jobSpanCount int64,
+) error {
+	return updater.Update(ctx, func(md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+		rowLevelTTL := &jobspb.RowLevelTTLProgress{
+			JobTotalSpanCount:     jobSpanCount,
+			JobProcessedSpanCount: 0,
+		}
 
-			for _, proc := range t.physicalPlan.Processors {
-				rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, jobspb.RowLevelTTLProcessorProgress{
-					ProcessorID:   proc.Spec.ProcessorID,
-					SQLInstanceID: proc.SQLInstanceID,
-				})
+		for _, proc := range t.physicalPlan.Processors {
+			prog := jobspb.RowLevelTTLProcessorProgress{
+				ProcessorID:   proc.Spec.ProcessorID,
+				SQLInstanceID: proc.SQLInstanceID,
 			}
+			fmt.Printf("SPILLY: adding processor: processorID=%d, SQLInstanceID=%d\n", prog.ProcessorID, proc.SQLInstanceID)
+			if proc.Spec.Core.Ttl != nil {
+				prog.TotalSpanCount = int64(len(proc.Spec.Core.Ttl.Spans))
+			}
+			rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, prog)
+		}
+		fmt.Printf("SPILLY: init setup %d processors\n", len(rowLevelTTL.ProcessorProgresses))
 
-			progress := md.Progress
-			progress.Details = &jobspb.Progress_RowLevelTTL{RowLevelTTL: rowLevelTTL}
-			progress.Progress = &jobspb.Progress_FractionCompleted{
-				FractionCompleted: 0,
-			}
-			ju.UpdateProgress(progress)
-			return nil
-		},
-	)
+		progress := md.Progress
+		progress.Details = &jobspb.Progress_RowLevelTTL{RowLevelTTL: rowLevelTTL}
+		progress.Progress = &jobspb.Progress_FractionCompleted{
+			FractionCompleted: 0,
+		}
+		ju.UpdateProgress(progress)
+		return nil
+	})
 }
+
+// SPILLY - use ttlprocessor mock to generate progress data
+// SPILLY - inputs:
+//  - init: bool
+//  -
+//
+// SPILLY - add an interface for Update
+// SPILLY - another way is to have the above function just take in the contents of the update function
+
+// SPILLY - is there a way to mock the progress update? Just create your own JobUpdater
 
 // refreshProgress ingests per-processor metadata pushed from TTL processors
 // and updates the job level progress. It recomputes total spans processed
 // and rows deleted, and sets the job level fraction completed.
 func (t rowLevelTTLResumer) refreshProgress(
-	ctx context.Context, meta *execinfrapb.ProducerMetadata,
+	ctx context.Context, updater jobProgressUpdater, meta *execinfrapb.ProducerMetadata,
 ) error {
-	var incomingProcProgress jobspb.RowLevelTTLProcessorProgress
-	if err := pbtypes.UnmarshalAny(&meta.BulkProcessorProgress.ProgressDetails, &incomingProcProgress); err != nil {
-		return errors.Wrapf(err, "unable to unmarshal ttl progress details")
+	if meta.BulkProcessorProgress == nil {
+		return nil
 	}
+	return updater.Update(ctx, func(md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+		var incomingProcProgress jobspb.RowLevelTTLProcessorProgress
+		if err := pbtypes.UnmarshalAny(&meta.BulkProcessorProgress.ProgressDetails, &incomingProcProgress); err != nil {
+			return errors.Wrapf(err, "unable to unmarshal ttl progress details")
+		}
 
-	return t.job.NoTxn().Update(ctx,
-		func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-			rowLevelTTL := md.Progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
+		rowLevelTTL := md.Progress.Details.(*jobspb.Progress_RowLevelTTL).RowLevelTTL
 
-			// Reset job level counters before recomputing them from processor-level data.
-			rowLevelTTL.JobDeletedRowCount = 0
-			rowLevelTTL.JobProcessedSpanCount = 0
-			totalSpanCount := int64(0)
+		// Reset job level counters before recomputing them from processor-level data.
+		rowLevelTTL.JobDeletedRowCount = 0
+		rowLevelTTL.JobProcessedSpanCount = 0
+		totalSpanCount := int64(0)
 
-			foundMatchingProcessor := false
-			for i := range rowLevelTTL.ProcessorProgresses {
-				existingProcProgress := &rowLevelTTL.ProcessorProgresses[i]
-				if existingProcProgress.ProcessorID == incomingProcProgress.ProcessorID {
-					*existingProcProgress = incomingProcProgress
-					foundMatchingProcessor = true
-				}
-				rowLevelTTL.JobDeletedRowCount += existingProcProgress.DeletedRowCount
-				rowLevelTTL.JobProcessedSpanCount += existingProcProgress.ProcessedSpanCount
-				totalSpanCount += existingProcProgress.TotalSpanCount
+		foundMatchingProcessor := false
+		for i := range rowLevelTTL.ProcessorProgresses {
+			existingProcProgress := &rowLevelTTL.ProcessorProgresses[i]
+			if existingProcProgress.ProcessorID == incomingProcProgress.ProcessorID {
+				*existingProcProgress = incomingProcProgress
+				foundMatchingProcessor = true
 			}
-			if !foundMatchingProcessor {
-				return errors.Errorf(
-					"received progress for unknown processor: %v; known processors: %v",
-					incomingProcProgress, rowLevelTTL)
-			}
-			if totalSpanCount != rowLevelTTL.JobTotalSpanCount {
-				return errors.Errorf(
-					"mismatch in span totals: computed=%d jobRecorded=%d",
-					totalSpanCount, rowLevelTTL.JobTotalSpanCount)
-			}
+			rowLevelTTL.JobDeletedRowCount += existingProcProgress.DeletedRowCount
+			rowLevelTTL.JobProcessedSpanCount += existingProcProgress.ProcessedSpanCount
+			totalSpanCount += existingProcProgress.TotalSpanCount
+		}
+		if !foundMatchingProcessor {
+			return errors.Errorf(
+				"received progress for unknown processor: %v; known processors: %v",
+				incomingProcProgress, rowLevelTTL)
+		}
+		if totalSpanCount != rowLevelTTL.JobTotalSpanCount {
+			return errors.Errorf(
+				"mismatch in span totals: computed=%d jobRecorded=%d",
+				totalSpanCount, rowLevelTTL.JobTotalSpanCount)
+		}
 
-			md.Progress.Progress = &jobspb.Progress_FractionCompleted{
-				FractionCompleted: float32(rowLevelTTL.JobProcessedSpanCount) / float32(rowLevelTTL.JobTotalSpanCount),
-			}
+		md.Progress.Progress = &jobspb.Progress_FractionCompleted{
+			FractionCompleted: float32(rowLevelTTL.JobProcessedSpanCount) / float32(rowLevelTTL.JobTotalSpanCount),
+		}
 
-			ju.UpdateProgress(md.Progress)
-			return nil
-		},
-	)
+		ju.UpdateProgress(md.Progress)
+		return nil
+	})
 }
 
 func init() {

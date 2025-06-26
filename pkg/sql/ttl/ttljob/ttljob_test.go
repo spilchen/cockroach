@@ -247,6 +247,7 @@ func (h *rowLevelTTLTestJobTestHelper) verifyExpiredRows(
 		rowLevelTTLProgress := progress.UnwrapDetails().(jobspb.RowLevelTTLProgress)
 
 		processorProgresses := rowLevelTTLProgress.ProcessorProgresses
+		fmt.Printf("SPILLY: we have %d processors\n", len(processorProgresses))
 		processorIDs := make(map[int32]struct{}, len(processorProgresses))
 		sqlInstanceIDs := make(map[base.SQLInstanceID]struct{}, len(processorProgresses))
 		expectedJobSpanCount := int64(0)
@@ -263,11 +264,11 @@ func (h *rowLevelTTLTestJobTestHelper) verifyExpiredRows(
 			require.True(t, ok, i)
 
 			expectedProcessorSpanCount := expectedProcessor.spanCount
-			require.Equal(t, expectedProcessorSpanCount, processorProgress.ProcessorSpanCount)
+			require.Equal(t, expectedProcessorSpanCount, processorProgress.ProcessedSpanCount)
 			expectedJobSpanCount += expectedProcessorSpanCount
 
 			expectedProcessorRowCount := expectedProcessor.rowCount
-			require.Equal(t, expectedProcessorRowCount, processorProgress.ProcessorRowCount)
+			require.Equal(t, expectedProcessorRowCount, processorProgress.DeletedRowCount)
 			expectedJobRowCount += expectedProcessorRowCount
 		}
 		require.Equal(t, expectedJobSpanCount, rowLevelTTLProgress.JobProcessedSpanCount)

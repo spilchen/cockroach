@@ -64,6 +64,7 @@ go_test(
     size = "large",
     srcs = [
         "main_test.go",
+        "ttljob_internal_test.go",
         "ttljob_plans_test.go",
         "ttljob_processor_internal_test.go",
         "ttljob_processor_test.go",
@@ -121,8 +122,10 @@ go_test(
         "//pkg/util/quotapool",
         "//pkg/util/randutil",
         "//pkg/util/timeutil",
+        "//pkg/util/uuid",
         "@com_github_cockroachdb_datadriven//:datadriven",
         "@com_github_cockroachdb_errors//:errors",
+        "@com_github_gogo_protobuf//types",
         "@com_github_stretchr_testify//require",
     ],
 )

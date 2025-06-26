@@ -8,6 +8,7 @@ package ttljob
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"runtime"
 	"sync/atomic"
@@ -60,19 +61,22 @@ var ttlMaxKVAutoRetry = settings.RegisterIntSetting(
 // that is run by runTTLOnQueryBounds.
 type ttlProcessor struct {
 	execinfra.ProcessorBase
-	ttlSpec execinfrapb.TTLSpec
+	ttlSpec              execinfrapb.TTLSpec
+	totalSpanCount       int64
+	processorConcurrency int64
 }
 
 var _ execinfra.RowSource = (*ttlProcessor)(nil)
 
-func (t *ttlProcessor) Start(ctx context.Context) {
-	ctx = t.StartInternal(ctx, "ttl")
-}
+func (t *ttlProcessor) Start(ctx context.Context) {}
 
 func (t *ttlProcessor) Run(ctx context.Context, output execinfra.RowReceiver) {
-	t.Start(ctx)
+	ctx = t.StartInternal(ctx, "ttl")
 	err := t.work(ctx, output)
-	t.MoveToDraining(err)
+	if err != nil {
+		output.Push(nil, &execinfrapb.ProducerMetadata{Err: err})
+	}
+	output.ProducerDone()
 }
 
 func getTableInfo(
@@ -144,6 +148,8 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 	// Note: the ttl-restart test depends on this message to know what nodes are
 	// involved in a TTL job.
 	log.Infof(ctx, "TTL processor started processorID=%d tableID=%d", t.ProcessorID, tableID)
+	nodeID := t.FlowCtx.NodeID.SQLInstanceID()
+	fmt.Printf("SPILLY: TTL processor started processorID=%d SQLInstanceID=%d spans=%d\n", t.ProcessorID, nodeID, len(ttlSpec.Spans))
 
 	selectRateLimit := ttlSpec.SelectRateLimit
 	// Default 0 value to "unlimited" in case job started on node <= v23.2.
@@ -179,47 +185,18 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 	)
 
 	group := ctxgroup.WithContext(ctx)
-	processorSpanCount := int64(len(ttlSpec.Spans))
-	processorConcurrency := ttlbase.GetProcessorConcurrency(&flowCtx.Cfg.Settings.SV, int64(runtime.GOMAXPROCS(0)))
-	if processorSpanCount < processorConcurrency {
-		processorConcurrency = processorSpanCount
+	t.totalSpanCount = int64(len(ttlSpec.Spans))
+	t.processorConcurrency = ttlbase.GetProcessorConcurrency(&flowCtx.Cfg.Settings.SV, int64(runtime.GOMAXPROCS(0)))
+	if t.totalSpanCount < t.processorConcurrency {
+		t.processorConcurrency = t.totalSpanCount
 	}
 	var deletedRowCount atomic.Int64
 	var processedSpanCount atomic.Int64
 
-	sendProgressMetadata := func(done bool) error {
-		progressMsg := &jobspb.RowLevelTTLProcessorProgress{
-			ProcessorID:          t.ProcessorID,
-			SQLInstanceID:        t.FlowCtx.NodeID.SQLInstanceID(),
-			ProcessorConcurrency: processorConcurrency,
-			DeletedRowCount:      deletedRowCount.Load(),
-			ProcessedSpanCount:   processedSpanCount.Load(),
-			TotalSpanCount:       processorSpanCount,
-		}
-		progressDetails, err := pbtypes.MarshalAny(progressMsg)
-		if err != nil {
-			return errors.Wrap(err, "unable to convert ttl processor progress into any proto")
-		}
-		meta := &execinfrapb.ProducerMetadata{
-			BulkProcessorProgress: &execinfrapb.RemoteProducerMetadata_BulkProcessorProgress{
-				ProgressDetails: *progressDetails,
-				NodeID:          t.FlowCtx.NodeID.SQLInstanceID(),
-				FlowID:          t.FlowCtx.ID,
-				ProcessorID:     t.ProcessorID,
-				Drained:         done,
-			},
-		}
-		status := output.Push(nil, meta)
-		if status != execinfra.NeedMoreRows {
-			return errors.Errorf("error pushing progress metadata: %v", status)
-		}
-		return nil
-	}
-
 	err = func() error {
-		boundsChan := make(chan QueryBounds, processorConcurrency)
+		boundsChan := make(chan QueryBounds, t.processorConcurrency)
 		defer close(boundsChan)
-		for i := int64(0); i < processorConcurrency; i++ {
+		for i := int64(0); i < t.processorConcurrency; i++ {
 			group.GoCtx(func(ctx context.Context) error {
 				for bounds := range boundsChan {
 					start := timeutil.Now()
@@ -259,6 +236,7 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 					deletedRowCount.Add(spanDeletedRowCount)
 					processedSpanCount.Add(1)
 					if err != nil {
+						fmt.Printf("SPILLY: got an error: %v\n", err)
 						// Continue until channel is fully read.
 						// Otherwise, the keys input will be blocked.
 						for bounds = range boundsChan {
@@ -298,7 +276,7 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 
 			// Push progress after each span. Throttling is now handled by the
 			// coordinator.
-			if err := sendProgressMetadata(false /* done */); err != nil {
+			if err := t.sendProgressMetadata(output, deletedRowCount.Load(), processedSpanCount.Load()); err != nil {
 				return err
 			}
 		}
@@ -311,8 +289,56 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 	if err := group.Wait(); err != nil {
 		return err
 	}
-	return sendProgressMetadata(true /* done */)
+	return t.sendProgressMetadata(output, deletedRowCount.Load(), processedSpanCount.Load())
 }
+
+// sendProgressMetadata constructs and pushes a BulkProcessorProgress metadata record
+// containing the current progress of this TTL processor. It includes deleted row count,
+// processed span count, and marks the metadata as drained if all spans are complete.
+func (t *ttlProcessor) sendProgressMetadata(
+	output execinfra.RowReceiver, deletedRowCount, processedSpanCount int64,
+) error {
+	nodeID := t.FlowCtx.NodeID.SQLInstanceID()
+	progressMsg := &jobspb.RowLevelTTLProcessorProgress{
+		ProcessorID:          t.ProcessorID,
+		SQLInstanceID:        nodeID,
+		ProcessorConcurrency: t.processorConcurrency,
+		DeletedRowCount:      deletedRowCount,
+		ProcessedSpanCount:   processedSpanCount,
+		TotalSpanCount:       t.totalSpanCount,
+	}
+	progressAny, err := pbtypes.MarshalAny(progressMsg)
+	if err != nil {
+		return errors.Wrap(err, "unable to marshal TTL processor progress")
+	}
+	meta := &execinfrapb.ProducerMetadata{
+		BulkProcessorProgress: &execinfrapb.RemoteProducerMetadata_BulkProcessorProgress{
+			ProgressDetails: *progressAny,
+			NodeID:          nodeID,
+			FlowID:          t.FlowCtx.ID,
+			ProcessorID:     t.ProcessorID,
+			Drained:         processedSpanCount == t.totalSpanCount,
+		},
+	}
+	status := output.Push(nil, meta)
+	if status != execinfra.NeedMoreRows {
+		return errors.Errorf("output receiver rejected progress metadata: %v", status)
+	}
+	return nil
+}
+
+// SPILLY - create a unit test just for this function
+// - setup a mock ttlProcessor
+// 	- setup a mock FlowCtx, need to set NodeID and ID
+// - setup a mock execinfra.RowReceiver
+// - cases to test:
+//   - output.Push fails
+//   - drained is set when processed == total
+//   - unpack progress and see that:
+// 			- nodeID matches
+//      - row counts match
+
+// SPILLY - combine this with the coordinator flow to ensure proper tracking of completion %
 
 // runTTLOnQueryBounds runs the SELECT/DELETE loop for a single DistSQL span.
 // spanRowCount should be checked even if the function returns an error

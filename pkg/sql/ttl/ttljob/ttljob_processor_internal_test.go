@@ -7,6 +7,8 @@ package ttljob
 
 import (
 	"context"
+	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	pbtypes "github.com/gogo/protobuf/types"
 	"testing"
 	"time"
 
@@ -19,12 +21,14 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
+	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -221,6 +225,89 @@ func TestRetryDeleteBatch(t *testing.T) {
 			}
 			// Check the metric to ensure we actually did the expected number of retries.
 			require.Equal(t, tc.expectedRetryCount, metrics.NumDeleteBatchRetries.Value())
+		})
+	}
+}
+
+// metadataCache is a RowReceiver that caches any metadata it receives for later
+// inspection.
+type metadataCache struct {
+	bufferedMeta []execinfrapb.ProducerMetadata
+	pushResult   execinfra.ConsumerStatus
+}
+
+var _ execinfra.RowReceiver = &metadataCache{}
+
+// Push is part of the execinfra.RowReceiver interface.
+func (m *metadataCache) Push(
+	row rowenc.EncDatumRow, meta *execinfrapb.ProducerMetadata,
+) execinfra.ConsumerStatus {
+	if meta != nil {
+		m.bufferedMeta = append(m.bufferedMeta, *meta)
+	}
+	return m.pushResult
+}
+
+// ProducerDone is part of the execinfra.RowReceiver interface.
+func (m *metadataCache) ProducerDone() {}
+
+func TestSendProgressMeta(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	testCases := []struct {
+		// desc is the description of the test case
+		desc             string
+		outputResult     execinfra.ConsumerStatus
+		expectedErrRegEx string
+		nodeID           roachpb.NodeID
+		deletedRowCount  int64
+		spansCompleted   int64
+		totalSpanCount   int64
+	}{
+		{desc: "output fails", outputResult: execinfra.ConsumerClosed, expectedErrRegEx: "ConsumerClosed"},
+		{desc: "output succeeds", outputResult: execinfra.NeedMoreRows, nodeID: 1, deletedRowCount: 18, spansCompleted: 1, totalSpanCount: 5},
+		{desc: "last push", outputResult: execinfra.NeedMoreRows, nodeID: 1, deletedRowCount: 50, spansCompleted: 5, totalSpanCount: 5},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			var c base.NodeIDContainer
+			if tc.nodeID != 0 {
+				c.Set(context.Background(), tc.nodeID)
+			}
+			nodeID := base.NewSQLIDContainerForNode(&c)
+			flowCtx := &execinfra.FlowCtx{
+				Cfg:    &execinfra.ServerConfig{},
+				NodeID: nodeID,
+				ID:     execinfrapb.FlowID{UUID: uuid.MakeV4()},
+			}
+			processor := &ttlProcessor{
+				totalSpanCount: tc.totalSpanCount,
+			}
+			processor.ProcessorBase = execinfra.ProcessorBase{
+				ProcessorBaseNoHelper: execinfra.ProcessorBaseNoHelper{
+					ProcessorID: 42,
+					FlowCtx:     flowCtx,
+				},
+			}
+			mockRowReceiver := metadataCache{pushResult: tc.outputResult}
+			err := processor.sendProgressMetadata(&mockRowReceiver, tc.deletedRowCount, tc.spansCompleted)
+
+			if tc.expectedErrRegEx != "" {
+				require.Regexp(t, tc.expectedErrRegEx, err.Error())
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, mockRowReceiver.bufferedMeta, 1)
+			md := mockRowReceiver.bufferedMeta[0]
+			require.NotNil(t, md.BulkProcessorProgress)
+			require.Equal(t, nodeID.SQLInstanceID(), md.BulkProcessorProgress.NodeID)
+			var ttlProgress jobspb.RowLevelTTLProcessorProgress
+			require.NoError(t, pbtypes.UnmarshalAny(&md.BulkProcessorProgress.ProgressDetails, &ttlProgress))
+			require.Equal(t, tc.totalSpanCount, ttlProgress.TotalSpanCount)
+			require.Equal(t, tc.spansCompleted, ttlProgress.ProcessedSpanCount)
+			require.Equal(t, tc.deletedRowCount, ttlProgress.DeletedRowCount)
 		})
 	}
 }
