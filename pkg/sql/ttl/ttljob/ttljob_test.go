@@ -888,7 +888,7 @@ func TestRowLevelTTLJobRandomEntries(t *testing.T) {
 					AOSTDuration: &zeroDuration,
 				},
 				tc.numSplits == 0 && !tc.forceNonMultiTenant, // SPLIT AT does not work with multi-tenant
-				1,                                            /* numNodes */
+				1, /* numNodes */
 			)
 			defer cleanupFunc()
 

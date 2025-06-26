@@ -8,6 +8,8 @@ package ttljob
 import (
 	"context"
 	"fmt"
+	"testing"
+
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -15,7 +17,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/physicalplan"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // NOTE: This test is for functions in ttljob.go. We already have

@@ -7,7 +7,6 @@ package ttljob
 
 import (
 	"context"
-	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"math/rand"
 	"time"
 
@@ -33,6 +32,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
@@ -367,9 +367,7 @@ func (t *rowLevelTTLResumer) CollectProfile(_ context.Context, _ interface{}) er
 // initProgressInJob initializes and persists the initial RowLevelTTL job progress state.
 // It computes throttling thresholds and writes an empty progress object to the job record.
 // This should be called once before job execution starts.
-func (t *rowLevelTTLResumer) initProgressInJob(
-	ctx context.Context, jobSpanCount int64,
-) error {
+func (t *rowLevelTTLResumer) initProgressInJob(ctx context.Context, jobSpanCount int64) error {
 	return t.job.NoTxn().Update(ctx, func(_ isql.Txn, _ jobs.JobMetadata, ju *jobs.JobUpdater) error {
 		newProgress, err := t.initProgress(jobSpanCount)
 		if err != nil {
@@ -400,9 +398,7 @@ func (t *rowLevelTTLResumer) refreshProgressInJob(
 // initProgress initializes the RowLevelTTL job progress metadata, including
 // total span count and per-processor progress entries, based on the physical plan.
 // This should be called before the job starts execution.
-func (t *rowLevelTTLResumer) initProgress(
-	jobSpanCount int64,
-) (*jobspb.Progress, error) {
+func (t *rowLevelTTLResumer) initProgress(jobSpanCount int64) (*jobspb.Progress, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	// To avoid too many progress updates, especially if a lot of the spans don't
