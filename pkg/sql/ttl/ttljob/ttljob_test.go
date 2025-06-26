@@ -138,10 +138,7 @@ func (h *rowLevelTTLTestJobTestHelper) waitForScheduledJob(
 		`SELECT status, error FROM [SHOW JOBS]
 		WHERE job_id IN (
 			SELECT id FROM %s
-			WHERE created_by_id IN (
-				SELECT schedule_id FROM %s
-				WHERE executor_type = 'scheduled-row-level-ttl-executor'
-			)
+			WHERE created_by_id IN (SELECT schedule_id FROM %s WHERE executor_type = 'scheduled-row-level-ttl-executor')
 		)`,
 		h.env.SystemJobsTableName(),
 		h.env.ScheduledJobsTableName(),
