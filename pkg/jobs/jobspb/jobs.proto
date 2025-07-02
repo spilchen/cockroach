@@ -1431,7 +1431,15 @@ message HotRangesLoggerDetails {
 }
 
 message InspectDetails {
+  message Check {
+    // TableID is the ID of the table that the check applies to.
+    uint32 table_id = 1 [
+      (gogoproto.customname) = "TableID",
+      (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb.ID"
+    ];
+  }
 
+  repeated Check checks = 1;
 }
 
 message UpdateTableMetadataCacheDetails {}

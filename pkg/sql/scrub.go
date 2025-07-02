@@ -470,8 +470,14 @@ func (n *scrubNode) runScrubTableJob(
 	// Consistency check is done async via a job.
 	jobID := p.ExecCfg().JobRegistry.MakeJobID()
 	jr := jobs.Record{
-		Description:   tree.Serialize(n.n),
-		Details:       jobspb.InspectDetails{},
+		Description: tree.Serialize(n.n),
+		Details: jobspb.InspectDetails{
+			Checks: []*jobspb.InspectDetails_Check{
+				{
+					TableID: tableDesc.GetID(),
+				},
+			},
+		},
 		Progress:      jobspb.InspectProgress{},
 		CreatedBy:     nil,
 		Username:      username.NodeUserName(),
