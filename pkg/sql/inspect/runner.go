@@ -8,6 +8,7 @@ package inspect
 import (
 	"context"
 
+	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/errors"
 )
@@ -28,7 +29,7 @@ type inspectCheck interface {
 	Started() bool
 
 	// Start prepares the check to begin returning results.
-	Start(ctx context.Context, cfg *execinfra.ServerConfig) error
+	Start(ctx context.Context, cfg *execinfra.ServerConfig, span roachpb.Span, workerIndex int) error
 
 	// Next returns the next inspect error, if any.
 	// Returns (nil, nil) when there are no errors for the current row.
@@ -73,11 +74,13 @@ type inspectRunner struct {
 //
 // Returns true if a check was advanced or an issue was found. Returns false when all
 // checks are complete. If an error occurs at any stage, it is returned immediately.
-func (c *inspectRunner) Step(ctx context.Context, cfg *execinfra.ServerConfig) (bool, error) {
+func (c *inspectRunner) Step(
+	ctx context.Context, cfg *execinfra.ServerConfig, span roachpb.Span, workerIndex int,
+) (bool, error) {
 	for len(c.checks) > 0 {
 		check := c.checks[0]
 		if !check.Started() {
-			if err := check.Start(ctx, cfg); err != nil {
+			if err := check.Start(ctx, cfg, span, workerIndex); err != nil {
 				return false, err
 			}
 		}

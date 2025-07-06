@@ -9,6 +9,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -29,7 +30,9 @@ func (m *mockInspectCheck) Started() bool {
 	return m.started
 }
 
-func (m *mockInspectCheck) Start(context.Context, *execinfra.ServerConfig) error {
+func (m *mockInspectCheck) Start(
+	context.Context, *execinfra.ServerConfig, roachpb.Span, int,
+) error {
 	if m.started {
 		return errors.Newf("inspect check already started")
 	}
@@ -165,7 +168,7 @@ func TestRunnerStep(t *testing.T) {
 
 			issuesFound := 0
 			for {
-				foundIssue, err := runner.Step(ctx, nil)
+				foundIssue, err := runner.Step(ctx, nil, roachpb.Span{}, 0)
 				require.NoError(t, err)
 				if !foundIssue {
 					break
