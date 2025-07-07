@@ -469,12 +469,22 @@ func (n *scrubNode) runScrubTableJob(
 ) error {
 	// Consistency check is done async via a job.
 	jobID := p.ExecCfg().JobRegistry.MakeJobID()
+
+	// TODO(148300): just grab the first secondary index and use that for the
+	// consistency check.
+	secIndexes := tableDesc.PublicNonPrimaryIndexes()
+	if secIndexes == nil {
+		return errors.AssertionFailedf("must have at least one secondary index")
+	}
+
 	jr := jobs.Record{
 		Description: tree.Serialize(n.n),
 		Details: jobspb.InspectDetails{
 			Checks: []*jobspb.InspectDetails_Check{
 				{
+					Type:    jobspb.InspectCheckIndexConsistency,
 					TableID: tableDesc.GetID(),
+					IndexID: secIndexes[0].GetID(),
 				},
 			},
 		},
