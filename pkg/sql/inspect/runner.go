@@ -106,3 +106,16 @@ func (c *inspectRunner) Step(
 	}
 	return false, nil
 }
+
+// Close cleans up all checks in the runner. It will attempt to close each check,
+// even if errors occur during closing. If multiple checks fail to close, then
+// a combined error is returned.
+func (c *inspectRunner) Close(ctx context.Context) error {
+	var retErr error
+	for _, check := range c.checks {
+		if err := check.Close(ctx); err != nil {
+			retErr = errors.CombineErrors(retErr, err)
+		}
+	}
+	return retErr
+}

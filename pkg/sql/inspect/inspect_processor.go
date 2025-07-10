@@ -161,7 +161,7 @@ func getProcessorConcurrency(flowCtx *execinfra.FlowCtx) int {
 // an inspectRunner to drive their execution.
 func (p *inspectProcessor) processSpan(
 	ctx context.Context, span roachpb.Span, workerIndex int,
-) error {
+) (err error) {
 	checks := make([]inspectCheck, len(p.checkFactories))
 	for i, factory := range p.checkFactories {
 		checks[i] = factory()
@@ -170,12 +170,17 @@ func (p *inspectProcessor) processSpan(
 		checks: checks,
 		logger: p.logger,
 	}
+	defer func() {
+		if closeErr := runner.Close(ctx); closeErr != nil {
+			err = errors.CombineErrors(err, closeErr)
+		}
+	}()
 
 	// Process all checks on the given span.
 	for {
-		ok, err := runner.Step(ctx, p.cfg, span, workerIndex)
-		if err != nil {
-			return err
+		ok, stepErr := runner.Step(ctx, p.cfg, span, workerIndex)
+		if stepErr != nil {
+			return stepErr
 		}
 		if !ok {
 			break
@@ -193,7 +198,7 @@ func (p *inspectProcessor) processSpan(
 func newInspectProcessor(
 	ctx context.Context, flowCtx *execinfra.FlowCtx, processorID int32, spec execinfrapb.InspectSpec,
 ) (execinfra.Processor, error) {
-	checkFactories, err := buildInspectCheckFactories(spec)
+	checkFactories, err := buildInspectCheckFactories(flowCtx, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -216,12 +221,20 @@ func newInspectProcessor(
 //
 // This indirection ensures that each check instance is freshly created per span,
 // avoiding shared state across concurrent workers.
-func buildInspectCheckFactories(spec execinfrapb.InspectSpec) ([]inspectCheckFactory, error) {
+func buildInspectCheckFactories(
+	flowCtx *execinfra.FlowCtx, spec execinfrapb.InspectSpec,
+) ([]inspectCheckFactory, error) {
 	checkFactories := make([]inspectCheckFactory, 0, len(spec.InspectDetails.Checks))
 	for _, specCheck := range spec.InspectDetails.Checks {
 		switch specCheck.Type {
 		case jobspb.InspectCheckIndexConsistency:
-			// TODO(148863): implement the index consistency checker. No-op for now.
+			checkFactories = append(checkFactories, func() inspectCheck {
+				return &indexConsistencyCheck{
+					db:      flowCtx.Cfg.DB,
+					tableID: specCheck.TableID,
+					indexID: specCheck.IndexID,
+				}
+			})
 
 		default:
 			return nil, errors.AssertionFailedf("unsupported inspect check type: %v", specCheck.Type)
