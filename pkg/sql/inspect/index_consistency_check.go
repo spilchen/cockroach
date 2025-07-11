@@ -23,24 +23,37 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondatapb"
 	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
 	"github.com/cockroachdb/errors"
+	"github.com/cockroachdb/redact"
 )
 
+// indexConsistencyCheck verifies consistency between a table’s primary index
+// and a specified secondary index by streaming rows from both sides of a
+// query. It reports an issue if a key exists in the primary but not the
+// secondary, or vice versa.
 type indexConsistencyCheck struct {
-	db      descs.DB
+	flowCtx *execinfra.FlowCtx
 	tableID descpb.ID
 	indexID descpb.IndexID
 
 	tableDesc catalog.TableDescriptor
 	secIndex  catalog.Index
 	priIndex  catalog.Index
-	rowsIt    isql.Rows
+	rowIter   isql.Rows
+
+	// columns is a list of the columns returned by one side of the
+	// queries join. The actual resulting rows from the RowContainer is
+	// twice this.
+	columns []catalog.Column
+	// primaryColIdxs maps PrimaryIndex.Columns to the row
+	// indexes in the query result tree.Datums.
+	primaryColIdxs []int
 }
 
 var _ inspectCheck = (*indexConsistencyCheck)(nil)
 
 // Started implements the inspectCheck interface.
 func (c *indexConsistencyCheck) Started() bool {
-	return false
+	return c.rowIter != nil
 }
 
 // Start implements the inspectCheck interface.
@@ -84,6 +97,12 @@ func (c *indexConsistencyCheck) Start(
 		otherColumns = append(otherColumns, col)
 	})
 
+	c.primaryColIdxs = make([]int, len(pkColumns))
+	for i := range c.primaryColIdxs {
+		c.primaryColIdxs[i] = i
+	}
+	c.columns = append(pkColumns, otherColumns...)
+
 	colNames := func(cols []catalog.Column) []string {
 		res := make([]string, len(cols))
 		for i := range cols {
@@ -93,11 +112,11 @@ func (c *indexConsistencyCheck) Start(
 	}
 
 	checkQuery := c.createIndexCheckQuery(
-		colNames(pkColumns), colNames(otherColumns), o.tableDesc.GetID(), o.index, o.tableDesc.GetPrimaryIndexID(),
+		colNames(pkColumns), colNames(otherColumns), c.tableDesc.GetID(), c.secIndex, c.priIndex.GetID(),
 	)
 
-	it, err := c.db.Executor().QueryIteratorEx(
-		ctx, "inspect-inx-consistency-check", nil, /* txn */
+	it, err := c.flowCtx.Cfg.DB.Executor().QueryIteratorEx(
+		ctx, "inspect-index-consistency-check", nil, /* txn */
 		sessiondata.InternalExecutorOverride{
 			User:             username.NodeUserName(),
 			QualityOfService: &sessiondatapb.BulkLowQoS,
@@ -108,13 +127,11 @@ func (c *indexConsistencyCheck) Start(
 		return err
 	}
 
-	c.rowsIt = it
-	// SPILLY - why do we care about this?
-	//i.primaryColIdxs = make([]int, len(pkColumns))
-	//for i := range o.primaryColIdxs {
-	//	o.primaryColIdxs[i] = i
-	//}
-	//o.columns = append(pkColumns, otherColumns...)
+	// This iterator is closed in Close(). Typically when using QueryIteratorEx, a
+	// defer function is setup to automatically close the iterator. But we don't
+	// do that here because the results of the iterator are used in the Next()
+	// function.
+	c.rowIter = it
 	return nil
 }
 
@@ -122,30 +139,101 @@ func (c *indexConsistencyCheck) Start(
 func (c *indexConsistencyCheck) Next(
 	ctx context.Context, cfg *execinfra.ServerConfig,
 ) (*inspectIssue, error) {
-	// SPILLY - guts
-	return nil, nil
+	if c.rowIter == nil {
+		return nil, errors.AssertionFailedf("iterator is not opened")
+	}
+
+	ok, err := c.rowIter.Next(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "fetching next row in index consistency check")
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	// Check if this row has results from the left. See the comment above
+	// createIndexCheckQuery indicating why this is true.
+	var isMissingIndexReferenceError bool
+	if c.rowIter.Cur()[c.primaryColIdxs[0]] != tree.DNull {
+		isMissingIndexReferenceError = true
+	}
+
+	colLen := len(c.columns)
+	var errorType inspectErrorType
+	var primaryKeyDatums tree.Datums
+	if isMissingIndexReferenceError {
+		errorType = MissingSecondaryIndexEntry
+		// Fetch the primary index values from the primary index row data.
+		for _, rowIdx := range c.primaryColIdxs {
+			primaryKeyDatums = append(primaryKeyDatums, c.rowIter.Cur()[rowIdx])
+		}
+	} else {
+		errorType = DanglingSecondaryIndexEntry
+		// Fetch the primary index values from the secondary index row
+		// data, because no primary index was found. The secondary index columns
+		// are offset by the length of the distinct columns, as the first
+		// set of columns is for the primary index.
+		for _, rowIdx := range c.primaryColIdxs {
+			primaryKeyDatums = append(primaryKeyDatums, c.rowIter.Cur()[rowIdx+colLen])
+		}
+	}
+	primaryKey := tree.NewDString(primaryKeyDatums.String())
+
+	details := make(map[redact.RedactableString]interface{})
+	rowDetails := make(map[string]interface{})
+	details["row_data"] = rowDetails
+	details["index_name"] = c.secIndex.GetName()
+	if isMissingIndexReferenceError {
+		// Fetch the primary index values from the primary index row data.
+		for rowIdx, col := range c.columns {
+			// TODO(joey): We should maybe try to get the underlying type.
+			rowDetails[col.GetName()] = c.rowIter.Cur()[rowIdx].String()
+		}
+	} else {
+		// Fetch the primary index values from the secondary index row data,
+		// because no primary index was found. The secondary index columns
+		// are offset by the length of the distinct columns, as the first
+		// set of columns is for the primary index.
+		for rowIdx, col := range c.columns {
+			// TODO(joey): We should maybe try to get the underlying type.
+			rowDetails[col.GetName()] = c.rowIter.Cur()[rowIdx+colLen].String()
+		}
+	}
+
+	return &inspectIssue{
+		ErrorType: errorType,
+		// TODO(148573): Use the timestamp that we create a protected timestamp for.
+		AOST:       c.flowCtx.EvalCtx.GetStmtTimestamp(),
+		DatabaseID: c.tableDesc.GetParentID(),
+		SchemaID:   c.tableDesc.GetParentSchemaID(),
+		ObjectID:   c.tableDesc.GetID(),
+		PrimaryKey: primaryKey.String(),
+		Details:    details,
+	}, nil
 }
 
 // Done implements the inspectCheck interface.
-func (c *indexConsistencyCheck) Done(ctx context.Context) bool {
-	// SPILLY - guts
-	return true
+func (c *indexConsistencyCheck) Done(context.Context) bool {
+	return !c.rowIter.HasResults()
 }
 
 // Close implements the inspectCheck interface.
-func (c *indexConsistencyCheck) Close(ctx context.Context) error {
-	if c.rowsIt != nil {
-		if err := c.rowsIt.Close(); err != nil {
+func (c *indexConsistencyCheck) Close(context.Context) error {
+	if c.rowIter != nil {
+		if err := c.rowIter.Close(); err != nil {
 			return errors.Wrap(err, "closing index consistency check iterator")
 		}
-		c.rowsIt = nil
+		c.rowIter = nil
 	}
-	// SPILLY - guts
 	return nil
 }
 
+// loadCatalogInfo loads the table descriptor and validates the specified
+// secondary index. It verifies that the index exists on the table and is
+// eligible for consistency checking. If the index is valid, it stores the
+// descriptor and index metadata in the indexConsistencyCheck struct.
 func (c *indexConsistencyCheck) loadCatalogInfo(ctx context.Context) error {
-	return c.db.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
+	return c.flowCtx.Cfg.DB.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
 		var err error
 		c.tableDesc, err = txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, c.tableID)
 		if err != nil {
@@ -241,6 +329,8 @@ func (c *indexConsistencyCheck) createIndexCheckQuery(
 	index catalog.Index,
 	primaryIndexID descpb.IndexID,
 ) string {
+	// SPILLY - this is a straight copy from scrub. We need to refactor/simplify this.
+	// SPILLY - we need to use the query bounds from the span
 	allColumns := append(pkColumns, otherColumns...)
 	predicate := ""
 	// We need to make sure we can handle the non-public column `rowid`
@@ -297,8 +387,6 @@ func (c *indexConsistencyCheck) createIndexCheckQuery(
 		predicate,
 	)
 }
-
-// SPILLY - move to a helpers file?
 
 // col returns the string for referencing a column, with a specific alias,
 // e.g. "table.col".

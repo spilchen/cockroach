@@ -230,7 +230,7 @@ func buildInspectCheckFactories(
 		case jobspb.InspectCheckIndexConsistency:
 			checkFactories = append(checkFactories, func() inspectCheck {
 				return &indexConsistencyCheck{
-					db:      flowCtx.Cfg.DB,
+					flowCtx: flowCtx,
 					tableID: specCheck.TableID,
 					indexID: specCheck.IndexID,
 				}
