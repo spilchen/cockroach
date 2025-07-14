@@ -111,6 +111,18 @@ func (o *indexCheckOperation) Start(params runParams) error {
 		colNames(pkColumns), colNames(otherColumns), o.tableDesc.GetID(), o.index, o.tableDesc.GetPrimaryIndexID(),
 	)
 
+	fmt.Printf("SPILLY: here is the check query:\n%s\n", checkQuery)
+	selRows, err := params.p.InternalSQLTxn().QueryBuffered(ctx, "scrub-index-explain",
+		params.p.txn, fmt.Sprintf("EXPLAIN (plan,verbose) %s", checkQuery))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("SPILLY: EXPLAIN output:\n")
+	for i := 0; i < len(selRows); i++ {
+		plan := selRows[i].String()
+		fmt.Printf("%s\n", plan)
+	}
+
 	rows, err := params.p.InternalSQLTxn().QueryBuffered(
 		ctx, "scrub-index", params.p.txn, checkQuery,
 	)

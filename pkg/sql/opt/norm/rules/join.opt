@@ -314,15 +314,16 @@
 #   SELECT * FROM orders o LEFT JOIN customers c ON o.customer_id = c.id
 #   =>
 #   SELECT * FROM orders o INNER JOIN customers c ON o.customer_id = c.id
-[SimplifyLeftJoin, Normalize]
-(LeftJoin | LeftJoinApply | FullJoin
-    $left:*
-    $right:*
-    $on:* & (JoinFiltersMatchAllLeftRows $left $right $on)
-    $private:*
-)
-=>
-(ConstructNonLeftJoin (OpName) $left $right $on $private)
+# SPILLY: commenting this out is the only way for INSPECT query to work
+#[SimplifyLeftJoin, Normalize]
+#(LeftJoin | LeftJoinApply | FullJoin
+#    $left:*
+#    $right:*
+#    $on:* & (JoinFiltersMatchAllLeftRows $left $right $on)
+#    $private:*
+#)
+#=>
+#(ConstructNonLeftJoin (OpName) $left $right $on $private)
 
 # SimplifyLeftJoinWithZeroRowsRight replaces a LeftJoin with a Project when
 # the right input never returns any rows. The Project passes through columns

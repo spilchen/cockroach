@@ -4936,3 +4936,52 @@ project
       │              └── b.x:1 = rls.x:5 [outer=(1,5), constraints=(/1: (/NULL - ]; /5: (/NULL - ]), fd=(1)==(5), (5)==(1)]
       └── filters
            └── non_leakproof_fn(b.y:2) [outer=(2), immutable, udf]
+
+
+exec-ddl
+CREATE TABLE t_pri (
+                    a INT,
+                    b INT,
+                        c INT NOT NULL,
+                  d TEXT,
+                  e TEXT NOT NULL,
+                  f FLOAT,
+                  PRIMARY KEY (a, d),
+                  FAMILY fam0 (a, b, c, d, e, f));
+----
+
+exec-ddl
+create index i1 on t_pri(a,d);
+----
+
+norm disable=SimplifyLeftJoin
+SELECT pri.a, pri.d, sec.a, sec.d
+FROM
+(SELECT a, d FROM t_pri@t_pri_pkey) AS pri
+FULL OUTER JOIN
+(SELECT a, d FROM t_pri@i1) AS sec
+ON pri.a = sec.a AND pri.d = sec.d
+WHERE pri.a IS NULL OR sec.a IS NULL;
+----
+select
+ ├── columns: a:1!null d:4!null a:9 d:12
+ ├── key: (1,4)
+ ├── fd: (1,4)-->(9,12)
+ ├── left-join (hash)
+ │    ├── columns: pri.a:1!null pri.d:4!null sec.a:9 sec.d:12
+ │    ├── multiplicity: left-rows(exactly-one), right-rows(exactly-one)
+ │    ├── key: (1,4)
+ │    ├── fd: (1,4)-->(9,12)
+ │    ├── scan t_pri [as=pri]
+ │    │    ├── columns: pri.a:1!null pri.d:4!null
+ │    │    ├── flags: force-index=t_pri_pkey
+ │    │    └── key: (1,4)
+ │    ├── scan t_pri [as=sec]
+ │    │    ├── columns: sec.a:9!null sec.d:12!null
+ │    │    ├── flags: force-index=i1
+ │    │    └── key: (9,12)
+ │    └── filters
+ │         ├── pri.a:1 = sec.a:9 [outer=(1,9), constraints=(/1: (/NULL - ]; /9: (/NULL - ]), fd=(1)==(9), (9)==(1)]
+ │         └── pri.d:4 = sec.d:12 [outer=(4,12), constraints=(/4: (/NULL - ]; /12: (/NULL - ]), fd=(4)==(12), (12)==(4)]
+ └── filters
+      └── (pri.a:1 IS NULL) OR (sec.a:9 IS NULL) [outer=(1,9)]

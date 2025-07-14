@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondatapb"
 	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
+	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
 )
@@ -35,10 +36,11 @@ type indexConsistencyCheck struct {
 	tableID descpb.ID
 	indexID descpb.IndexID
 
-	tableDesc catalog.TableDescriptor
-	secIndex  catalog.Index
-	priIndex  catalog.Index
-	rowIter   isql.Rows
+	tableDesc     catalog.TableDescriptor
+	secIndex      catalog.Index
+	priIndex      catalog.Index
+	rowIter       isql.Rows
+	exhaustedIter bool
 
 	// columns is a list of the columns returned by one side of the
 	// queries join. The actual resulting rows from the RowContainer is
@@ -60,7 +62,11 @@ func (c *indexConsistencyCheck) Started() bool {
 func (c *indexConsistencyCheck) Start(
 	ctx context.Context, cfg *execinfra.ServerConfig, span roachpb.Span, workerIndex int,
 ) error {
-	// SPILLY - check if the span is valid for this table
+	// Early out for spans that don't apply to the table we are running the check on.
+	_, tableID, err := cfg.Codec.DecodeTablePrefix(span.Key)
+	if descpb.ID(tableID) != c.tableID {
+		return nil
+	}
 
 	// Load up the index and table descriptors.
 	if err := c.loadCatalogInfo(ctx); err != nil {
@@ -114,11 +120,12 @@ func (c *indexConsistencyCheck) Start(
 	checkQuery := c.createIndexCheckQuery(
 		colNames(pkColumns), colNames(otherColumns), c.tableDesc.GetID(), c.secIndex, c.priIndex.GetID(),
 	)
+	fmt.Printf("SPILLY: \n%s\n", checkQuery)
 
 	it, err := c.flowCtx.Cfg.DB.Executor().QueryIteratorEx(
 		ctx, "inspect-index-consistency-check", nil, /* txn */
 		sessiondata.InternalExecutorOverride{
-			User:             username.NodeUserName(),
+			User:             username.NodeUserName(), // SPILLY -use user from job??
 			QualityOfService: &sessiondatapb.BulkLowQoS,
 		},
 		checkQuery,
@@ -148,6 +155,7 @@ func (c *indexConsistencyCheck) Next(
 		return nil, errors.Wrap(err, "fetching next row in index consistency check")
 	}
 	if !ok {
+		c.exhaustedIter = true
 		return nil, nil
 	}
 
@@ -203,7 +211,7 @@ func (c *indexConsistencyCheck) Next(
 	return &inspectIssue{
 		ErrorType: errorType,
 		// TODO(148573): Use the timestamp that we create a protected timestamp for.
-		AOST:       c.flowCtx.EvalCtx.GetStmtTimestamp(),
+		AOST:       timeutil.Now(), // c.flowCtx.EvalCtx.GetStmtTimestamp(), SPILLY wrong
 		DatabaseID: c.tableDesc.GetParentID(),
 		SchemaID:   c.tableDesc.GetParentSchemaID(),
 		ObjectID:   c.tableDesc.GetID(),
@@ -214,7 +222,7 @@ func (c *indexConsistencyCheck) Next(
 
 // Done implements the inspectCheck interface.
 func (c *indexConsistencyCheck) Done(context.Context) bool {
-	return !c.rowIter.HasResults()
+	return c.rowIter != nil && c.exhaustedIter
 }
 
 // Close implements the inspectCheck interface.

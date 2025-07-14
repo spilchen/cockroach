@@ -36,6 +36,15 @@ func (l *testInspectLogger) logIssue(_ context.Context, issue *inspectIssue) err
 	return nil
 }
 
+// SPILLY - use testIssueCollector instead of testInspectLogger.
+
+// hasIssues implements the inspectLogger interface.
+func (l *testInspectLogger) hasIssues() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.issues) > 0
+}
+
 // getIssues returns the issues that have been emitted to the logger.
 func (l *testInspectLogger) getIssues() []*inspectIssue {
 	l.mu.Lock()

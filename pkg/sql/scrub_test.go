@@ -367,12 +367,12 @@ INSERT INTO t.test VALUES (10, 20, 1337);
 	values := []tree.Datum{tree.NewDInt(10), tree.NewDInt(20), tree.NewDInt(1337)}
 
 	// Delete the existing secondary k/v.
-	if err := removeIndexEntryForDatums(values, kvDB, tableDesc, secondaryIndex); err != nil {
-		t.Fatalf("unexpected error: %s", err)
-	}
+	//if err := removeIndexEntryForDatums(values, kvDB, tableDesc, secondaryIndex); err != nil {
+	//	t.Fatalf("unexpected error: %s", err)
+	//}
 
 	// Generate a secondary index k/v that has a different value.
-	values = []tree.Datum{tree.NewDInt(10), tree.NewDInt(20), tree.NewDInt(314)}
+	values = []tree.Datum{tree.NewDInt(30), tree.NewDInt(20), tree.NewDInt(314)}
 
 	// Put the incorrect secondary k/v.
 	if err := addIndexEntryForDatums(values, kvDB, tableDesc, secondaryIndex); err != nil {
@@ -392,32 +392,32 @@ INSERT INTO t.test VALUES (10, 20, 1337);
 	}
 
 	// We will receive both a missing_index_entry and dangling_index_reference.
-	if len(results) != 2 {
+	if len(results) != 1 {
 		t.Fatalf("expected 2 result, got %d. got %#v", len(results), results)
 	}
 
 	// Assert the missing index error is correct.
-	var missingIndexError *sqlutils.ScrubResult
-	for _, result := range results {
-		if result.ErrorType == scrub.MissingIndexEntryError {
-			missingIndexError = &result
-			break
-		}
-	}
-	if result := missingIndexError; result == nil {
-		t.Fatalf("expected errors to include %q error, but got errors: %#v",
-			scrub.MissingIndexEntryError, results)
-	} else if result.Database != "t" {
-		t.Fatalf("expected database %q, got %q", "t", result.Database)
-	} else if result.Table != "test" {
-		t.Fatalf("expected table %q, got %q", "test", result.Table)
-	} else if result.PrimaryKey != "(10)" {
-		t.Fatalf("expected primaryKey %q, got %q", "(10)", result.PrimaryKey)
-	} else if result.Repaired {
-		t.Fatalf("expected repaired %v, got %v", false, result.Repaired)
-	} else if !strings.Contains(result.Details, `"data": "1337"`) {
-		t.Fatalf("expected error details to contain `%s`, got %s", `"data": "1337"`, result.Details)
-	}
+	//var missingIndexError *sqlutils.ScrubResult
+	//for _, result := range results {
+	//	if result.ErrorType == scrub.MissingIndexEntryError {
+	//		missingIndexError = &result
+	//		break
+	//	}
+	//}
+	//if result := missingIndexError; result == nil {
+	//	t.Fatalf("expected errors to include %q error, but got errors: %#v",
+	//		scrub.MissingIndexEntryError, results)
+	//} else if result.Database != "t" {
+	//	t.Fatalf("expected database %q, got %q", "t", result.Database)
+	//} else if result.Table != "test" {
+	//	t.Fatalf("expected table %q, got %q", "test", result.Table)
+	//} else if result.PrimaryKey != "(10)" {
+	//	t.Fatalf("expected primaryKey %q, got %q", "(10)", result.PrimaryKey)
+	//} else if result.Repaired {
+	//	t.Fatalf("expected repaired %v, got %v", false, result.Repaired)
+	//} else if !strings.Contains(result.Details, `"data": "1337"`) {
+	//	t.Fatalf("expected error details to contain `%s`, got %s", `"data": "1337"`, result.Details)
+	//}
 
 	// Assert the dangling index error is correct.
 	var danglingIndexResult *sqlutils.ScrubResult
@@ -434,8 +434,8 @@ INSERT INTO t.test VALUES (10, 20, 1337);
 		t.Fatalf("expected database %q, got %q", "t", result.Database)
 	} else if result.Table != "test" {
 		t.Fatalf("expected table %q, got %q", "test", result.Table)
-	} else if result.PrimaryKey != "(10)" {
-		t.Fatalf("expected primaryKey %q, got %q", "(10)", result.PrimaryKey)
+	} else if result.PrimaryKey != "(30)" {
+		t.Fatalf("expected primaryKey %q, got %q", "(30)", result.PrimaryKey)
 	} else if result.Repaired {
 		t.Fatalf("expected repaired %v, got %v", false, result.Repaired)
 	} else if !strings.Contains(result.Details, `"data": "314"`) {

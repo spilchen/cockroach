@@ -12,8 +12,11 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
+	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
+	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowexec"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
@@ -142,7 +145,14 @@ func (p *inspectProcessor) runInspect(ctx context.Context, output execinfra.RowR
 	})
 
 	// Wait for all goroutines to finish.
-	return group.Wait()
+	if err := group.Wait(); err != nil {
+		return err
+	}
+	log.Infof(ctx, "INSPECT processor completed processorID=%d issuesFound=%t", p.processorID, p.logger.hasIssues())
+	if p.logger.hasIssues() {
+		return pgerror.Newf(pgcode.DataException, "INSPECT found inconsistencies")
+	}
+	return nil
 }
 
 // getProcessorConcurrency returns the number of concurrent workers to use for
@@ -154,6 +164,16 @@ func getProcessorConcurrency(flowCtx *execinfra.FlowCtx) int {
 		return min(runtime.GOMAXPROCS(0), override)
 	}
 	return runtime.GOMAXPROCS(0)
+}
+
+// getInspectLogger returns a logger for the inspect processor.
+func getInspectLogger(flowCtx *execinfra.FlowCtx) inspectLogger {
+	knobs := flowCtx.Cfg.ExecutorConfig.(*sql.ExecutorConfig).InspectTestingKnobs
+	if knobs == nil || knobs.InspectIssueLogger == nil {
+		// TODO(148301): Implement a proper logger that writes to system.inspect_errors.
+		return &logSink{}
+	}
+	return knobs.InspectIssueLogger.(inspectLogger)
 }
 
 // processSpan executes all configured inspect checks against a single span.
@@ -209,9 +229,8 @@ func newInspectProcessor(
 		checkFactories: checkFactories,
 		cfg:            flowCtx.Cfg,
 		spanSrc:        newSliceSpanSource(spec.Spans),
-		// TODO(148301): log to cockroach.log for now, but later log to system.inspect_errors
-		logger:      &logSink{},
-		concurrency: getProcessorConcurrency(flowCtx),
+		logger:         getInspectLogger(flowCtx),
+		concurrency:    getProcessorConcurrency(flowCtx),
 	}, nil
 }
 

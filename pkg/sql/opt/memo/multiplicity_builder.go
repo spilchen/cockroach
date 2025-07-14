@@ -266,6 +266,7 @@ func filtersMatchLeftRowsAtMostOnce(left, right RelExpr, filters FiltersExpr) bo
 // columns in the foreign key must be not-null in order to guarantee that all
 // rows will have a match in the referenced table.
 func filtersMatchAllLeftRows(mem *Memo, left, right RelExpr, filters FiltersExpr) bool {
+	// SPILLY - update this??
 	if filters.IsTrue() {
 		// Cross join case.
 		if !right.Relational().Cardinality.CanBeZero() {

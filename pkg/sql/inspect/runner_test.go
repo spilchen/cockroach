@@ -7,12 +7,14 @@ package inspect
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
 	"github.com/stretchr/testify/require"
@@ -68,12 +70,58 @@ func (m *mockInspectCheck) Close(context.Context) error {
 	return nil
 }
 
-type mockLogger struct {
-	issuesFound []inspectIssue
+type testIssueCollector struct {
+	mu struct {
+		syncutil.Mutex
+
+		issuesFound []inspectIssue
+	}
 }
 
-func (m *mockLogger) logIssue(_ context.Context, issue *inspectIssue) error {
-	m.issuesFound = append(m.issuesFound, *issue)
+func (m *testIssueCollector) logIssue(_ context.Context, issue *inspectIssue) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mu.issuesFound = append(m.mu.issuesFound, *issue)
+	return nil
+}
+
+func (m *testIssueCollector) hasIssues() bool {
+	return m.NumIssuesFound() > 0
+}
+
+func (m *testIssueCollector) NumIssuesFound() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.mu.issuesFound)
+}
+
+func (m *testIssueCollector) Issue(i int) inspectIssue {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if i < 0 || i >= len(m.mu.issuesFound) {
+		panic(fmt.Sprintf("index %d out of range (%d)", i, len(m.mu.issuesFound)))
+	}
+	return m.mu.issuesFound[i]
+}
+
+// SPILLY - consider moving this struct somewhere else?
+func (m *testIssueCollector) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mu.issuesFound = nil
+}
+
+// FindIssue searches for a given issue type on the given primary key string.
+// This returns nil if no issue is found, or a pointer to the issue if it is found.
+func (m *testIssueCollector) FindIssue(errorType inspectErrorType, pk string) *inspectIssue {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i := range m.mu.issuesFound {
+		if errorType == m.mu.issuesFound[i].ErrorType && m.mu.issuesFound[i].PrimaryKey == pk {
+			return &m.mu.issuesFound[i]
+		}
+	}
 	return nil
 }
 
@@ -155,7 +203,7 @@ func TestRunnerStep(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			logger := &mockLogger{}
+			logger := &testIssueCollector{}
 			// The checks are consumed once they are processed in inspectRunner. So,
 			// save them outside the runner first so we can refer back to them later.
 			checks := make([]*mockInspectCheck, len(tc.checks))
@@ -182,14 +230,14 @@ func TestRunnerStep(t *testing.T) {
 				expectedIssuesFound += len(check)
 			}
 			require.Equal(t, expectedIssuesFound, issuesFound)
-			require.Equal(t, issuesFound, len(logger.issuesFound))
+			require.Equal(t, issuesFound, logger.NumIssuesFound())
 
 			flatExpected := make([]inspectIssue, 0, expectedIssuesFound)
 			for _, check := range tc.checks {
 				flatExpected = append(flatExpected, check...)
 			}
 			for i := range flatExpected {
-				require.Equal(t, flatExpected[i], logger.issuesFound[i])
+				require.Equal(t, flatExpected[i], logger.Issue(i))
 			}
 
 			for i := range checks {
