@@ -50,10 +50,7 @@ type storeGossiper struct {
 }
 
 func newStoreGossiper(
-	descriptorGetter func(cached bool) roachpb.StoreDescriptor,
-	nodeCapacityProvider kvserver.NodeCapacityProvider,
-	clock timeutil.TimeSource,
-	st *cluster.Settings,
+	descriptorGetter func(cached bool) roachpb.StoreDescriptor, clock timeutil.TimeSource,
 ) *storeGossiper {
 	sg := &storeGossiper{
 		lastIntervalGossip: time.Time{},
@@ -62,7 +59,7 @@ func newStoreGossiper(
 
 	desc := sg.descriptorGetter(false /* cached */)
 	knobs := kvserver.StoreGossipTestingKnobs{AsyncDisabled: true}
-	sg.local = kvserver.NewStoreGossip(sg, sg, knobs, &st.SV, clock, nodeCapacityProvider)
+	sg.local = kvserver.NewStoreGossip(sg, sg, knobs, &cluster.MakeTestingClusterSettings().SV, clock)
 	sg.local.Ident = roachpb.StoreIdent{StoreID: desc.StoreID, NodeID: desc.Node.NodeID}
 
 	return sg
@@ -111,7 +108,7 @@ func NewGossip(s state.State, settings *config.SimulationSettings) *gossip {
 		},
 	}
 	for _, store := range s.Stores() {
-		g.addStoreToGossip(s, store.StoreID(), store.NodeID())
+		g.addStoreToGossip(s, store.StoreID())
 	}
 	s.RegisterCapacityChangeListener(g)
 	s.RegisterCapacityListener(g)
@@ -119,27 +116,13 @@ func NewGossip(s state.State, settings *config.SimulationSettings) *gossip {
 	return g
 }
 
-var _ kvserver.NodeCapacityProvider = &simNodeCapacityProvider{}
-
-type simNodeCapacityProvider struct {
-	localNodeID state.NodeID
-	state       state.State
-}
-
-func (s simNodeCapacityProvider) GetNodeCapacity(_ bool) roachpb.NodeCapacity {
-	return s.state.NodeCapacity(s.localNodeID)
-}
-
-func (g *gossip) addStoreToGossip(s state.State, storeID state.StoreID, nodeID state.NodeID) {
+func (g *gossip) addStoreToGossip(s state.State, storeID state.StoreID) {
 	// Add the store gossip in an "adding" state initially, this is to avoid
 	// recursive calls to get the store descriptor.
 	g.storeGossip[storeID] = &storeGossiper{addingStore: true}
-	g.storeGossip[storeID] = newStoreGossiper(
-		func(cached bool) roachpb.StoreDescriptor {
-			return s.StoreDescriptors(cached, storeID)[0]
-		},
-		simNodeCapacityProvider{localNodeID: nodeID, state: s},
-		s.Clock(), g.settings.ST)
+	g.storeGossip[storeID] = newStoreGossiper(func(cached bool) roachpb.StoreDescriptor {
+		return s.StoreDescriptors(cached, storeID)[0]
+	}, s.Clock())
 }
 
 // Tick checks for completed gossip updates and triggers new gossip
@@ -152,7 +135,7 @@ func (g *gossip) Tick(ctx context.Context, tick time.Time, s state.State) {
 		// If the store gossip for this store doesn't yet exist, create it and
 		// add it to the map of store gossips.
 		if sg, ok = g.storeGossip[store.StoreID()]; !ok {
-			g.addStoreToGossip(s, store.StoreID(), store.NodeID())
+			g.addStoreToGossip(s, store.StoreID())
 		}
 
 		// If the interval between the last time this store was gossiped for
@@ -198,9 +181,6 @@ func (g *gossip) NewCapacityNotify(capacity roachpb.StoreCapacity, storeID state
 	if sg, ok := g.storeGossip[storeID]; ok {
 		if !sg.addingStore {
 			sg.local.UpdateCachedCapacity(capacity)
-			sg.local.RecordNewPerSecondStats(
-				capacity.QueriesPerSecond, capacity.WritesPerSecond,
-				capacity.WriteBytesPerSecond, capacity.CPUPerSecond)
 		}
 	} else {
 		panic(
@@ -212,8 +192,7 @@ func (g *gossip) NewCapacityNotify(capacity roachpb.StoreCapacity, storeID state
 
 // StoreAddNotify notifies that a new store has been added with ID storeID.
 func (g *gossip) StoreAddNotify(storeID state.StoreID, s state.State) {
-	store, _ := s.Store(storeID)
-	g.addStoreToGossip(s, storeID, store.NodeID())
+	g.addStoreToGossip(s, storeID)
 }
 
 func (g *gossip) maybeUpdateState(tick time.Time, s state.State) {
@@ -225,11 +204,11 @@ func (g *gossip) maybeUpdateState(tick time.Time, s state.State) {
 		return
 	}
 
-	updateMap := map[roachpb.StoreID]*storepool.StoreDetailMu{}
+	updateMap := map[roachpb.StoreID]*storepool.StoreDetail{}
 	for _, update := range updates {
 		updateMap[update.Desc.StoreID] = update
 	}
-	for _, node := range s.Nodes() {
-		s.UpdateStorePool(node.NodeID(), updateMap)
+	for _, store := range s.Stores() {
+		s.UpdateStorePool(store.StoreID(), updateMap)
 	}
 }

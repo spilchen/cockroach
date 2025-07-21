@@ -455,7 +455,6 @@ inner-join (cross)
  ├── multiplicity: left-rows(zero-or-one), right-rows(zero-or-more)
  ├── stats: [rows=1e+09]
  ├── cost: 32525762.2
- ├── cost-flags: unbounded-cardinality
  ├── key: (7,11,15)
  ├── fd: ()-->(1-4), (7)-->(8), (11)-->(12), (15)-->(16)
  ├── prune: (2-4,7,8,11,12,15,16)
@@ -464,16 +463,14 @@ inner-join (cross)
  │    ├── columns: t.public.bx.b:7(int!null) t.public.bx.x:8(int) t.public.cy.c:11(int!null) t.public.cy.y:12(int) t.public.dz.d:15(int!null) t.public.dz.z:16(int)
  │    ├── stats: [rows=1e+09]
  │    ├── cost: 10025753.1
- │    ├── cost-flags: unbounded-cardinality
  │    ├── key: (7,11,15)
  │    ├── fd: (7)-->(8), (11)-->(12), (15)-->(16)
  │    ├── prune: (7,8,11,12,15,16)
  │    ├── interesting orderings: (+7) (+11) (+15)
  │    ├── inner-join (cross)
  │    │    ├── columns: t.public.cy.c:11(int!null) t.public.cy.y:12(int) t.public.dz.d:15(int!null) t.public.dz.z:16(int)
- │    │    ├── stats: [rows=1e+06]
+ │    │    ├── stats: [rows=1000000]
  │    │    ├── cost: 12167.0063
- │    │    ├── cost-flags: unbounded-cardinality
  │    │    ├── key: (11,15)
  │    │    ├── fd: (11)-->(12), (15)-->(16)
  │    │    ├── prune: (11,12,15,16)
@@ -482,7 +479,6 @@ inner-join (cross)
  │    │    │    ├── columns: t.public.cy.c:11(int!null) t.public.cy.y:12(int)
  │    │    │    ├── stats: [rows=1000]
  │    │    │    ├── cost: 1068.42
- │    │    │    ├── cost-flags: unbounded-cardinality
  │    │    │    ├── key: (11)
  │    │    │    ├── fd: (11)-->(12)
  │    │    │    ├── prune: (11,12)
@@ -492,7 +488,6 @@ inner-join (cross)
  │    │    │    ├── columns: t.public.dz.d:15(int!null) t.public.dz.z:16(int)
  │    │    │    ├── stats: [rows=1000]
  │    │    │    ├── cost: 1068.42
- │    │    │    ├── cost-flags: unbounded-cardinality
  │    │    │    ├── key: (15)
  │    │    │    ├── fd: (15)-->(16)
  │    │    │    ├── prune: (15,16)
@@ -503,7 +498,6 @@ inner-join (cross)
  │    │    ├── columns: t.public.bx.b:7(int!null) t.public.bx.x:8(int)
  │    │    ├── stats: [rows=1000]
  │    │    ├── cost: 1068.42
- │    │    ├── cost-flags: unbounded-cardinality
  │    │    ├── key: (7)
  │    │    ├── fd: (7)-->(8)
  │    │    ├── prune: (7,8)
@@ -527,7 +521,7 @@ inner-join (cross)
 memo set=reorder_joins_limit=0
 SELECT * FROM bx, cy, dz, abc WHERE x = y AND y = z AND z = a
 ----
-memo (optimized, ~32KB, required=[presentation: b:1,x:2,c:5,y:6,d:9,z:10,a:13,b:14,c:15,d:16])
+memo (optimized, ~33KB, required=[presentation: b:1,x:2,c:5,y:6,d:9,z:10,a:13,b:14,c:15,d:16])
  ├── G1: (inner-join G2 G3 G4) (merge-join G2 G3 G5 inner-join,+2,+6)
  │    └── [presentation: b:1,x:2,c:5,y:6,d:9,z:10,a:13,b:14,c:15,d:16]
  │         ├── best: (inner-join G2 G3 G4)
@@ -2780,7 +2774,7 @@ SELECT (
 )
   FROM table80901_1 AS tab_42921;
 ----
-memo (optimized, ~73KB, required=[presentation: ?column?:50])
+memo (optimized, ~74KB, required=[presentation: ?column?:50])
  ├── G1: (project G2 G3)
  │    └── [presentation: ?column?:50]
  │         ├── best: (project G2 G3)
