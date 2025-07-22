@@ -10,12 +10,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
-	"github.com/cockroachdb/cockroach/pkg/sql"
-	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
-	"github.com/cockroachdb/cockroach/pkg/sql/physicalplan"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/stretchr/testify/require"
@@ -27,6 +23,7 @@ import (
 // structs. Hence, the name '_internal_' in the file to signify that it accesses
 // internal functions.
 
+// SPILLY - remove me
 func makeFakeSpans(n int) []roachpb.Span {
 	spans := make([]roachpb.Span, n)
 	for i := 0; i < n; i++ {
@@ -37,47 +34,11 @@ func makeFakeSpans(n int) []roachpb.Span {
 	return spans
 }
 
-func TestTTLProgressLifecycle(t *testing.T) {
+func TestTTLLegacyProgressLifecycle(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
 	ctx := context.Background()
-
-	infra := &physicalplan.PhysicalInfrastructure{
-		Processors: []physicalplan.Processor{
-			{
-				SQLInstanceID: base.SQLInstanceID(11),
-				Spec: execinfrapb.ProcessorSpec{
-					ProcessorID: 1,
-					Core: execinfrapb.ProcessorCoreUnion{
-						Ttl: &execinfrapb.TTLSpec{
-							Spans: makeFakeSpans(100),
-						},
-					},
-				},
-			},
-			{
-				SQLInstanceID: base.SQLInstanceID(12),
-				Spec: execinfrapb.ProcessorSpec{
-					ProcessorID: 2,
-					Core: execinfrapb.ProcessorCoreUnion{
-						Ttl: &execinfrapb.TTLSpec{
-							Spans: makeFakeSpans(100),
-						},
-					},
-				},
-			},
-		},
-	}
-	physPlan := physicalplan.PhysicalPlan{
-		PhysicalInfrastructure: infra,
-	}
-	sqlPlan := sql.PhysicalPlan{
-		PhysicalPlan: physPlan,
-	}
-	resumer := rowLevelTTLResumer{
-		physicalPlan: &sqlPlan,
-	}
 
 	// Create two processors to match the IDs used in the physical plan
 	proc1 := mockProcessor(1, roachpb.NodeID(11), 100)
@@ -85,7 +46,8 @@ func TestTTLProgressLifecycle(t *testing.T) {
 	mockRowReceiver := metadataCache{}
 
 	// Step 1: initProgress
-	progress, err := resumer.initProgress(200)
+	progressUpdater := &legacyProgressUpdater{}
+	progress, err := progressUpdater.initProgress(200)
 	require.NoError(t, err)
 	require.NotNil(t, progress)
 	require.Equal(t, float32(0), progress.GetFractionCompleted())
@@ -102,7 +64,7 @@ func TestTTLProgressLifecycle(t *testing.T) {
 	proc1.progressUpdater.OnSpanProcessed(50, 100)
 	err = proc1.progressUpdater.UpdateProgress(ctx, &mockRowReceiver)
 	require.NoError(t, err)
-	progress, err = resumer.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
+	progress, err = progressUpdater.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
 	require.NoError(t, err)
 	require.NotNil(t, progress)
 	md.Progress = progress
@@ -119,7 +81,7 @@ func TestTTLProgressLifecycle(t *testing.T) {
 	proc2.progressUpdater.OnSpanProcessed(100, 400)
 	err = proc2.progressUpdater.UpdateProgress(ctx, &mockRowReceiver)
 	require.NoError(t, err)
-	progress, err = resumer.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
+	progress, err = progressUpdater.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
 	require.NoError(t, err)
 	require.NotNil(t, progress)
 	md.Progress = progress
@@ -135,7 +97,7 @@ func TestTTLProgressLifecycle(t *testing.T) {
 	// No update refresh (processor 1 empty)
 	err = proc1.progressUpdater.UpdateProgress(ctx, &mockRowReceiver) // No call to OnSpanProcessed
 	require.NoError(t, err)
-	progress, err = resumer.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
+	progress, err = progressUpdater.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
 	require.NoError(t, err)
 	require.Nil(t, progress)
 
@@ -143,7 +105,7 @@ func TestTTLProgressLifecycle(t *testing.T) {
 	proc1.progressUpdater.OnSpanProcessed(50, 500)
 	err = proc1.progressUpdater.UpdateProgress(ctx, &mockRowReceiver)
 	require.NoError(t, err)
-	progress, err = resumer.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
+	progress, err = progressUpdater.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
 	require.NoError(t, err)
 	require.NotNil(t, progress)
 

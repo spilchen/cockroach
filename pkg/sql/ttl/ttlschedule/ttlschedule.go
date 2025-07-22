@@ -299,7 +299,7 @@ func createRowLevelTTLJob(
 			Cutoff:       timeutil.Now(),
 			TableVersion: tableDesc.GetVersion(),
 		},
-		Progress:  jobspb.RowLevelTTLProgress{},
+		Progress:  jobspb.RowLevelTTLProgress{UseCheckpointing: true},
 		CreatedBy: createdByInfo,
 	}
 
