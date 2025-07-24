@@ -266,6 +266,7 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 	if err := t.initProgressInJob(ctx, int64(jobSpanCount)); err != nil {
 		return err
 	}
+	defer func() { t.progressUpdater.cleanupProgress() }()
 
 	metadataCallbackWriter := sql.NewMetadataOnlyMetadataCallbackWriter(
 		func(ctx context.Context, meta *execinfrapb.ProducerMetadata) error {
@@ -367,11 +368,12 @@ func (t *rowLevelTTLResumer) initProgressInJob(ctx context.Context, jobSpanCount
 	})
 }
 
+// SPILLY - add a comment here
 func (t *rowLevelTTLResumer) progressUpdaterFactory(prog *jobspb.RowLevelTTLProgress) progressUpdater {
 	if prog.UseCheckpointing {
-		return &checkpointProgressUpdater{}
+		return newCheckpointProgressUpdater(t.job)
 	}
-	return &legacyProgressUpdater{}
+	return newLegacyProgressUpdater(t.job)
 }
 
 // refreshProgressInJob updates the job progress metadata based on input

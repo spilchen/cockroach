@@ -23,7 +23,6 @@ import (
 // structs. Hence, the name '_internal_' in the file to signify that it accesses
 // internal functions.
 
-// SPILLY - remove me
 func makeFakeSpans(n int) []roachpb.Span {
 	spans := make([]roachpb.Span, n)
 	for i := 0; i < n; i++ {
@@ -34,6 +33,11 @@ func makeFakeSpans(n int) []roachpb.Span {
 	return spans
 }
 
+func makeFakeSpan() roachpb.Span {
+	spans := makeFakeSpans(1)
+	return spans[0]
+}
+
 func TestTTLLegacyProgressLifecycle(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -41,18 +45,18 @@ func TestTTLLegacyProgressLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	// Create two processors to match the IDs used in the physical plan
-	proc1 := mockProcessor(1, roachpb.NodeID(11), 100)
-	proc2 := mockProcessor(2, roachpb.NodeID(12), 100)
+	proc1 := mockProcessor(1, roachpb.NodeID(11), 2)
+	proc2 := mockProcessor(2, roachpb.NodeID(12), 2)
 	mockRowReceiver := metadataCache{}
 
 	// Step 1: initProgress
 	progressUpdater := &legacyProgressUpdater{}
-	progress, err := progressUpdater.initProgress(200)
+	progress, err := progressUpdater.initProgress(4)
 	require.NoError(t, err)
 	require.NotNil(t, progress)
 	require.Equal(t, float32(0), progress.GetFractionCompleted())
 	ttlProgress := progress.GetRowLevelTTL()
-	require.Equal(t, int64(200), ttlProgress.JobTotalSpanCount)
+	require.Equal(t, int64(4), ttlProgress.JobTotalSpanCount)
 	require.Zero(t, ttlProgress.JobProcessedSpanCount)
 	require.Zero(t, ttlProgress.JobDeletedRowCount)
 	require.Len(t, ttlProgress.ProcessorProgresses, 0)
@@ -61,7 +65,7 @@ func TestTTLLegacyProgressLifecycle(t *testing.T) {
 	}
 
 	// First refresh (processor 1 partial)
-	proc1.progressUpdater.OnSpanProcessed(50, 100)
+	proc1.progressUpdater.OnSpanProcessed(makeFakeSpan(), 100)
 	err = proc1.progressUpdater.UpdateProgress(ctx, &mockRowReceiver)
 	require.NoError(t, err)
 	progress, err = progressUpdater.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
@@ -72,13 +76,14 @@ func TestTTLLegacyProgressLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.InEpsilon(t, 0.25, progress.GetFractionCompleted(), 0.001)
 	ttlProgress = progress.GetRowLevelTTL()
-	require.Equal(t, int64(200), ttlProgress.JobTotalSpanCount)
-	require.Equal(t, int64(50), ttlProgress.JobProcessedSpanCount)
+	require.Equal(t, int64(4), ttlProgress.JobTotalSpanCount)
+	require.Equal(t, int64(1), ttlProgress.JobProcessedSpanCount)
 	require.Equal(t, int64(100), ttlProgress.JobDeletedRowCount)
 	require.Len(t, ttlProgress.ProcessorProgresses, 1)
 
 	// Second refresh (processor 2 full)
-	proc2.progressUpdater.OnSpanProcessed(100, 400)
+	proc2.progressUpdater.OnSpanProcessed(makeFakeSpan(), 300)
+	proc2.progressUpdater.OnSpanProcessed(makeFakeSpan(), 100)
 	err = proc2.progressUpdater.UpdateProgress(ctx, &mockRowReceiver)
 	require.NoError(t, err)
 	progress, err = progressUpdater.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
@@ -89,8 +94,8 @@ func TestTTLLegacyProgressLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.InEpsilon(t, 0.75, progress.GetFractionCompleted(), 0.001)
 	ttlProgress = progress.GetRowLevelTTL()
-	require.Equal(t, int64(200), ttlProgress.JobTotalSpanCount)
-	require.Equal(t, int64(150), ttlProgress.JobProcessedSpanCount)
+	require.Equal(t, int64(4), ttlProgress.JobTotalSpanCount)
+	require.Equal(t, int64(3), ttlProgress.JobProcessedSpanCount)
 	require.Equal(t, int64(500), ttlProgress.JobDeletedRowCount)
 	require.Len(t, ttlProgress.ProcessorProgresses, 2)
 
@@ -102,7 +107,7 @@ func TestTTLLegacyProgressLifecycle(t *testing.T) {
 	require.Nil(t, progress)
 
 	// Final refresh (processor 1 remaining)
-	proc1.progressUpdater.OnSpanProcessed(50, 500)
+	proc1.progressUpdater.OnSpanProcessed(makeFakeSpan(), 500)
 	err = proc1.progressUpdater.UpdateProgress(ctx, &mockRowReceiver)
 	require.NoError(t, err)
 	progress, err = progressUpdater.refreshProgress(ctx, &md, mockRowReceiver.GetLatest())
@@ -112,8 +117,8 @@ func TestTTLLegacyProgressLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.InEpsilon(t, 1, progress.GetFractionCompleted(), 0.001)
 	ttlProgress = progress.GetRowLevelTTL()
-	require.Equal(t, int64(200), ttlProgress.JobTotalSpanCount)
-	require.Equal(t, int64(200), ttlProgress.JobProcessedSpanCount)
+	require.Equal(t, int64(4), ttlProgress.JobTotalSpanCount)
+	require.Equal(t, int64(4), ttlProgress.JobProcessedSpanCount)
 	require.Equal(t, int64(1000), ttlProgress.JobDeletedRowCount)
 	require.Len(t, ttlProgress.ProcessorProgresses, 2)
 }
