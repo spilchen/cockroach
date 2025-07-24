@@ -353,16 +353,8 @@ func (t *checkpointProgressUpdater) cleanupProgress() {
 }
 
 func (t *checkpointProgressUpdater) progressUpdateLoop() {
+	// SPILLY - this is fine so long as this is always called as a goroutine. Do we change this?
 	defer close(t.done)
-
-	// SPILLY - these are static functions. Let check these each time so they are dynamic
-	//fractionTicker := time.NewTicker(fractionUpdateInterval.Get(&t.settings.SV))
-	fractionTimer := t.clock.NewTimer()
-	defer fractionTimer.Stop()
-
-	checkpointTimer := t.clock.NewTimer()
-	//time.NewTicker(checkpointInterval.Get(&t.settings.SV)) SPILLY
-	defer checkpointTimer.Stop()
 
 	runPeriodicWrite := func(
 		ctx context.Context,
@@ -396,6 +388,7 @@ func (t *checkpointProgressUpdater) progressUpdateLoop() {
 			t.ctx, t.sendCheckpointUpdate, t.checkpointInterval)
 	})
 	// SPILLY - return this as a function for the caller to handle? Don't know.
+	// SPILLY - ask chatGPT to return the wait as a function and tie it into cleanupProgress
 	if err := g.Wait(); err != nil {
 		log.Warningf(t.ctx, "waiting for progress flushing goroutines: %v", err)
 	}
