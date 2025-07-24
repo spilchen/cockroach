@@ -59,6 +59,7 @@ go_library(
         "@com_github_cockroachdb_redact//:redact",
         "@com_github_gogo_protobuf//types",
         "@com_github_prometheus_client_model//go",
+        "@org_golang_x_sync//errgroup",
     ],
 )
 
@@ -105,7 +106,6 @@ go_test(
         "//pkg/sql/isql",
         "//pkg/sql/lexbase",
         "//pkg/sql/parser",
-        "//pkg/sql/physicalplan",
         "//pkg/sql/randgen",
         "//pkg/sql/rowenc",
         "//pkg/sql/sem/eval",

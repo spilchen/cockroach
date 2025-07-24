@@ -263,7 +263,7 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 		return err
 	}
 
-	if err := t.initProgressInJob(ctx, int64(jobSpanCount)); err != nil {
+	if err := t.initProgressInJob(ctx, int64(jobSpanCount), settingsValues); err != nil {
 		return err
 	}
 	defer func() { t.progressUpdater.cleanupProgress() }()
@@ -319,6 +319,8 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 		return metadataCallbackWriter.Err()
 	})
 
+	// SPILLY - do we need to push the refresh one final time? Like a final call.
+
 	g.GoCtx(replanChecker)
 
 	if err := g.Wait(); err != nil {
@@ -352,13 +354,15 @@ func (t *rowLevelTTLResumer) CollectProfile(_ context.Context, _ interface{}) er
 // It computes throttling thresholds and writes an empty progress object to the job record.
 // This should be called once before job execution starts.
 // SPILLY - we could probably rename this function
-func (t *rowLevelTTLResumer) initProgressInJob(ctx context.Context, jobSpanCount int64) error {
+func (t *rowLevelTTLResumer) initProgressInJob(
+	ctx context.Context, jobSpanCount int64, sv *settings.Values,
+) error {
 	return t.job.NoTxn().Update(ctx, func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
 		ttlProg := md.Progress.GetRowLevelTTL()
 		if ttlProg == nil {
 			return errors.AssertionFailedf("no TTL job progress")
 		}
-		t.progressUpdater = t.progressUpdaterFactory(ttlProg)
+		t.progressUpdater = t.progressUpdaterFactory(ttlProg, sv)
 		newProgress, err := t.progressUpdater.initProgress(jobSpanCount)
 		if err != nil {
 			return err
@@ -369,9 +373,12 @@ func (t *rowLevelTTLResumer) initProgressInJob(ctx context.Context, jobSpanCount
 }
 
 // SPILLY - add a comment here
-func (t *rowLevelTTLResumer) progressUpdaterFactory(prog *jobspb.RowLevelTTLProgress) progressUpdater {
+func (t *rowLevelTTLResumer) progressUpdaterFactory(
+	prog *jobspb.RowLevelTTLProgress, sv *settings.Values,
+) progressUpdater {
+	//  SPILLY- not ready for testing yet
 	if prog.UseCheckpointing {
-		return newCheckpointProgressUpdater(t.job)
+		return newCheckpointProgressUpdater(t.job, sv)
 	}
 	return newLegacyProgressUpdater(t.job)
 }
@@ -391,6 +398,7 @@ func (t *rowLevelTTLResumer) refreshProgressInJob(
 		if err != nil {
 			return err
 		}
+		// SPILLY -strange smell that we rely on the job update to be done here. The checkpoint won't ever return something.
 		if progress != nil {
 			ju.UpdateProgress(progress)
 		}

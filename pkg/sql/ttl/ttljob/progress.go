@@ -7,8 +7,13 @@ package ttljob
 
 import (
 	"context"
+	"math/rand"
+	"time"
+
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
+	"github.com/cockroachdb/cockroach/pkg/settings"
+	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -17,8 +22,23 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	pbtypes "github.com/gogo/protobuf/types"
-	"math/rand"
-	"time"
+	"golang.org/x/sync/errgroup"
+)
+
+var checkpointInterval = settings.RegisterDurationSetting(
+	settings.ApplicationLevel,
+	"sql.ttl.checkpoint_interval",
+	"the amount of time between row-level TTL checkpoint updates",
+	30*time.Second,
+	settings.DurationWithMinimum(1*time.Millisecond),
+)
+
+var fractionUpdateInterval = settings.RegisterDurationSetting(
+	settings.ApplicationLevel,
+	"sql.ttl.fraction_update_interval",
+	"the amount of time between row-level TTL % complete progress updates",
+	10*time.Second,
+	settings.DurationWithMinimum(1*time.Millisecond),
 )
 
 type progressUpdater interface {
@@ -162,7 +182,11 @@ func (t *legacyProgressUpdater) cleanupProgress() {
 }
 
 type checkpointProgressUpdater struct {
-	job *jobs.Job
+	job                *jobs.Job
+	settings           *cluster.Settings
+	clock              timeutil.TimeSource
+	checkpointInterval func() time.Duration
+	fractionInterval   func() time.Duration
 
 	mu struct {
 		syncutil.Mutex
@@ -191,9 +215,12 @@ func newLegacyProgressUpdater(job *jobs.Job) *legacyProgressUpdater {
 
 var _ progressUpdater = (*checkpointProgressUpdater)(nil)
 
-func newCheckpointProgressUpdater(job *jobs.Job) *checkpointProgressUpdater {
+func newCheckpointProgressUpdater(job *jobs.Job, sv *settings.Values) *checkpointProgressUpdater {
 	return &checkpointProgressUpdater{
-		job: job,
+		job:                job,
+		clock:              timeutil.DefaultTimeSource{},
+		fractionInterval:   func() time.Duration { return fractionUpdateInterval.Get(sv) },
+		checkpointInterval: func() time.Duration { return checkpointInterval.Get(sv) },
 	}
 }
 
@@ -204,8 +231,7 @@ func (t *checkpointProgressUpdater) initProgress(jobSpanCount int64) (*jobspb.Pr
 
 	// Initialize progress similar to legacy updater
 	rowLevelTTL := &jobspb.RowLevelTTLProgress{
-		JobTotalSpanCount:     jobSpanCount,
-		JobProcessedSpanCount: 0,
+		JobTotalSpanCount: jobSpanCount,
 	}
 
 	progress := &jobspb.Progress{
@@ -266,8 +292,13 @@ func (t *checkpointProgressUpdater) refreshProgress(
 		rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, incomingProcProgress)
 	}
 
+	// The CompletedSpans in the progress message is the delta of number of spans
+	// completed since the last progress update.
+	rowLevelTTL.CompletedSpans = append(rowLevelTTL.CompletedSpans, meta.BulkProcessorProgress.CompletedSpans...)
+
 	// Recompute job level counters from scratch
 	rowLevelTTL.JobDeletedRowCount = 0
+	// SPILLY - do we need to update JobProcessedSpanCount? We can refer to the completed spans I think
 	rowLevelTTL.JobProcessedSpanCount = 0
 	totalSpanCount := int64(0)
 	for i := range rowLevelTTL.ProcessorProgresses {
@@ -275,6 +306,13 @@ func (t *checkpointProgressUpdater) refreshProgress(
 		rowLevelTTL.JobDeletedRowCount += pp.DeletedRowCount
 		rowLevelTTL.JobProcessedSpanCount += pp.ProcessedSpanCount
 		totalSpanCount += pp.TotalSpanCount
+	}
+
+	// SPILLY - maybe don't deprecate JobProcessedSpanCount since its used as a sanity check
+	if rowLevelTTL.JobProcessedSpanCount != int64(len(rowLevelTTL.CompletedSpans)) {
+		return nil, errors.AssertionFailedf(
+			"completed spans mismatch: %d vs %d: %v",
+			rowLevelTTL.JobProcessedSpanCount, len(rowLevelTTL.CompletedSpans), rowLevelTTL.CompletedSpans)
 	}
 
 	if totalSpanCount > rowLevelTTL.JobTotalSpanCount {
@@ -294,11 +332,17 @@ func (t *checkpointProgressUpdater) refreshProgress(
 		},
 	}
 
+	// We denote the final progress from a producer using the Drained field. If
+	// that's the set, then return the progress to have the caller update the job.
+	// SPILLY- improve this comment
+	if meta.BulkProcessorProgress.Drained {
+		return t.mu.cachedProgress, nil
+	}
+
 	// Return nil to indicate we're not immediately persisting
 	return nil, nil
 }
 
-// SPILLY - do we call this anywhere?
 func (t *checkpointProgressUpdater) cleanupProgress() {
 	if t.cancel != nil {
 		t.cancel()
@@ -311,30 +355,54 @@ func (t *checkpointProgressUpdater) cleanupProgress() {
 func (t *checkpointProgressUpdater) progressUpdateLoop() {
 	defer close(t.done)
 
-	fractionTicker := time.NewTicker(10 * time.Second)
-	defer fractionTicker.Stop()
+	// SPILLY - these are static functions. Let check these each time so they are dynamic
+	//fractionTicker := time.NewTicker(fractionUpdateInterval.Get(&t.settings.SV))
+	fractionTimer := t.clock.NewTimer()
+	defer fractionTimer.Stop()
 
-	checkpointTicker := time.NewTicker(30 * time.Second)
-	defer checkpointTicker.Stop()
+	checkpointTimer := t.clock.NewTimer()
+	//time.NewTicker(checkpointInterval.Get(&t.settings.SV)) SPILLY
+	defer checkpointTimer.Stop()
 
-	for {
-		select {
-		case <-t.ctx.Done():
-			return
-		case <-fractionTicker.C:
-			if err := t.sendFractionUpdate(); err != nil {
-				log.Warningf(t.ctx, "failed to send fraction update: %v", err)
-			}
-		case <-checkpointTicker.C:
-			if err := t.sendCheckpointUpdate(); err != nil {
-				log.Warningf(t.ctx, "failed to send checkpoint update: %v", err)
+	runPeriodicWrite := func(
+		ctx context.Context,
+		write func(context.Context) error,
+		interval func() time.Duration,
+	) error {
+		timer := t.clock.NewTimer()
+		defer timer.Stop()
+		for {
+			timer.Reset(interval())
+			select {
+			case <-t.done:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.Ch():
+				if err := write(ctx); err != nil {
+					log.Warningf(ctx, "could not flush progress: %v", err)
+				}
 			}
 		}
 	}
-	// SPILLY - may not want to eat errors here
+
+	var g errgroup.Group
+	g.Go(func() error {
+		return runPeriodicWrite(
+			t.ctx, t.sendFractionUpdate, t.fractionInterval)
+	})
+	g.Go(func() error {
+		return runPeriodicWrite(
+			t.ctx, t.sendCheckpointUpdate, t.checkpointInterval)
+	})
+	// SPILLY - return this as a function for the caller to handle? Don't know.
+	if err := g.Wait(); err != nil {
+		log.Warningf(t.ctx, "waiting for progress flushing goroutines: %v", err)
+	}
 }
 
-func (t *checkpointProgressUpdater) sendFractionUpdate() error {
+// SPILLY - rename this to flushFractionUpdate
+func (t *checkpointProgressUpdater) sendFractionUpdate(ctx context.Context) error {
 	t.mu.Lock()
 	cachedProgress := t.mu.cachedProgress
 	t.mu.Unlock()
@@ -343,8 +411,7 @@ func (t *checkpointProgressUpdater) sendFractionUpdate() error {
 		return nil
 	}
 
-	return t.job.NoTxn().Update(t.ctx, func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-		// Update only the fraction completed in the latest job metadata
+	return t.job.NoTxn().Update(ctx, func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
 		if md.Progress != nil {
 			newProgress := protoutil.Clone(md.Progress).(*jobspb.Progress)
 			newProgress.Progress = cachedProgress.Progress
@@ -354,7 +421,8 @@ func (t *checkpointProgressUpdater) sendFractionUpdate() error {
 	})
 }
 
-func (t *checkpointProgressUpdater) sendCheckpointUpdate() error {
+// SPILLY - rename this to flushCheckpointUpdate
+func (t *checkpointProgressUpdater) sendCheckpointUpdate(ctx context.Context) error {
 	t.mu.Lock()
 	cachedProgress := t.mu.cachedProgress
 	t.mu.Unlock()
@@ -363,7 +431,7 @@ func (t *checkpointProgressUpdater) sendCheckpointUpdate() error {
 		return nil
 	}
 
-	return t.job.NoTxn().Update(t.ctx, func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+	return t.job.NoTxn().Update(ctx, func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
 		// Copy our cached progress details into the latest job metadata
 		newProgress := protoutil.Clone(md.Progress).(*jobspb.Progress)
 		if cachedTTL := cachedProgress.GetRowLevelTTL(); cachedTTL != nil {
