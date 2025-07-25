@@ -43,7 +43,7 @@ var fractionUpdateInterval = settings.RegisterDurationSetting(
 
 type progressUpdater interface {
 	// SPILLY - comments
-	initProgress(jobSpanCount int64) (*jobspb.Progress, error)
+	initProgress(jobSpanCount int64, existingProgress *jobspb.RowLevelTTLProgress) (*jobspb.Progress, error)
 	refreshProgress(
 		ctx context.Context, md *jobs.JobMetadata, meta *execinfrapb.ProducerMetadata,
 	) (*jobspb.Progress, error)
@@ -72,7 +72,9 @@ var _ progressUpdater = (*legacyProgressUpdater)(nil)
 // initProgress initializes the RowLevelTTL job progress metadata, including
 // total span count and per-processor progress entries, based on the physical plan.
 // This should be called before the job starts execution.
-func (t *legacyProgressUpdater) initProgress(jobSpanCount int64) (*jobspb.Progress, error) {
+func (t *legacyProgressUpdater) initProgress(
+	jobSpanCount int64, existingProgress *jobspb.RowLevelTTLProgress,
+) (*jobspb.Progress, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	// To avoid too many progress updates, especially if a lot of the spans don't
@@ -159,8 +161,6 @@ func (t *legacyProgressUpdater) refreshProgress(
 		timeutil.Since(t.mu.lastUpdateTime) >= t.mu.updateEveryDuration ||
 		processorComplete ||
 		firstProgressForProcessor) {
-		// SPILLY - we can skip the update because the processor will send us a
-		// complete update. Not just what was seen last time.
 		return nil, nil // Skip the update
 	}
 	t.mu.lastSpanCount = rowLevelTTL.JobProcessedSpanCount
@@ -221,14 +221,28 @@ func newCheckpointProgressUpdater(job *jobs.Job, sv *settings.Values) *checkpoin
 	}
 }
 
-func (t *checkpointProgressUpdater) initProgress(jobSpanCount int64) (*jobspb.Progress, error) {
-	// SPILLY - Do we need to fetch the old job to see if we are doing a resume?
+func (t *checkpointProgressUpdater) initProgress(
+	jobSpanCount int64, existingProgress *jobspb.RowLevelTTLProgress,
+) (*jobspb.Progress, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Initialize progress similar to legacy updater
-	rowLevelTTL := &jobspb.RowLevelTTLProgress{
-		JobTotalSpanCount: jobSpanCount,
+	var rowLevelTTL *jobspb.RowLevelTTLProgress
+	if existingProgress != nil {
+		// SPILLY - For now, we assert that completedSpans is always zero since we don't handle restart yet
+		if len(existingProgress.CompletedSpans) != 0 {
+			return nil, errors.AssertionFailedf("existing progress has %d completed spans, but restart handling is not yet implemented", len(existingProgress.CompletedSpans))
+		}
+
+		// Use existing progress for restart scenarios
+		rowLevelTTL = existingProgress
+		// Update the total span count in case it changed
+		rowLevelTTL.JobTotalSpanCount = jobSpanCount
+	} else {
+		// Initialize fresh progress similar to legacy updater
+		rowLevelTTL = &jobspb.RowLevelTTLProgress{
+			JobTotalSpanCount: jobSpanCount,
+		}
 	}
 
 	progress := &jobspb.Progress{
@@ -377,7 +391,7 @@ func (t *checkpointProgressUpdater) startPeriodicUpdates(ctx context.Context) (s
 		return runPeriodicWrite(
 			ctx, t.flushCheckpointUpdate, t.checkpointInterval)
 	})
-	
+
 	toClose := stopCh // make the returned function idempotent
 	return func() {
 		if toClose != nil {

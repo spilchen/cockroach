@@ -363,7 +363,7 @@ func (t *rowLevelTTLResumer) initProgressInJob(
 			return errors.AssertionFailedf("no TTL job progress")
 		}
 		t.progressUpdater = t.progressUpdaterFactory(ttlProg, sv)
-		newProgress, err := t.progressUpdater.initProgress(jobSpanCount)
+		newProgress, err := t.progressUpdater.initProgress(jobSpanCount, ttlProg)
 		if err != nil {
 			return err
 		}

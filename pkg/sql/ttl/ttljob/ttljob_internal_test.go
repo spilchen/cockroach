@@ -51,7 +51,7 @@ func TestTTLLegacyProgressLifecycle(t *testing.T) {
 
 	// Step 1: initProgress
 	progressUpdater := &legacyProgressUpdater{}
-	progress, err := progressUpdater.initProgress(4)
+	progress, err := progressUpdater.initProgress(4, nil)
 	require.NoError(t, err)
 	require.NotNil(t, progress)
 	require.Equal(t, float32(0), progress.GetFractionCompleted())
