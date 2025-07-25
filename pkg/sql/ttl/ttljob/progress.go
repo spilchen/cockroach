@@ -199,10 +199,7 @@ type checkpointProgressUpdater struct {
 	}
 
 	// Goroutine management
-	// SPILLY - bad smell storing a ctx in a struct. Can we avoid it?
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
+	stopFunc func()
 }
 
 var _ progressUpdater = (*legacyProgressUpdater)(nil)
@@ -246,10 +243,8 @@ func (t *checkpointProgressUpdater) initProgress(jobSpanCount int64) (*jobspb.Pr
 	t.mu.lastFractionUpdate = now
 	t.mu.lastCheckpointUpdate = now
 
-	// Start the progress update goroutine
-	t.ctx, t.cancel = context.WithCancel(context.Background())
-	t.done = make(chan struct{})
-	go t.progressUpdateLoop()
+	// Start the progress update goroutines
+	t.stopFunc = t.startPeriodicUpdates(context.Background())
 
 	return progress, nil
 }
@@ -344,18 +339,13 @@ func (t *checkpointProgressUpdater) refreshProgress(
 }
 
 func (t *checkpointProgressUpdater) cleanupProgress() {
-	if t.cancel != nil {
-		t.cancel()
-	}
-	if t.done != nil {
-		<-t.done
+	if t.stopFunc != nil {
+		t.stopFunc()
 	}
 }
 
-func (t *checkpointProgressUpdater) progressUpdateLoop() {
-	// SPILLY - this is fine so long as this is always called as a goroutine. Do we change this?
-	defer close(t.done)
-
+func (t *checkpointProgressUpdater) startPeriodicUpdates(ctx context.Context) (stop func()) {
+	stopCh := make(chan struct{})
 	runPeriodicWrite := func(
 		ctx context.Context,
 		write func(context.Context) error,
@@ -366,7 +356,7 @@ func (t *checkpointProgressUpdater) progressUpdateLoop() {
 		for {
 			timer.Reset(interval())
 			select {
-			case <-t.done:
+			case <-stopCh:
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
@@ -381,21 +371,26 @@ func (t *checkpointProgressUpdater) progressUpdateLoop() {
 	var g errgroup.Group
 	g.Go(func() error {
 		return runPeriodicWrite(
-			t.ctx, t.sendFractionUpdate, t.fractionInterval)
+			ctx, t.flushFractionUpdate, t.fractionInterval)
 	})
 	g.Go(func() error {
 		return runPeriodicWrite(
-			t.ctx, t.sendCheckpointUpdate, t.checkpointInterval)
+			ctx, t.flushCheckpointUpdate, t.checkpointInterval)
 	})
-	// SPILLY - return this as a function for the caller to handle? Don't know.
-	// SPILLY - ask chatGPT to return the wait as a function and tie it into cleanupProgress
-	if err := g.Wait(); err != nil {
-		log.Warningf(t.ctx, "waiting for progress flushing goroutines: %v", err)
+	
+	toClose := stopCh // make the returned function idempotent
+	return func() {
+		if toClose != nil {
+			close(toClose)
+			toClose = nil
+		}
+		if err := g.Wait(); err != nil {
+			log.Warningf(ctx, "waiting for progress flushing goroutines: %v", err)
+		}
 	}
 }
 
-// SPILLY - rename this to flushFractionUpdate
-func (t *checkpointProgressUpdater) sendFractionUpdate(ctx context.Context) error {
+func (t *checkpointProgressUpdater) flushFractionUpdate(ctx context.Context) error {
 	t.mu.Lock()
 	cachedProgress := t.mu.cachedProgress
 	t.mu.Unlock()
@@ -414,8 +409,7 @@ func (t *checkpointProgressUpdater) sendFractionUpdate(ctx context.Context) erro
 	})
 }
 
-// SPILLY - rename this to flushCheckpointUpdate
-func (t *checkpointProgressUpdater) sendCheckpointUpdate(ctx context.Context) error {
+func (t *checkpointProgressUpdater) flushCheckpointUpdate(ctx context.Context) error {
 	t.mu.Lock()
 	cachedProgress := t.mu.cachedProgress
 	t.mu.Unlock()
