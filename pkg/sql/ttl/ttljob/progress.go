@@ -355,6 +355,7 @@ func (t *checkpointProgressUpdater) refreshProgress(
 func (t *checkpointProgressUpdater) cleanupProgress() {
 	if t.stopFunc != nil {
 		t.stopFunc()
+		t.stopFunc = nil
 	}
 }
 

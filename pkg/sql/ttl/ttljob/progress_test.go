@@ -9,11 +9,14 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,4 +118,58 @@ func TestTTLLegacyProgressLifecycle(t *testing.T) {
 	require.Equal(t, int64(4), ttlProgress.JobProcessedSpanCount)
 	require.Equal(t, int64(1000), ttlProgress.JobDeletedRowCount)
 	require.Len(t, ttlProgress.ProcessorProgresses, 2)
+}
+
+func TestCheckpointProgressUpdater(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	ctx := context.Background()
+	settings := cluster.MakeTestingClusterSettings()
+
+	fractionUpdateInterval.Override(ctx, &settings.SV, 50*time.Millisecond)
+	checkpointInterval.Override(ctx, &settings.SV, 150*time.Millisecond)
+
+	updater := &checkpointProgressUpdater{
+		job:                nil,
+		settings:           settings,
+		clock:              timeutil.DefaultTimeSource{},
+		fractionInterval:   func() time.Duration { return fractionUpdateInterval.Get(&settings.SV) },
+		checkpointInterval: func() time.Duration { return checkpointInterval.Get(&settings.SV) },
+	}
+
+	defer func() {
+		if updater.stopFunc != nil {
+			updater.cleanupProgress()
+		}
+	}()
+
+	t.Run("init progress creates goroutines", func(t *testing.T) {
+		progress, err := updater.initProgress(100, nil)
+		require.NoError(t, err)
+		require.NotNil(t, progress)
+		require.Equal(t, float32(0), progress.GetFractionCompleted())
+		require.Equal(t, int64(100), progress.GetRowLevelTTL().JobTotalSpanCount)
+
+		require.NotNil(t, updater.stopFunc)
+		require.NotNil(t, updater.mu.cachedProgress)
+	})
+
+	t.Run("cleanup stops goroutines", func(t *testing.T) {
+		require.NotNil(t, updater.stopFunc)
+
+		updater.cleanupProgress()
+
+		require.Nil(t, updater.stopFunc)
+	})
+
+	t.Run("verify intervals are different", func(t *testing.T) {
+		fractionInterval := fractionUpdateInterval.Get(&settings.SV)
+		checkpointIntervalVal := checkpointInterval.Get(&settings.SV)
+
+		require.NotEqual(t, fractionInterval, checkpointIntervalVal)
+		require.Less(t, fractionInterval, checkpointIntervalVal)
+		require.Equal(t, 50*time.Millisecond, fractionInterval)
+		require.Equal(t, 150*time.Millisecond, checkpointIntervalVal)
+	})
 }
