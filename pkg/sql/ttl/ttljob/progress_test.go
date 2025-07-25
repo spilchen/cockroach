@@ -17,12 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// NOTE: This test is for functions in ttljob.go. We already have
-// ttljob_test.go, but that is part of the ttljob_test package. This test is
-// specifically part of the ttljob package to access non-exported functions and
-// structs. Hence, the name '_internal_' in the file to signify that it accesses
-// internal functions.
-
 func makeFakeSpans(n int) []roachpb.Span {
 	spans := make([]roachpb.Span, n)
 	for i := 0; i < n; i++ {
