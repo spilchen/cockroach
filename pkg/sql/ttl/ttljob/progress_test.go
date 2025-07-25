@@ -173,3 +173,5 @@ func TestCheckpointProgressUpdater(t *testing.T) {
 		require.Equal(t, 150*time.Millisecond, checkpointIntervalVal)
 	})
 }
+
+// SPILLY - add another test for checkpoint progress that will verify the contents of the progress.
