@@ -24,7 +24,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/closedts/sidetransport"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvstorage"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/liveness"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/load"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/storeliveness"
 	"github.com/cockroachdb/cockroach/pkg/multitenant/tenantcapabilities/tenantcapabilitiesauthorizer"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -167,12 +166,6 @@ func (ltc *LocalTestCluster) Start(t testing.TB, initFactory InitFactoryFn) {
 	ltc.stopper.AddCloser(ltc.Eng)
 
 	ltc.Stores = kvserver.NewStores(ambient, ltc.Clock)
-	// Faster refresh intervals for testing.
-	cfg.NodeCapacityProvider = load.NewNodeCapacityProvider(ltc.stopper, ltc.Stores, load.NodeCapacityProviderConfig{
-		CPUUsageRefreshInterval:    10 * time.Millisecond,
-		CPUCapacityRefreshInterval: 10 * time.Millisecond,
-		CPUUsageMovingAverageAge:   20,
-	})
 
 	factory := initFactory(ctx, cfg.Settings, nodeDesc, ltc.stopper.Tracer(), ltc.Clock, ltc.Latency, ltc.Stores, ltc.stopper, ltc.Gossip)
 
@@ -215,13 +208,10 @@ func (ltc *LocalTestCluster) Start(t testing.TB, initFactory InitFactoryFn) {
 		livenessInterval, heartbeatInterval := cfg.StoreLivenessDurations()
 		supportGracePeriod := cfg.RPCContext.StoreLivenessWithdrawalGracePeriod()
 		options := storeliveness.NewOptions(livenessInterval, heartbeatInterval, supportGracePeriod)
-		transport, err := storeliveness.NewTransport(
+		transport := storeliveness.NewTransport(
 			cfg.AmbientCtx, ltc.stopper, ltc.Clock,
-			nil /* dialer */, nil /* grpcServer */, nil /* drpcServer */, nil, /* knobs */
+			nil /* dialer */, nil /* grpcServer */, nil, /* knobs */
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
 		knobs := cfg.TestingKnobs.StoreLivenessKnobs
 		cfg.StoreLiveness = storeliveness.NewNodeContainer(ltc.stopper, options, transport, knobs)
 	}

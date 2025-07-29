@@ -182,7 +182,6 @@ vectorized: true
             │ equality cols are key
             │ locking strength: for share
             │ locking durability: guaranteed
-            │ parallel
             │
             └── • project
                 │ columns: (j_new)
@@ -298,7 +297,6 @@ vectorized: true
 │                   │ equality cols are key
 │                   │ locking strength: for share
 │                   │ locking durability: guaranteed
-│                   │ parallel
 │                   │
 │                   └── • filter
 │                       │ columns: (j_new)
