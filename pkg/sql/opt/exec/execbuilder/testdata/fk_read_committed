@@ -125,8 +125,7 @@ EXPLAIN (OPT) UPDATE cookies SET j = 2 WHERE c = 1
 update cookies
  ├── project
  │    ├── scan cookies
- │    │    ├── constraint: /7: [/1 - /1]
- │    │    └── flags: avoid-full-scan
+ │    │    └── constraint: /7: [/1 - /1]
  │    └── projections
  │         └── 2
  └── f-k-checks
@@ -182,7 +181,6 @@ vectorized: true
             │ equality cols are key
             │ locking strength: for share
             │ locking durability: guaranteed
-            │ parallel
             │
             └── • project
                 │ columns: (j_new)
@@ -199,7 +197,6 @@ EXPLAIN (OPT) UPDATE jars SET j = j + 4
 update jars
  ├── project
  │    ├── scan jars
- │    │    └── flags: avoid-full-scan
  │    └── projections
  │         └── jars.j + 4
  └── f-k-checks
@@ -211,7 +208,6 @@ update jars
                      │    └── with-scan &1
                      ├── distinct-on
                      │    └── scan cookies
-                     │         └── flags: avoid-full-scan
                      └── filters
                           └── j = cookies.j
 
@@ -290,15 +286,19 @@ vectorized: true
 │           └── • error if rows
 │               │ columns: ()
 │               │
-│               └── • lookup join (anti)
+│               └── • hash join (right anti)
 │                   │ columns: (j_new)
 │                   │ estimated row count: 0 (missing stats)
-│                   │ table: jars@jars_pkey
-│                   │ equality: (j_new) = (j)
-│                   │ equality cols are key
-│                   │ locking strength: for share
-│                   │ locking durability: guaranteed
-│                   │ parallel
+│                   │ equality: (j) = (j_new)
+│                   │ left cols are key
+│                   │
+│                   ├── • scan
+│                   │     columns: (j)
+│                   │     estimated row count: 1,000 (missing stats)
+│                   │     table: jars@jars_pkey
+│                   │     spans: FULL SCAN
+│                   │     locking strength: for share
+│                   │     locking durability: guaranteed
 │                   │
 │                   └── • filter
 │                       │ columns: (j_new)
@@ -364,14 +364,12 @@ EXPLAIN (OPT) DELETE FROM jars WHERE j = 1
 ----
 delete jars
  ├── scan jars
- │    ├── constraint: /6: [/1 - /1]
- │    └── flags: avoid-full-scan
+ │    └── constraint: /6: [/1 - /1]
  └── f-k-checks
       └── f-k-checks-item: cookies(j) -> jars(j)
            └── semi-join (hash)
                 ├── with-scan &1
                 ├── scan cookies
-                │    └── flags: avoid-full-scan
                 └── filters
                      └── j = cookies.j
 
@@ -398,7 +396,6 @@ vectorized: true
 │             estimated row count: 1 (missing stats)
 │             table: jars@jars_pkey
 │             spans: /1/0
-│             locking strength: for update
 │
 ├── • fk-cascade
 │   │ fk: gumballs_j_fkey

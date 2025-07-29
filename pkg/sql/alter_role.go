@@ -20,7 +20,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgnotice"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/roleoption"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
@@ -35,7 +34,6 @@ import (
 
 // alterRoleNode represents an ALTER ROLE ... [WITH] OPTION... statement.
 type alterRoleNode struct {
-	zeroInputPlanNode
 	roleName    username.SQLUsername
 	ifExists    bool
 	isRole      bool
@@ -44,7 +42,6 @@ type alterRoleNode struct {
 
 // alterRoleSetNode represents an `ALTER ROLE ... SET` statement.
 type alterRoleSetNode struct {
-	zeroInputPlanNode
 	roleName username.SQLUsername
 	ifExists bool
 	isRole   bool
@@ -158,15 +155,6 @@ func (n *alterRoleNode) startExec(params runParams) error {
 			"cannot edit admin role")
 	}
 
-	// Restrict PASSWORD and PROVISIONSRC alterations for provisioned users.
-	if provisioned, err := params.p.UserHasRoleOption(params.ctx, n.roleName, roleoption.PROVISIONSRC); err != nil {
-		return err
-	} else if provisioned &&
-		(n.roleOptions.Contains(roleoption.PROVISIONSRC) || n.roleOptions.Contains(roleoption.PASSWORD)) {
-		return pgerror.Newf(pgcode.ObjectNotInPrerequisiteState,
-			"cannot alter PASSWORD/PROVISIONSRC option for provisioned user %s", n.roleName)
-	}
-
 	needMoreChecks := true
 	if n.roleName == params.p.SessionData().User() && len(n.roleOptions) == 1 && n.roleOptions.Contains(roleoption.
 		PASSWORD) {
@@ -205,7 +193,7 @@ func (n *alterRoleNode) startExec(params runParams) error {
 		opName,
 		params.p.txn,
 		sessiondata.NodeUserSessionDataOverride,
-		fmt.Sprintf("SELECT 1 FROM system.public.%s WHERE username = $1", catconstants.UsersTableName),
+		fmt.Sprintf("SELECT 1 FROM %s WHERE username = $1", sessioninit.UsersTableName),
 		n.roleName,
 	)
 	if err != nil {
@@ -454,19 +442,19 @@ func (n *alterRoleSetNode) startExec(params runParams) error {
 	}
 
 	var deleteQuery = fmt.Sprintf(
-		`DELETE FROM system.public.%s WHERE database_id = $1 AND role_name = $2`,
-		catconstants.DatabaseRoleSettingsTableName,
+		`DELETE FROM %s WHERE database_id = $1 AND role_name = $2`,
+		sessioninit.DatabaseRoleSettingsTableName,
 	)
 
 	var upsertQuery = fmt.Sprintf(`
-UPSERT INTO system.public.%s (database_id, role_name, settings, role_id)
+UPSERT INTO %s (database_id, role_name, settings, role_id)
 VALUES ($1, $2, $3, (
 	SELECT CASE $2
 		WHEN '%s' THEN %d
 		ELSE (SELECT user_id FROM system.users WHERE username = $2)
 	END
 ))`,
-		catconstants.DatabaseRoleSettingsTableName, username.EmptyRole, username.EmptyRoleID,
+		sessioninit.DatabaseRoleSettingsTableName, username.EmptyRole, username.EmptyRoleID,
 	)
 
 	// Instead of inserting an empty settings array, this function will make
@@ -595,7 +583,7 @@ func (n *alterRoleSetNode) getRoleName(
 		opName,
 		params.p.txn,
 		sessiondata.NodeUserSessionDataOverride,
-		fmt.Sprintf("SELECT 1 FROM system.public.%s WHERE username = $1", catconstants.UsersTableName),
+		fmt.Sprintf("SELECT 1 FROM %s WHERE username = $1", sessioninit.UsersTableName),
 		n.roleName,
 	)
 	if err != nil {
@@ -648,8 +636,8 @@ func (n *alterRoleSetNode) makeNewSettings(
 	params runParams, opName redact.RedactableString, roleName username.SQLUsername,
 ) (oldSettings []string, newSettings []string, err error) {
 	var selectQuery = fmt.Sprintf(
-		`SELECT settings FROM system.public.%s WHERE database_id = $1 AND role_name = $2`,
-		catconstants.DatabaseRoleSettingsTableName,
+		`SELECT settings FROM %s WHERE database_id = $1 AND role_name = $2`,
+		sessioninit.DatabaseRoleSettingsTableName,
 	)
 	datums, err := params.p.InternalSQLTxn().QueryRowEx(
 		params.ctx,
