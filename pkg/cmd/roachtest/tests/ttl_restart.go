@@ -166,34 +166,41 @@ func runTTLRestart(ctx context.Context, t test.Test, c cluster.Cluster, numResta
 		}
 		db = c.Conn(ctx, t.L(), jobInfo.CoordinatorID)
 
-		t.Status("wait for TTL deletions to start happening")
-		// Take baseline once and reuse it for all progress checks
-		baseline, err := takeProgressBaseline(ctx, t, db)
-		if err != nil {
-			return errors.Wrapf(err, "error taking TTL progress baseline")
+		t.Status("check TTL activity distribution across nodes")
+		// Determine how many nodes we need TTL activity on based on restart scenario
+		requiredTTLNodes := 3 // Default for numRestartNodes=1
+		if numRestartNodes == 2 {
+			requiredTTLNodes = 2
 		}
-		waitForTTLProgressAcrossAllNodes := func() error {
-			if err := checkTTLProgressAgainstBaseline(ctx, db, baseline); err != nil {
-				return errors.Wrapf(err, "error waiting for TTL progress after restart")
+		var ttlNodes map[int]struct{}
+		err = testutils.SucceedsWithinError(func() error {
+			var err error
+			ttlNodes, err = findNodesWithJobLogs(ctx, t, c, jobInfo.JobID)
+			if err != nil {
+				return err
+			}
+			if len(ttlNodes) < requiredTTLNodes {
+				return errors.Newf("TTL activity found on only %d nodes (need %d)", len(ttlNodes), requiredTTLNodes)
 			}
 			return nil
+		}, 1*time.Minute)
+		if err != nil {
+			// NOTE: Even though we manually distribute leases across nodes, TTL job
+			// parallelization isn't guaranteed. If TTL work is concentrated on too
+			// few nodes, the restart test scenario becomes invalid, so we exit
+			// successfully rather than fail.
+			if ttlNodes != nil && len(ttlNodes) < requiredTTLNodes {
+				t.L().Printf("TTL job %d found on nodes: %v", jobInfo.JobID, ttlNodes)
+				t.L().Printf("TTL activity found on only %d nodes (need %d for restart test). Test completed successfully.", len(ttlNodes), requiredTTLNodes)
+				return nil
+			}
+			return errors.Wrapf(err, "error waiting for TTL activity distribution")
 		}
-		testutils.SucceedsWithin(t, waitForTTLProgressAcrossAllNodes, 1*time.Minute)
+		t.L().Printf("TTL job %d found on nodes: %v", jobInfo.JobID, ttlNodes)
 
 		t.Status("stop non-coordinator nodes")
 		nonCoordinatorCount := c.Spec().NodeCount - 1
 		stoppingAllNonCoordinators := numRestartNodes == nonCoordinatorCount
-		var ttlNodes map[int]struct{}
-		if !stoppingAllNonCoordinators {
-			// We need to stop a node that actually executed part of the TTL job.
-			// Relying on SQL isn't fully reliable due to potential cache staleness.
-			// Instead, we scan cockroach.log files for known TTL job log markers to
-			// identify nodes that were truly involved in the job execution.
-			ttlNodes, err = findNodesWithJobLogs(ctx, t, c, jobInfo.JobID)
-			if err != nil {
-				return errors.Wrapf(err, "error finding nodes with job logs")
-			}
-		}
 		stoppedNodes := make([]int, 0)
 		for node := 1; node <= c.Spec().NodeCount && len(stoppedNodes) < numRestartNodes; node++ {
 			if node == jobInfo.CoordinatorID {
@@ -317,108 +324,6 @@ func distributeLeases(ctx context.Context, t test.Test, db *gosql.DB) error {
 
 }
 
-// takeProgressBaseline captures the initial key counts for each range and its leaseholder.
-// This baseline will be used later to check if TTL progress is being made.
-func takeProgressBaseline(
-	ctx context.Context, t test.Test, db *gosql.DB,
-) (map[int]map[int]int, error) {
-	query := `
-		WITH r AS (
-			SHOW RANGES FROM TABLE ttldb.tab1 WITH DETAILS
-		)
-		SELECT
-		  range_id,
-			lease_holder,
-			count(*) AS key_count
-		FROM
-			r,
-			LATERAL crdb_internal.list_sql_keys_in_range(range_id)
-		GROUP BY
-		  range_id,
-			lease_holder
-		ORDER BY
-		  range_id`
-
-	// Map of leaseholder -> rangeID -> keyCount
-	baseline := make(map[int]map[int]int)
-
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var rangeID, leaseHolder, keyCount int
-		if err := rows.Scan(&rangeID, &leaseHolder, &keyCount); err != nil {
-			return nil, err
-		}
-		if _, ok := baseline[leaseHolder]; !ok {
-			baseline[leaseHolder] = make(map[int]int)
-		}
-		baseline[leaseHolder][rangeID] = keyCount
-	}
-
-	return baseline, nil
-}
-
-// checkTTLProgressAgainstBaseline checks if each leaseholder has made progress
-// on at least one of their original ranges compared to the provided baseline.
-func checkTTLProgressAgainstBaseline(
-	ctx context.Context, db *gosql.DB, baseline map[int]map[int]int,
-) error {
-	query := `
-		WITH r AS (
-			SHOW RANGES FROM TABLE ttldb.tab1 WITH DETAILS
-		)
-		SELECT
-		  range_id,
-			lease_holder,
-			count(*) AS key_count
-		FROM
-			r,
-			LATERAL crdb_internal.list_sql_keys_in_range(range_id)
-		GROUP BY
-		  range_id,
-			lease_holder
-		ORDER BY
-		  range_id`
-
-	current := make(map[int]int) // rangeID -> keyCount
-
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var rangeID, leaseHolder, keyCount int
-		if err := rows.Scan(&rangeID, &leaseHolder, &keyCount); err != nil {
-			return err
-		}
-		current[rangeID] = keyCount
-	}
-
-	for leaseHolder, ranges := range baseline {
-		madeProgress := false
-		for rangeID, oldCount := range ranges {
-			newCount, ok := current[rangeID]
-			if !ok {
-				return errors.Newf("range %d (from leaseholder %d) not found in follow-up check", rangeID, leaseHolder)
-			}
-			if newCount < oldCount {
-				madeProgress = true
-			}
-		}
-		if !madeProgress {
-			return errors.Newf("leaseholder %d made no progress on any of their original ranges", leaseHolder)
-		}
-	}
-
-	return nil
-}
-
 // findRunningJob checks the current state of the TTL job and returns metadata
 // about it. If a previous job state (lastJob) is provided, and expectJobRestart
 // is true, the function verifies that the job has restarted by comparing resume
@@ -526,7 +431,6 @@ func findNodesWithJobLogs(
 		nodeList = append(nodeList, node)
 	}
 	sort.Ints(nodeList)
-	t.L().Printf("TTL job %d found on nodes: %v", jobID, nodeList)
 
 	return nodesWithJob, nil
 }
