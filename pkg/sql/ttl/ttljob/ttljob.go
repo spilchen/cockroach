@@ -7,7 +7,6 @@ package ttljob
 
 import (
 	"context"
-	"math/rand"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
@@ -32,11 +31,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
-	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
-	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
-	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
-	pbtypes "github.com/gogo/protobuf/types"
 )
 
 var replanThreshold = settings.RegisterFloatSetting(
@@ -60,23 +55,11 @@ var replanFrequency = settings.RegisterDurationSetting(
 // nodes. DistSQL divides work into spans that each ttlProcessor scans in a
 // SELECT/DELETE loop.
 type rowLevelTTLResumer struct {
-	job          *jobs.Job
-	st           *cluster.Settings
-	physicalPlan *sql.PhysicalPlan
-	planCtx      *sql.PlanningCtx
-
-	mu struct {
-		syncutil.Mutex
-		// lastUpdateTime is the wall time of the last job progress update.
-		// Used to gate how often we persist job progress in refreshProgress.
-		lastUpdateTime time.Time
-		// lastSpanCount is the number of spans processed as of the last persisted update.
-		lastSpanCount int64
-		// updateEvery determines how many spans must be processed before we persist a new update.
-		updateEvery int64
-		// updateEveryDuration is the minimum time that must pass before allowing another progress update.
-		updateEveryDuration time.Duration
-	}
+	job             *jobs.Job
+	st              *cluster.Settings
+	physicalPlan    *sql.PhysicalPlan
+	planCtx         *sql.PlanningCtx
+	progressTracker progressTracker
 }
 
 var _ jobs.Resumer = (*rowLevelTTLResumer)(nil)
@@ -192,6 +175,28 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 
 	distSQLPlanner := jobExecCtx.DistSQLPlanner()
 
+	// Setup progress tracking first to get completed spans for planning optimization
+	completedSpans, err := t.setupProgressTracking(ctx, 0, settingsValues, execCfg, entirePKSpan) // Will update with correct span count later
+	if err != nil {
+		return err
+	}
+
+	// Calculate remaining spans by subtracting completed spans from the entire table span
+	var remainingSpans []roachpb.Span
+	if len(completedSpans) > 0 {
+		var g roachpb.SpanGroup
+		g.Add(entirePKSpan)
+		g.Sub(completedSpans...)
+		remainingSpans = g.Slice()
+	} else {
+		remainingSpans = []roachpb.Span{entirePKSpan}
+	}
+
+	// Early exit if all spans have been completed
+	if len(remainingSpans) == 0 {
+		return nil
+	}
+
 	jobSpanCount := 0
 	makePlan := func(ctx context.Context, distSQLPlanner *sql.DistSQLPlanner) (*sql.PhysicalPlan, *sql.PlanningCtx, error) {
 		// We don't return the compatible nodes here since PartitionSpans will
@@ -200,7 +205,7 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 		if err != nil {
 			return nil, nil, err
 		}
-		spanPartitions, err := distSQLPlanner.PartitionSpans(ctx, planCtx, []roachpb.Span{entirePKSpan}, sql.PartitionSpansBoundDefault)
+		spanPartitions, err := distSQLPlanner.PartitionSpans(ctx, planCtx, remainingSpans, sql.PartitionSpansBoundDefault)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -274,19 +279,25 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 		return physicalPlan, planCtx, nil
 	}
 
-	var err error
 	t.physicalPlan, t.planCtx, err = makePlan(ctx, distSQLPlanner)
 	if err != nil {
 		return err
 	}
 
-	if err := t.initProgressInJob(ctx, int64(jobSpanCount)); err != nil {
+	// Initialize job progress with the correct span count after planning
+	err = t.progressTracker.initJobProgress(ctx, int64(jobSpanCount))
+	if err != nil {
 		return err
 	}
+	defer func() { t.progressTracker.termTracker() }()
 
 	metadataCallbackWriter := sql.NewMetadataOnlyMetadataCallbackWriter(
 		func(ctx context.Context, meta *execinfrapb.ProducerMetadata) error {
-			return t.refreshProgressInJob(ctx, meta)
+			// In mixed-version clusters (25.3 and earlier), TTL processors fall back to
+			// direct job table updates if any node in the cluster does not support
+			// coordinator-based progress reporting. In that case, no processors will emit
+			// progress metadata, so this callback will never be invoked.
+			return t.progressTracker.handleProgressUpdate(ctx, meta)
 		},
 	)
 
@@ -364,147 +375,54 @@ func (t *rowLevelTTLResumer) CollectProfile(_ context.Context, _ interface{}) er
 	return nil
 }
 
-// initProgressInJob initializes and persists the initial RowLevelTTL job progress state.
-// It computes throttling thresholds and writes an empty progress object to the job record.
-// This should be called once before job execution starts.
-func (t *rowLevelTTLResumer) initProgressInJob(ctx context.Context, jobSpanCount int64) error {
-	return t.job.NoTxn().Update(ctx, func(_ isql.Txn, _ jobs.JobMetadata, ju *jobs.JobUpdater) error {
-		newProgress, err := t.initProgress(jobSpanCount)
+// setupProgressTracking sets up progress tracking for the TTL job, handling
+// both initial startup and resumption scenarios. This should be called once
+// before job execution starts. Returns the completed spans from any previous
+// job execution for use in planning.
+func (t *rowLevelTTLResumer) setupProgressTracking(
+	ctx context.Context,
+	jobSpanCount int64,
+	sv *settings.Values,
+	execCfg *sql.ExecutorConfig,
+	entirePKSpan roachpb.Span,
+) ([]roachpb.Span, error) {
+	var completedSpans []roachpb.Span
+	err := t.job.NoTxn().Update(ctx, func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
+		ttlProg := md.Progress.GetRowLevelTTL()
+		if ttlProg == nil {
+			return errors.AssertionFailedf("no TTL job progress")
+		}
+
+		t.progressTracker = t.progressTrackerFactory(ctx, ttlProg, sv, execCfg, entirePKSpan)
+		var err error
+		completedSpans, err = t.progressTracker.initTracker(ttlProg, sv)
 		if err != nil {
 			return err
 		}
-		ju.UpdateProgress(newProgress)
 		return nil
 	})
+	return completedSpans, err
 }
 
-// refreshProgressInJob updates the job progress metadata based on input
-// from the last producer metadata received.
-//
-// In mixed-version clusters (25.3 and earlier), TTL processors fall back to
-// direct job table updates if any node in the cluster does not support
-// coordinator-based progress reporting. In that case, no processors will emit
-// progress metadata, so this callback will never be invoked.
-func (t *rowLevelTTLResumer) refreshProgressInJob(
-	ctx context.Context, meta *execinfrapb.ProducerMetadata,
-) error {
-	return t.job.NoTxn().Update(ctx, func(_ isql.Txn, md jobs.JobMetadata, ju *jobs.JobUpdater) error {
-		progress, err := t.refreshProgress(ctx, &md, meta)
-		if err != nil {
-			return err
-		}
-		if progress != nil {
-			ju.UpdateProgress(progress)
-		}
-		return nil
-	})
-}
-
-// initProgress initializes the RowLevelTTL job progress metadata, including
-// total span count and per-processor progress entries, based on the physical plan.
-// This should be called before the job starts execution.
-func (t *rowLevelTTLResumer) initProgress(jobSpanCount int64) (*jobspb.Progress, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	// To avoid too many progress updates, especially if a lot of the spans don't
-	// have expired rows, we will gate the updates to approximately every 1% of
-	// spans processed, and at least 60 seconds apart with jitter. This gating is
-	// done in refreshProgress.
-	t.mu.updateEvery = max(1, jobSpanCount/100)
-	t.mu.updateEveryDuration = 60*time.Second + time.Duration(rand.Int63n(10*1000))*time.Millisecond
-	t.mu.lastUpdateTime = timeutil.Now()
-	t.mu.lastSpanCount = 0
-
-	rowLevelTTL := &jobspb.RowLevelTTLProgress{
-		JobTotalSpanCount:     jobSpanCount,
-		JobProcessedSpanCount: 0,
+// progressTrackerFactory creates and returns an appropriate progress tracker
+// based on the job's UseCheckpointing configuration.
+func (t *rowLevelTTLResumer) progressTrackerFactory(
+	ctx context.Context,
+	prog *jobspb.RowLevelTTLProgress,
+	sv *settings.Values,
+	execCfg *sql.ExecutorConfig,
+	entirePKSpan roachpb.Span,
+) progressTracker {
+	if prog.UseCheckpointing {
+		return newCheckpointProgressTracker(
+			t.job,
+			sv,
+			execCfg.DB,
+			execCfg.DistSQLPlanner,
+			entirePKSpan,
+		)
 	}
-
-	progress := &jobspb.Progress{
-		Details: &jobspb.Progress_RowLevelTTL{RowLevelTTL: rowLevelTTL},
-		Progress: &jobspb.Progress_FractionCompleted{
-			FractionCompleted: 0,
-		},
-	}
-	return progress, nil
-}
-
-// refreshProgress ingests per-processor metadata pushed from TTL processors
-// and updates the job level progress. It recomputes total spans processed
-// and rows deleted, and sets the job level fraction completed.
-func (t *rowLevelTTLResumer) refreshProgress(
-	ctx context.Context, md *jobs.JobMetadata, meta *execinfrapb.ProducerMetadata,
-) (*jobspb.Progress, error) {
-	if meta.BulkProcessorProgress == nil {
-		return nil, nil
-	}
-	var incomingProcProgress jobspb.RowLevelTTLProcessorProgress
-	if err := pbtypes.UnmarshalAny(&meta.BulkProcessorProgress.ProgressDetails, &incomingProcProgress); err != nil {
-		return nil, errors.Wrapf(err, "unable to unmarshal ttl progress details")
-	}
-
-	orig := md.Progress.GetRowLevelTTL()
-	if orig == nil {
-		return nil, errors.New("job progress does not contain RowLevelTTL details")
-	}
-	rowLevelTTL := protoutil.Clone(orig).(*jobspb.RowLevelTTLProgress)
-
-	// Update or insert the incoming processor progress.
-	foundMatchingProcessor := false
-	for i := range rowLevelTTL.ProcessorProgresses {
-		if rowLevelTTL.ProcessorProgresses[i].ProcessorID == incomingProcProgress.ProcessorID {
-			rowLevelTTL.ProcessorProgresses[i] = incomingProcProgress
-			foundMatchingProcessor = true
-			break
-		}
-	}
-	if !foundMatchingProcessor {
-		rowLevelTTL.ProcessorProgresses = append(rowLevelTTL.ProcessorProgresses, incomingProcProgress)
-	}
-
-	// Recompute job level counters from scratch.
-	rowLevelTTL.JobDeletedRowCount = 0
-	rowLevelTTL.JobProcessedSpanCount = 0
-	totalSpanCount := int64(0)
-	for i := range rowLevelTTL.ProcessorProgresses {
-		pp := &rowLevelTTL.ProcessorProgresses[i]
-		rowLevelTTL.JobDeletedRowCount += pp.DeletedRowCount
-		rowLevelTTL.JobProcessedSpanCount += pp.ProcessedSpanCount
-		totalSpanCount += pp.TotalSpanCount
-	}
-
-	if totalSpanCount > rowLevelTTL.JobTotalSpanCount {
-		return nil, errors.Errorf(
-			"computed span total cannot exceed job total: computed=%d jobRecorded=%d",
-			totalSpanCount, rowLevelTTL.JobTotalSpanCount)
-	}
-
-	// Avoid the update if doing this too frequently.
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	processedDelta := rowLevelTTL.JobProcessedSpanCount - t.mu.lastSpanCount
-	processorComplete := incomingProcProgress.ProcessedSpanCount == incomingProcProgress.TotalSpanCount
-	firstProgressForProcessor := !foundMatchingProcessor
-
-	if !(processedDelta >= t.mu.updateEvery ||
-		timeutil.Since(t.mu.lastUpdateTime) >= t.mu.updateEveryDuration ||
-		processorComplete ||
-		firstProgressForProcessor) {
-		return nil, nil // Skip the update
-	}
-	t.mu.lastSpanCount = rowLevelTTL.JobProcessedSpanCount
-	t.mu.lastUpdateTime = timeutil.Now()
-
-	newProgress := &jobspb.Progress{
-		Details: &jobspb.Progress_RowLevelTTL{
-			RowLevelTTL: rowLevelTTL,
-		},
-		Progress: &jobspb.Progress_FractionCompleted{
-			FractionCompleted: float32(rowLevelTTL.JobProcessedSpanCount) /
-				float32(rowLevelTTL.JobTotalSpanCount),
-		},
-	}
-	return newProgress, nil
+	return newLegacyProgressTracker(t.job)
 }
 
 func init() {

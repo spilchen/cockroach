@@ -3,6 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "ttljob",
     srcs = [
+        "progress.go",
         "ttljob.go",
         "ttljob_metrics.go",
         "ttljob_processor.go",
@@ -45,6 +46,7 @@ go_library(
         "//pkg/sql/ttl/ttlbase",
         "//pkg/sql/types",
         "//pkg/util/admission/admissionpb",
+        "//pkg/util/buildutil",
         "//pkg/util/ctxgroup",
         "//pkg/util/log",
         "//pkg/util/metric",
@@ -58,6 +60,7 @@ go_library(
         "@com_github_cockroachdb_redact//:redact",
         "@com_github_gogo_protobuf//types",
         "@com_github_prometheus_client_model//go",
+        "@org_golang_x_sync//errgroup",
     ],
 )
 
@@ -66,7 +69,7 @@ go_test(
     size = "large",
     srcs = [
         "main_test.go",
-        "ttljob_internal_test.go",
+        "progress_test.go",
         "ttljob_plans_test.go",
         "ttljob_processor_internal_test.go",
         "ttljob_query_builder_test.go",
@@ -104,7 +107,6 @@ go_test(
         "//pkg/sql/isql",
         "//pkg/sql/lexbase",
         "//pkg/sql/parser",
-        "//pkg/sql/physicalplan",
         "//pkg/sql/randgen",
         "//pkg/sql/rowenc",
         "//pkg/sql/sem/eval",
