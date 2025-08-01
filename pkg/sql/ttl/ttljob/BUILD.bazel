@@ -46,6 +46,7 @@ go_library(
         "//pkg/sql/ttl/ttlbase",
         "//pkg/sql/types",
         "//pkg/util/admission/admissionpb",
+        "//pkg/util/buildutil",
         "//pkg/util/ctxgroup",
         "//pkg/util/log",
         "//pkg/util/metric",
@@ -59,6 +60,7 @@ go_library(
         "@com_github_cockroachdb_redact//:redact",
         "@com_github_gogo_protobuf//types",
         "@com_github_prometheus_client_model//go",
+        "@org_golang_x_sync//errgroup",
     ],
 )
 

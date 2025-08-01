@@ -413,6 +413,15 @@ func (t *rowLevelTTLResumer) progressTrackerFactory(
 	execCfg *sql.ExecutorConfig,
 	entirePKSpan roachpb.Span,
 ) progressTracker {
+	if prog.UseCheckpointing {
+		return newCheckpointProgressTracker(
+			t.job,
+			sv,
+			execCfg.DB,
+			execCfg.DistSQLPlanner,
+			entirePKSpan,
+		)
+	}
 	return newLegacyProgressTracker(t.job)
 }
 
