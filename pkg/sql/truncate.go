@@ -29,7 +29,6 @@ import (
 )
 
 type truncateNode struct {
-	zeroInputPlanNode
 	n *tree.Truncate
 }
 
@@ -292,8 +291,7 @@ func (p *planner) truncateTable(ctx context.Context, id descpb.ID, jobDesc strin
 		NewIndexes:        newIndexIDs[1:],
 	}
 	if err := maybeUpdateZoneConfigsForPKChange(
-		ctx, p.InternalSQLTxn(), p.ExecCfg(), p.ExtendedEvalContext().Tracing.KVTracingEnabled(),
-		tableDesc, swapInfo, true, /* forceSwap */
+		ctx, p.InternalSQLTxn(), p.ExecCfg(), p.ExtendedEvalContext().Tracing.KVTracingEnabled(), tableDesc, swapInfo,
 	); err != nil {
 		return err
 	}
@@ -415,7 +413,7 @@ func (p *planner) copySplitPointsToNewIndexes(
 	nNodes := execCfg.NodeDescs.GetNodeDescriptorCount()
 	nSplits := preservedSplitsMultiple * nNodes
 
-	log.Dev.Infof(ctx, "making %d new truncate split points (%d * %d)", nSplits, preservedSplitsMultiple, nNodes)
+	log.Infof(ctx, "making %d new truncate split points (%d * %d)", nSplits, preservedSplitsMultiple, nNodes)
 
 	// Re-split the new set of indexes along the same split points as the old
 	// indexes.
@@ -504,7 +502,7 @@ func (p *planner) copySplitPointsToNewIndexes(
 		jitter := rand.Int63n(maxJitter*2) - maxJitter
 		expirationTime += jitter
 
-		log.Dev.Infof(ctx, "truncate sending split request for key %s", sp)
+		log.Infof(ctx, "truncate sending split request for key %s", sp)
 		b.AddRawRequest(&kvpb.AdminSplitRequest{
 			RequestHeader: kvpb.RequestHeader{
 				Key: sp,

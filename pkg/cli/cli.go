@@ -30,18 +30,15 @@ import (
 	_ "github.com/cockroachdb/cockroach/pkg/workload/bank"       // registers workloads
 	_ "github.com/cockroachdb/cockroach/pkg/workload/bulkingest" // registers workloads
 	workloadcli "github.com/cockroachdb/cockroach/pkg/workload/cli"
-	_ "github.com/cockroachdb/cockroach/pkg/workload/debug"              // registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/examples"           // registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/insights"           // registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/kv"                 // registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/movr"               // registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/sqlstats"           // registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/tpcc"               // registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/tpch"               // registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/ttlbench"           // registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/ttllogger"          // registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/workload_generator" //registers workloads
-	_ "github.com/cockroachdb/cockroach/pkg/workload/ycsb"               // registers workloads
+	_ "github.com/cockroachdb/cockroach/pkg/workload/examples"  // registers workloads
+	_ "github.com/cockroachdb/cockroach/pkg/workload/insights"  // registers workloads
+	_ "github.com/cockroachdb/cockroach/pkg/workload/kv"        // registers workloads
+	_ "github.com/cockroachdb/cockroach/pkg/workload/movr"      // registers workloads
+	_ "github.com/cockroachdb/cockroach/pkg/workload/tpcc"      // registers workloads
+	_ "github.com/cockroachdb/cockroach/pkg/workload/tpch"      // registers workloads
+	_ "github.com/cockroachdb/cockroach/pkg/workload/ttlbench"  // registers workloads
+	_ "github.com/cockroachdb/cockroach/pkg/workload/ttllogger" // registers workloads
+	_ "github.com/cockroachdb/cockroach/pkg/workload/ycsb"      // registers workloads
 	"github.com/cockroachdb/errors"
 	"github.com/spf13/cobra"
 )
@@ -257,6 +254,7 @@ func init() {
 		nodeCmd,
 		nodeLocalCmd,
 		userFileCmd,
+		importCmd,
 
 		// Miscellaneous commands.
 		// TODO(pmattis): stats
@@ -374,13 +372,13 @@ func debugSignalSetup() func() {
 					server := http.Server{Handler: mux}
 					go func() {
 						if err := server.Serve(listener); err != nil {
-							log.Dev.Warningf(ctx, "debug server: %v", err)
+							log.Warningf(ctx, "debug server: %v", err)
 						}
 					}()
 					log.Shoutf(ctx, severity.INFO, "debug server listening on %s", listener.Addr())
 					<-exit
 					if err := server.Shutdown(ctx); err != nil {
-						log.Dev.Warningf(ctx, "error shutting down debug server: %s", err)
+						log.Warningf(ctx, "error shutting down debug server: %s", err)
 					}
 				}
 			}

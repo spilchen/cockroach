@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/storage"
+	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
@@ -108,7 +109,7 @@ func evalExport(
 		return result.Result{}, err
 	}
 	if excludeFromBackup {
-		log.Dev.Infof(ctx, "[%s, %s) is part of a table excluded from backup, returning empty ExportResponse", args.Key, args.EndKey)
+		log.Infof(ctx, "[%s, %s) is part of a table excluded from backup, returning empty ExportResponse", args.Key, args.EndKey)
 		return result.Result{}, nil
 	}
 
@@ -168,7 +169,10 @@ func evalExport(
 	}
 
 	// Only use resume timestamp if splitting mid key is enabled.
-	resumeKeyTS := args.ResumeKeyTS
+	resumeKeyTS := hlc.Timestamp{}
+	if args.SplitMidKey {
+		resumeKeyTS = args.ResumeKeyTS
+	}
 
 	maybeAnnotateExceedMaxSizeError := func(err error) error {
 		if errors.HasType(err, (*storage.ExceedMaxSizeError)(nil)) {
@@ -292,7 +296,7 @@ func evalExport(
 							return result.Result{}, errors.AssertionFailedf("ExportRequest exited without " +
 								"exporting any data for an unknown reason; programming error")
 						} else {
-							log.Dev.Warningf(ctx, "unexpected resume span from ExportRequest without exporting any data for an unknown reason: %v", resumeInfo)
+							log.Warningf(ctx, "unexpected resume span from ExportRequest without exporting any data for an unknown reason: %v", resumeInfo)
 						}
 					}
 					start = resumeInfo.ResumeKey.Key
