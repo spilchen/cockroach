@@ -225,19 +225,17 @@ func (s *FileSSTSink) WriteWithNoData(resp ExportedSpan) {
 
 func (s *FileSSTSink) Close() error {
 	if log.V(1) && s.ctx != nil {
-		log.Dev.Infof(s.ctx, "backup sst sink recv'd %d files, wrote %d (%d due to size, %d due to re-ordering), %d recv files extended prior span",
+		log.Infof(s.ctx, "backup sst sink recv'd %d files, wrote %d (%d due to size, %d due to re-ordering), %d recv files extended prior span",
 			s.stats.files, s.stats.flushes, s.stats.sizeFlushes, s.stats.oooFlushes, s.stats.spanGrows)
 	}
 	if s.cancel != nil {
 		s.cancel()
 	}
-
-	var err error
 	if s.out != nil {
-		err = s.out.Close()
+		return s.out.Close()
 	}
 	s.sst.Close()
-	return err
+	return nil
 }
 
 func (s *FileSSTSink) Flush(ctx context.Context) error {
@@ -280,7 +278,7 @@ func (s *FileSSTSink) Flush(ctx context.Context) error {
 		return err
 	}
 	if err := s.out.Close(); err != nil {
-		log.Dev.Warningf(ctx, "failed to close write in FileSSTSink: % #v", pretty.Formatter(err))
+		log.Warningf(ctx, "failed to close write in FileSSTSink: % #v", pretty.Formatter(err))
 		return errors.Wrap(err, "writing SST")
 	}
 	wroteSize := s.sst.Meta.Size

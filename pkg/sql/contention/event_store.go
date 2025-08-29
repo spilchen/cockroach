@@ -216,7 +216,7 @@ func (s *eventStore) startResolver(ctx context.Context, stopper *stop.Stopper) {
 			case <-timer.C:
 				if err := s.flushAndResolve(ctx); err != nil {
 					if log.V(1) {
-						log.Dev.Warningf(ctx, "unexpected error encountered when performing "+
+						log.Warningf(ctx, "unexpected error encountered when performing "+
 							"txn id resolution %s", err)
 					}
 				}
@@ -326,22 +326,6 @@ func (s *eventStore) flushAndResolve(ctx context.Context) error {
 // upsertBatch update or insert a batch of contention events into the in-memory
 // store
 func (s *eventStore) upsertBatch(events []contentionpb.ExtendedContentionEvent) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for i := range events {
-		blockingTxnID := events[i].BlockingEvent.TxnMeta.ID
-		_, ok := s.mu.store.Get(blockingTxnID)
-		if !ok {
-			atomic.AddInt64(&s.atomic.storageSize, int64(entryBytes(&events[i])))
-		}
-		s.mu.store.Add(events[i].Hash(), events[i])
-	}
-}
-
-// addEventsForTest is a convenience function used by tests to directly add events to
-// the eventStore bypassing the resolver and buffer guard.
-func (s *eventStore) addEventsForTest(events []contentionpb.ExtendedContentionEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

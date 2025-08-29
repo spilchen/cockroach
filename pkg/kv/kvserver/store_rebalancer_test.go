@@ -17,7 +17,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/allocatorimpl"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/load"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverpb"
 	rload "github.com/cockroachdb/cockroach/pkg/kv/kvserver/load"
 	"github.com/cockroachdb/cockroach/pkg/raft"
@@ -833,7 +832,7 @@ func logSummary(
 		summary.WriteString("\n")
 	}
 	summary.WriteString(fmt.Sprintf("overall-mean: %s", mean))
-	log.Dev.Infof(ctx, "generated random store list:\n%s", summary.String())
+	log.Infof(ctx, "generated random store list:\n%s", summary.String())
 }
 
 func TestChooseRangeToRebalanceRandom(t *testing.T) {
@@ -943,7 +942,7 @@ func TestChooseRangeToRebalanceRandom(t *testing.T) {
 			for _, target := range nonVoterTargets {
 				rebalancedNonVoterStores = append(rebalancedNonVoterStores, target.StoreID)
 			}
-			log.Dev.Infof(
+			log.Infof(
 				ctx,
 				"rebalanced voters from %v to %v: %s -> %s",
 				voterStores,
@@ -951,7 +950,7 @@ func TestChooseRangeToRebalanceRandom(t *testing.T) {
 				meanLoad(voterStores),
 				meanLoad(rebalancedVoterStores),
 			)
-			log.Dev.Infof(
+			log.Infof(
 				ctx,
 				"rebalanced non-voters from %v to %v: %s -> %s",
 				nonVoterStores,
@@ -964,7 +963,7 @@ func TestChooseRangeToRebalanceRandom(t *testing.T) {
 			}
 			previousMean := meanLoad(append(voterStores, nonVoterStores...))
 			newMean := meanLoad(append(rebalancedVoterStores, rebalancedNonVoterStores...))
-			log.Dev.Infof(
+			log.Infof(
 				ctx,
 				"rebalanced range from stores with %s average load to %s average load",
 				previousMean,
@@ -1272,7 +1271,7 @@ func TestChooseRangeToRebalanceAcrossHeterogeneousZones(t *testing.T) {
 
 			hottestRanges := sr.replicaRankings.TopLoad(lbRebalanceDimension)
 			options := sr.scorerOptions(ctx, lbRebalanceDimension)
-			rctx := sr.NewRebalanceContext(ctx, options, hottestRanges, kvserverbase.LBRebalancingLeasesAndReplicas)
+			rctx := sr.NewRebalanceContext(ctx, options, hottestRanges, LBRebalancingLeasesAndReplicas)
 			rctx.options.IOOverloadOptions = allocatorimpl.IOOverloadOptions{
 				ReplicaEnforcementLevel: allocatorimpl.IOOverloadThresholdBlockTransfers,
 				UseIOThresholdMax:       true,
