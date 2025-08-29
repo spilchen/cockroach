@@ -217,10 +217,6 @@ type fullReconciler struct {
 func (f *fullReconciler) reconcile(
 	ctx context.Context,
 ) (storeWithLatestSpanConfigs *spanconfigstore.Store, _ hlc.Timestamp, _ error) {
-	if f.knobs != nil && f.knobs.OnFullReconcilerStart != nil {
-		f.knobs.OnFullReconcilerStart()
-	}
-
 	storeWithExistingSpanConfigs, err := f.fetchExistingSpanConfigs(ctx)
 	if err != nil {
 		return nil, hlc.Timestamp{}, err
@@ -251,7 +247,7 @@ func (f *fullReconciler) reconcile(
 		updates[i] = spanconfig.Update(record)
 	}
 
-	toDelete, toUpsert := storeWithExistingSpanConfigs.Apply(ctx, updates...)
+	toDelete, toUpsert := storeWithExistingSpanConfigs.Apply(ctx, false /* dryrun */, updates...)
 	if len(toDelete) != 0 || len(toUpsert) != 0 {
 		if err := updateSpanConfigRecords(
 			ctx, f.kvAccessor, toDelete, toUpsert, f.session,
@@ -280,7 +276,7 @@ func (f *fullReconciler) reconcile(
 			if err != nil {
 				return nil, hlc.Timestamp{}, err
 			}
-			storeWithExistingSpanConfigs.Apply(ctx, del)
+			storeWithExistingSpanConfigs.Apply(ctx, false /* dryrun */, del)
 		}
 		storeWithExtraneousSpanConfigs = storeWithExistingSpanConfigs
 	}
@@ -298,7 +294,7 @@ func (f *fullReconciler) reconcile(
 		if err != nil {
 			return nil, hlc.Timestamp{}, err
 		}
-		storeWithLatestSpanConfigs.Apply(ctx, del)
+		storeWithLatestSpanConfigs.Apply(ctx, false /* dryrun */, del)
 	}
 
 	if !f.codec.ForSystemTenant() {
@@ -400,7 +396,7 @@ func (f *fullReconciler) fetchExistingSpanConfigs(
 		}
 
 		for _, record := range records {
-			store.Apply(ctx, spanconfig.Update(record))
+			store.Apply(ctx, false /* dryrun */, spanconfig.Update(record))
 		}
 	}
 	return store, nil
@@ -460,14 +456,14 @@ func updateSpanConfigRecords(
 				// We expect the underlying sqlliveness session's expiration to be
 				// extended automatically, which makes this retry loop effective in the
 				// face of these retryable lease expired errors from the RPC.
-				log.Dev.Infof(ctx, "lease expired while updating span config records, retrying..")
+				log.Infof(ctx, "lease expired while updating span config records, retrying..")
 				continue
 			}
 			return err // not a retryable error, bubble up
 		}
 
 		if log.V(3) {
-			log.Dev.Infof(ctx, "successfully updated span config records: deleted = %+#v; upserted = %+#v", toDelete, toUpsert)
+			log.Infof(ctx, "successfully updated span config records: deleted = %+#v; upserted = %+#v", toDelete, toUpsert)
 		}
 		return nil // we performed the update; we're done here
 	}
@@ -526,16 +522,6 @@ func (r *incrementalReconciler) reconcile(
 			) error {
 				var err error
 
-				// Using a fixed timestamp prevents this background job from contending
-				// with foreground schema change traffic. Schema changes modify system
-				// objects like system.descriptor, system.descriptor_id_seq, and
-				// system.span_count. The spanconfig reconciler needs to read these
-				// objects also. A fixed timestamp is a defensive measure to help
-				// avoid contention caused by this background job.
-				err = txn.KV().SetFixedTimestamp(ctx, checkpoint)
-				if err != nil {
-					return err
-				}
 				// TODO(irfansharif): Instead of these filter methods for missing
 				// tables and system targets that live on the Reconciler, we could
 				// move this to the SQLTranslator instead, now that the SQLTranslator
@@ -585,7 +571,7 @@ func (r *incrementalReconciler) reconcile(
 				updates = append(updates, del)
 			}
 
-			toDelete, toUpsert := r.storeWithKVContents.Apply(ctx, updates...)
+			toDelete, toUpsert := r.storeWithKVContents.Apply(ctx, false /* dryrun */, updates...)
 			if len(toDelete) != 0 || len(toUpsert) != 0 {
 				if err := updateSpanConfigRecords(
 					ctx, r.kvAccessor, toDelete, toUpsert, r.session,
@@ -698,7 +684,7 @@ func (r *incrementalReconciler) filterForMissingTableIDs(
 			continue // nothing to do
 		}
 
-		desc, err := descsCol.ByIDWithoutLeased(txn).Get().Desc(ctx, descriptorUpdate.ID)
+		desc, err := descsCol.ByID(txn).Get().Desc(ctx, descriptorUpdate.ID)
 
 		considerAsMissing := false
 		if errors.Is(err, catalog.ErrDescriptorNotFound) {

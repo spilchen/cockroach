@@ -45,9 +45,8 @@ a  test-user  ALL      true
 query TTTB rowsort
 SHOW GRANTS ON DATABASE a FOR readwrite, "test-user"
 ----
-a  public     CONNECT  false
-a  readwrite  ALL      true
-a  test-user  ALL      true
+a  readwrite  ALL  true
+a  test-user  ALL  true
 
 statement ok
 REVOKE CONNECT ON DATABASE a FROM "test-user",readwrite
@@ -58,37 +57,28 @@ SHOW GRANTS ON DATABASE a
 a  admin      ALL         true
 a  public     CONNECT     false
 a  readwrite  BACKUP      true
-a  readwrite  CHANGEFEED  true
 a  readwrite  CREATE      true
 a  readwrite  DROP        true
-a  readwrite  INSPECT     true
 a  readwrite  RESTORE     true
 a  readwrite  ZONECONFIG  true
 a  root       ALL         true
 a  test-user  BACKUP      true
-a  test-user  CHANGEFEED  true
 a  test-user  CREATE      true
 a  test-user  DROP        true
-a  test-user  INSPECT     true
 a  test-user  RESTORE     true
 a  test-user  ZONECONFIG  true
 
 query TTTB rowsort
 SHOW GRANTS ON DATABASE a FOR readwrite, "test-user"
 ----
-a  public     CONNECT     false
 a  readwrite  BACKUP      true
-a  readwrite  CHANGEFEED  true
 a  readwrite  CREATE      true
 a  readwrite  DROP        true
-a  readwrite  INSPECT     true
 a  readwrite  RESTORE     true
 a  readwrite  ZONECONFIG  true
 a  test-user  BACKUP      true
-a  test-user  CHANGEFEED  true
 a  test-user  CREATE      true
 a  test-user  DROP        true
-a  test-user  INSPECT     true
 a  test-user  RESTORE     true
 a  test-user  ZONECONFIG  true
 
@@ -101,17 +91,13 @@ SHOW GRANTS ON DATABASE a
 a  admin      ALL         true
 a  public     CONNECT     false
 a  readwrite  BACKUP      true
-a  readwrite  CHANGEFEED  true
 a  readwrite  CREATE      true
 a  readwrite  DROP        true
-a  readwrite  INSPECT     true
 a  readwrite  RESTORE     true
 a  readwrite  ZONECONFIG  true
 a  root       ALL         true
 a  test-user  BACKUP      true
-a  test-user  CHANGEFEED  true
 a  test-user  DROP        true
-a  test-user  INSPECT     true
 a  test-user  RESTORE     true
 a  test-user  ZONECONFIG  true
 
@@ -121,12 +107,9 @@ REVOKE ALL PRIVILEGES ON DATABASE a FROM "test-user"
 query TTTB rowsort
 SHOW GRANTS ON DATABASE a FOR readwrite, "test-user"
 ----
-a  public     CONNECT     false
 a  readwrite  BACKUP      true
-a  readwrite  CHANGEFEED  true
 a  readwrite  CREATE      true
 a  readwrite  DROP        true
-a  readwrite  INSPECT     true
 a  readwrite  RESTORE     true
 a  readwrite  ZONECONFIG  true
 
@@ -143,7 +126,6 @@ a  root    ALL      true
 query TTTB
 SHOW GRANTS ON DATABASE a FOR readwrite, "test-user"
 ----
-a  public  CONNECT  false
 
 # Usage privilege should not be grantable on databases.
 
