@@ -8,6 +8,7 @@ package jobs_test
 import (
 	"context"
 	gosql "database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -231,7 +232,14 @@ func (rts *registryTestSuite) setUp(t *testing.T) func() {
 		t,
 		[]logpb.Channel{logpb.Channel_OPS},
 		[]string{"status_change"},
-		logtestutils.FromLogEntry[eventpb.StatusChange],
+		func(entry logpb.Entry) (eventpb.StatusChange, error) {
+			var structuredPayload eventpb.StatusChange
+			err := json.Unmarshal([]byte(entry.Message[entry.StructuredStart:entry.StructuredEnd]), &structuredPayload)
+			if err != nil {
+				return structuredPayload, err
+			}
+			return structuredPayload, nil
+		},
 	)
 
 	rts.statusChangeLogSpy = spy
@@ -377,7 +385,7 @@ func (rts *registryTestSuite) checkStateChangeLog(
 				jobEventsLog.PreviousStatus == string(expectedPrevState) &&
 				jobEventsLog.NewStatus == string(expectedNewState) &&
 				strings.Contains(jobEventsLog.Error, expectedError) {
-				rts.statusChangeLogSpy.SetLastNLogsAsUnread(logpb.Channel_OPS, len(logs)-i)
+				rts.statusChangeLogSpy.SetLastNLogsAsUnread(logpb.Channel_OPS, len(logs)-i+1)
 				return nil
 			}
 		}
@@ -869,17 +877,10 @@ func TestRegistryLifecycle(t *testing.T) {
 		defer rts.setUp(t)()
 		defer rts.tearDown()
 
-		// Pick an ID so we know which job to mess with.
-		id := rts.registry.MakeJobID()
-		rts.mockJob.JobID = id
-
 		// Inject an error in the update to move the job to "succeeded" one time.
 		var failed atomic.Value
 		failed.Store(false)
 		rts.beforeUpdate = func(orig, updated jobs.JobMetadata) error {
-			if orig.ID != id {
-				return nil
-			}
 			if updated.State == jobs.StateSucceeded && !failed.Load().(bool) {
 				failed.Store(true)
 				return errors.New("boom")
@@ -1186,7 +1187,7 @@ func TestJobLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	var params base.TestServerArgs
-	params.Knobs.JobsTestingKnobs = &jobs.TestingKnobs{DisableRegistryLifecycleManagement: true}
+	params.Knobs.JobsTestingKnobs = &jobs.TestingKnobs{DisableRegistryLifecycleManagent: true}
 	srv, sqlDB, _ := serverutils.StartServer(t, params)
 	defer srv.Stopper().Stop(ctx)
 	s := srv.ApplicationLayer()
@@ -2874,6 +2875,7 @@ func TestMetrics(t *testing.T) {
 			require.Equal(t, int64(1), importMetrics.CurrentlyRunning.Value())
 			errCh <- nil
 			int64EqSoon(t, importMetrics.FailOrCancelCompleted.Count, 1)
+			int64EqSoon(t, importMetrics.FailOrCancelFailed.Count, 0)
 		}
 	})
 }

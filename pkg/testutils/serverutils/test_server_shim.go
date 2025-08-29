@@ -24,10 +24,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/multitenant/tenantcapabilitiespb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
-	"github.com/cockroachdb/cockroach/pkg/rpc"
 	"github.com/cockroachdb/cockroach/pkg/security/securitytest"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
-	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/testutils/pgurlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/util/envutil"
@@ -205,23 +203,6 @@ func testTenantDecisionFromEnvironment(
 	return baseArg, false
 }
 
-var globalDefaultDRPCOptionOverride struct {
-	isSet bool
-	value base.DefaultTestDRPCOption
-}
-
-// TestingGlobalDRPCOption sets the package-level DefaultTestDRPCOption.
-//
-// Note: This override will be superseded by any more specific options provided
-// when starting the server or cluster.
-func TestingGlobalDRPCOption(v base.DefaultTestDRPCOption) func() {
-	globalDefaultDRPCOptionOverride.isSet = true
-	globalDefaultDRPCOptionOverride.value = v
-	return func() {
-		globalDefaultDRPCOptionOverride.isSet = false
-	}
-}
-
 // globalDefaultSelectionOverride is used when an entire package needs
 // to override the probabilistic behavior.
 var globalDefaultSelectionOverride struct {
@@ -271,14 +252,10 @@ type TestFataler interface {
 // The first argument is optional. If non-nil; it is used for logging
 // server configuration messages.
 func StartServerOnlyE(t TestLogger, params base.TestServerArgs) (TestServerInterface, error) {
-	ctx := context.Background()
 	allowAdditionalTenants := params.DefaultTestTenant.AllowAdditionalTenants()
-
 	// Update the flags with the actual decision as to whether we should
 	// start the service for a default test tenant.
 	params.DefaultTestTenant = ShouldStartDefaultTestTenant(t, params.DefaultTestTenant)
-
-	TryEnableDRPCSetting(ctx, t, &params)
 
 	s, err := NewServer(params)
 	if err != nil {
@@ -291,6 +268,8 @@ func StartServerOnlyE(t TestLogger, params base.TestServerArgs) (TestServerInter
 			w.loggerFn = t.Logf
 		}
 	}
+
+	ctx := context.Background()
 
 	if err := s.Start(ctx); err != nil {
 		return nil, err
@@ -479,7 +458,7 @@ func GetJSONProtoWithAdminOption(
 	}
 	u := ts.AdminURL()
 	fullURL := u.WithPath(path).String()
-	log.Dev.Infof(context.Background(), "test retrieving protobuf over HTTP: %s", fullURL)
+	log.Infof(context.Background(), "test retrieving protobuf over HTTP: %s", fullURL)
 	return httputil.GetJSON(httpClient, fullURL, response)
 }
 
@@ -499,8 +478,8 @@ func GetJSONProtoWithAdminAndTimeoutOption(
 	httpClient.Timeout += additionalTimeout
 	u := ts.AdminURL()
 	fullURL := u.WithPath(path).String()
-	log.Dev.Infof(context.Background(), "test retrieving protobuf over HTTP: %s", fullURL)
-	log.Dev.Infof(context.Background(), "set HTTP client timeout to: %s", httpClient.Timeout)
+	log.Infof(context.Background(), "test retrieving protobuf over HTTP: %s", fullURL)
+	log.Infof(context.Background(), "set HTTP client timeout to: %s", httpClient.Timeout)
 	return httputil.GetJSON(httpClient, fullURL, response)
 }
 
@@ -523,7 +502,7 @@ func PostJSONProtoWithAdminOption(
 		return err
 	}
 	fullURL := ts.AdminURL().WithPath(path).String()
-	log.Dev.Infof(context.Background(), "test retrieving protobuf over HTTP: %s", fullURL)
+	log.Infof(context.Background(), "test retrieving protobuf over HTTP: %s", fullURL)
 	return httputil.PostJSON(httpClient, fullURL, request, response)
 }
 
@@ -539,30 +518,4 @@ func WaitForTenantCapabilities(
 	if err != nil {
 		t.Fatal(err)
 	}
-}
-
-// TryEnableDRPCSetting determines whether to enable the DRPC cluster setting
-// based on the `TestServerArgs.DefaultDRPCOption` and updates the
-// `TestServerArgs.Settings` based on that.
-func TryEnableDRPCSetting(ctx context.Context, t TestLogger, args *base.TestServerArgs) {
-	option := args.DefaultDRPCOption
-	if option == base.TestDRPCDisabled && globalDefaultDRPCOptionOverride.isSet {
-		option = globalDefaultDRPCOptionOverride.value
-	}
-	enableDRPC := false
-	switch option {
-	case base.TestDRPCEnabled:
-		enableDRPC = true
-	case base.TestDRPCEnabledRandomly:
-		rng, _ := randutil.NewTestRand()
-		enableDRPC = rng.Intn(2) == 0
-	}
-	if !enableDRPC {
-		return
-	}
-
-	if args.Settings == nil {
-		args.Settings = cluster.MakeClusterSettings()
-	}
-	rpc.ExperimentalDRPCEnabled.Override(ctx, &args.Settings.SV, true)
 }

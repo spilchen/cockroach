@@ -223,10 +223,9 @@ func makeAzureStorage(
 	options := args.ExternalStorageOptions()
 	t, err := cloud.MakeHTTPClient(args.Settings, args.MetricsRecorder,
 		cloud.HTTPClientConfig{
-			Bucket:         dest.AzureConfig.Container,
-			Client:         options.ClientName,
-			Cloud:          "azure",
-			HttpMiddleware: args.HttpMiddleware,
+			Bucket: dest.AzureConfig.Container,
+			Client: options.ClientName,
+			Cloud:  "azure",
 		})
 	if err != nil {
 		return nil, errors.Wrap(err, "azure: unable to create transport")

@@ -185,7 +185,7 @@ func maybeStartCompactionJob(
 		return scheduledJob.Update(ctx, backupSchedule)
 	})
 	if err == nil {
-		log.Dev.Infof(ctx, "compacting backups from %s to %s", startTS, endTS)
+		log.Infof(ctx, "compacting backups from %s to %s", startTS, endTS)
 	}
 	return jobID, err
 }
@@ -420,7 +420,7 @@ func (b *backupResumer) ResumeCompaction(
 			return jobs.MarkAsRetryJobError(errors.Wrapf(err, "job encountered retryable error on draining node"))
 		}
 
-		log.Dev.Warningf(ctx, "encountered retryable error: %+v", err)
+		log.Warningf(ctx, "encountered retryable error: %+v", err)
 
 		// Reload the backup manifest to pick up any spans we may have completed on
 		// previous attempts.
@@ -736,7 +736,7 @@ func getBackupChain(
 	}
 	defer func() {
 		if err := baseCleanup(); err != nil {
-			log.Dev.Warningf(ctx, "failed to cleanup base backup stores: %+v", err)
+			log.Warningf(ctx, "failed to cleanup base backup stores: %+v", err)
 		}
 	}()
 	incStores, incCleanup, err := backupdest.MakeBackupDestinationStores(
@@ -747,7 +747,7 @@ func getBackupChain(
 	}
 	defer func() {
 		if err := incCleanup(); err != nil {
-			log.Dev.Warningf(ctx, "failed to cleanup incremental backup stores: %+v", err)
+			log.Warningf(ctx, "failed to cleanup incremental backup stores: %+v", err)
 		}
 	}()
 	baseEncryptionInfo := encryptionOpts
@@ -791,7 +791,7 @@ func concludeBackupCompaction(
 	ctx context.Context,
 	execCtx sql.JobExecContext,
 	store cloud.ExternalStorage,
-	details jobspb.BackupDetails,
+	encryption *jobspb.BackupEncryptionOptions,
 	kmsEnv cloud.KMSEnv,
 	backupManifest *backuppb.BackupManifest,
 ) error {
@@ -799,33 +799,18 @@ func concludeBackupCompaction(
 	backupManifest.ID = backupID
 
 	if err := backupinfo.WriteBackupManifest(ctx, store, backupbase.BackupManifestName,
-		details.EncryptionOptions, kmsEnv, backupManifest); err != nil {
+		encryption, kmsEnv, backupManifest); err != nil {
 		return err
 	}
 	if backupinfo.WriteMetadataWithExternalSSTsEnabled.Get(&execCtx.ExecCfg().Settings.SV) {
-		if err := backupinfo.WriteMetadataWithExternalSSTs(ctx, store, details.EncryptionOptions,
+		if err := backupinfo.WriteMetadataWithExternalSSTs(ctx, store, encryption,
 			kmsEnv, backupManifest); err != nil {
 			return err
 		}
 	}
 
 	statsTable := getTableStatsForBackup(ctx, execCtx.ExecCfg().InternalDB.Executor(), backupManifest.Descriptors)
-	if err := backupinfo.WriteTableStatistics(
-		ctx, store, details.EncryptionOptions, kmsEnv, &statsTable,
-	); err != nil {
-		return errors.Wrapf(err, "writing table statistics")
-	}
-
-	return errors.Wrapf(
-		backupdest.WriteBackupIndexMetadata(
-			ctx,
-			execCtx.ExecCfg(),
-			execCtx.User(),
-			execCtx.ExecCfg().DistSQLSrv.ExternalStorageFromURI,
-			details,
-		),
-		"writing backup index metadata",
-	)
+	return backupinfo.WriteTableStatistics(ctx, store, encryption, kmsEnv, &statsTable)
 }
 
 // processProgress processes progress updates from the bulk processor for a backup and updates
@@ -844,7 +829,7 @@ func processProgress(
 	for progress := range progCh {
 		var progDetails backuppb.BackupManifest_Progress
 		if err := types.UnmarshalAny(&progress.ProgressDetails, &progDetails); err != nil {
-			log.Dev.Errorf(ctx, "unable to unmarshal backup progress details: %+v", err)
+			log.Errorf(ctx, "unable to unmarshal backup progress details: %+v", err)
 			return err
 		}
 		for _, file := range progDetails.Files {
@@ -857,7 +842,7 @@ func processProgress(
 		if wroteCheckpoint, err := maybeWriteBackupCheckpoint(
 			ctx, execCtx, details, manifest, lastCheckpointTime, kmsEnv,
 		); err != nil {
-			log.Dev.Errorf(ctx, "unable to checkpoint compaction: %+v", err)
+			log.Errorf(ctx, "unable to checkpoint compaction: %+v", err)
 		} else if wroteCheckpoint {
 			lastCheckpointTime = timeutil.Now()
 			if err := execCtx.ExecCfg().JobRegistry.CheckPausepoint("backup_compaction.after.write_checkpoint"); err != nil {
@@ -930,7 +915,7 @@ func doCompaction(
 	}
 
 	return concludeBackupCompaction(
-		ctx, execCtx, defaultStore, details, kmsEnv, manifest,
+		ctx, execCtx, defaultStore, details.EncryptionOptions, kmsEnv, manifest,
 	)
 }
 

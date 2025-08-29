@@ -35,7 +35,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/storage"
 	"github.com/cockroachdb/cockroach/pkg/storage/disk"
 	"github.com/cockroachdb/cockroach/pkg/storage/fs"
-	"github.com/cockroachdb/cockroach/pkg/storage/storageconfig"
+	"github.com/cockroachdb/cockroach/pkg/storage/storagepb"
 	"github.com/cockroachdb/cockroach/pkg/ts"
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/cockroach/pkg/util/cidr"
@@ -183,9 +183,6 @@ type BaseConfig struct {
 	// Only used if DisableRuntimeStatsMonitor is false.
 	CPUProfileDirName string
 
-	// ExecutionTraceDirName is the directory name for Go execution traces.
-	ExecutionTraceDirName string
-
 	// InflightTraceDirName is the directory name for job traces.
 	InflightTraceDirName string
 
@@ -227,7 +224,7 @@ type BaseConfig struct {
 
 	// StorageConfig is the configuration of storage based on the Stores,
 	// WALFailover and SharedStorage and BootstrapMount.
-	StorageConfig storageconfig.Node
+	StorageConfig storagepb.NodeConfig
 
 	EarlyBootExternalStorageAccessor *cloud.EarlyBootExternalStorageAccessor
 	// ExternalIODirConfig is used to configure external storage
@@ -312,7 +309,7 @@ func (cfg *BaseConfig) SetDefaults(
 	cfg.MaxOffset = MaxOffsetType(base.DefaultMaxClockOffset)
 	cfg.DisableMaxOffsetCheck = false
 	cfg.DefaultZoneConfig = zonepb.DefaultZoneConfig()
-	cfg.StorageConfig.WALFailover = storageconfig.WALFailover{}
+	cfg.StorageConfig.WALFailover = storagepb.WALFailover{}
 	cfg.TestingInsecureWebAccess = disableWebLogin
 	cfg.Stores = base.StoreSpecList{
 		Specs: []base.StoreSpec{storeSpec},
@@ -346,6 +343,7 @@ func (cfg *BaseConfig) InitTestingKnobs() {
 		}
 		storeKnobs := cfg.TestingKnobs.Store.(*kvserver.StoreTestingKnobs)
 		storeKnobs.GlobalMVCCRangeTombstone = true
+		storeKnobs.EvalKnobs.DisableInitPutFailOnTombstones = true
 		cfg.TestingKnobs.RangeFeed.(*rangefeed.TestingKnobs).IgnoreOnDeleteRangeError = true
 	}
 
@@ -487,9 +485,6 @@ type SQLConfig struct {
 	TenantID   roachpb.TenantID
 	TenantName roachpb.TenantName
 
-	// TenantReadOnly indicates if this tenant is read-only (PCR reader tenant).
-	TenantReadOnly bool
-
 	// If set, will to be called at server startup to obtain the tenant id and
 	// locality.
 	DelayedSetTenantID func(context.Context) (roachpb.TenantID, roachpb.Locality, error)
@@ -557,9 +552,8 @@ func MakeSQLConfig(
 	tenID roachpb.TenantID, tenName roachpb.TenantName, tempStorageCfg base.TempStorageConfig,
 ) SQLConfig {
 	sqlCfg := SQLConfig{
-		TenantID:       tenID,
-		TenantName:     tenName,
-		TenantReadOnly: false, // Default to false, will be set during tenant initialization
+		TenantID:   tenID,
+		TenantName: tenName,
 	}
 	sqlCfg.SetDefaults(tempStorageCfg)
 	return sqlCfg
@@ -675,11 +669,11 @@ func (cfg *Config) SafeFormat(sp redact.SafePrinter, _ rune) {
 // the given context.
 func (cfg *Config) Report(ctx context.Context) {
 	if memSize, err := status.GetTotalMemory(ctx); err != nil {
-		log.Dev.Infof(ctx, "unable to retrieve system total memory: %v", err)
+		log.Infof(ctx, "unable to retrieve system total memory: %v", err)
 	} else {
-		log.Dev.Infof(ctx, "system total memory: %s", humanizeutil.IBytes(memSize))
+		log.Infof(ctx, "system total memory: %s", humanizeutil.IBytes(memSize))
 	}
-	log.Dev.Infof(ctx, "server configuration:\n%s", cfg)
+	log.Infof(ctx, "server configuration:\n%s", cfg)
 }
 
 // Engines is a container of engines, allowing convenient closing.
@@ -764,10 +758,7 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 		stickyRegistry = serverKnobs.StickyVFSRegistry
 	}
 
-	storeEnvs, err := fs.InitEnvsFromStoreSpecs(ctx, cfg.Stores.Specs, fs.EnvConfig{
-		RW:      fs.ReadWrite,
-		Version: cfg.Settings.Version,
-	}, stickyRegistry, cfg.DiskWriteStats)
+	storeEnvs, err := fs.InitEnvsFromStoreSpecs(ctx, cfg.Stores.Specs, fs.ReadWrite, stickyRegistry, cfg.DiskWriteStats)
 	if err != nil {
 		return Engines{}, err
 	}
@@ -780,7 +771,7 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 
 		storageConfigOpts := []storage.ConfigOption{
 			walFailoverConfig,
-			storage.Attributes(roachpb.Attributes{Attrs: spec.Attributes}),
+			storage.Attributes(spec.Attributes),
 			storage.If(storeKnobs.SmallEngineBlocks, storage.BlockSize(1)),
 			storage.BlockConcurrencyLimitDivisor(len(cfg.Stores.Specs)),
 		}
@@ -792,7 +783,7 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 		}
 
 		if spec.InMemory {
-			var sizeInBytes = spec.Size.Bytes
+			var sizeInBytes = spec.Size.Capacity
 			if spec.Size.Percent > 0 {
 				sysMem, err := status.GetTotalMemory(ctx)
 				if err != nil {
@@ -817,7 +808,7 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 			if err != nil {
 				return Engines{}, errors.Wrap(err, "retrieving disk usage")
 			}
-			var sizeInBytes = spec.Size.Bytes
+			var sizeInBytes = spec.Size.Capacity
 			if spec.Size.Percent > 0 {
 				sizeInBytes = int64(float64(du.TotalBytes) * spec.Size.Percent / 100)
 			}
@@ -887,10 +878,10 @@ func (cfg *Config) CreateEngines(ctx context.Context) (Engines, error) {
 		fileCache.Unref()
 	}
 
-	log.Dev.Infof(ctx, "%d storage engine%s initialized",
+	log.Infof(ctx, "%d storage engine%s initialized",
 		len(engines), redact.Safe(util.Pluralize(int64(len(engines)))))
 	for _, s := range details {
-		log.Dev.Infof(ctx, "%v", s)
+		log.Infof(ctx, "%v", s)
 	}
 
 	// Clear out engines because we have deferred engines.Close().
@@ -942,7 +933,7 @@ func (cfg *Config) FilterGossipBootstrapAddresses(ctx context.Context) []util.Un
 	for _, addr := range cfg.GossipBootstrapAddresses {
 		if addr.String() == advert.String() || addr.String() == listen.String() {
 			if log.V(1) {
-				log.Dev.Infof(ctx, "skipping -join address %q, because a node cannot join itself", addr)
+				log.Infof(ctx, "skipping -join address %q, because a node cannot join itself", addr)
 			}
 		} else {
 			filtered = append(filtered, addr)
@@ -950,7 +941,7 @@ func (cfg *Config) FilterGossipBootstrapAddresses(ctx context.Context) []util.Un
 		}
 	}
 	if log.V(1) {
-		log.Dev.Infof(ctx, "initial addresses: %v", addrs)
+		log.Infof(ctx, "initial addresses: %v", addrs)
 	}
 	return filtered
 }

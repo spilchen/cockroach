@@ -107,7 +107,6 @@ const (
 	TxnExecInsightsTableName               SystemTableName = "transaction_execution_insights"
 	TableMetadata                          SystemTableName = "table_metadata"
 	PreparedTransactionsTableName          SystemTableName = "prepared_transactions"
-	InspectErrorsTableName                 SystemTableName = "inspect_errors"
 )
 
 // Oid for virtual database and table.
@@ -140,7 +139,6 @@ const (
 	CrdbInternalCreateProcedureStmtsTableID
 	CrdbInternalCreateSchemaStmtsTableID
 	CrdbInternalCreateStmtsTableID
-	CrdbInternalCreateTriggerStmtsTableID
 	CrdbInternalCreateTypeStmtsTableID
 	CrdbInternalDatabasesTableID
 	CrdbInternalFeatureUsageID
@@ -207,9 +205,9 @@ const (
 	CrdbInternalShowTenantCapabilitiesCacheTableID
 	CrdbInternalInheritedRoleMembersTableID
 	CrdbInternalKVSystemPrivilegesViewID
-	CrdbInternalKVFlowControllerID // obsolete
+	CrdbInternalKVFlowControllerID
 	CrdbInternalKVFlowControllerIDV2
-	CrdbInternalKVFlowHandlesID // obsolete
+	CrdbInternalKVFlowHandlesID
 	CrdbInternalKVFlowHandlesIDV2
 	CrdbInternalKVFlowTokenDeductions
 	CrdbInternalKVFlowTokenDeductionsV2

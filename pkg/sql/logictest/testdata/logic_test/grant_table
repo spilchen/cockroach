@@ -161,12 +161,6 @@ test           pg_catalog          bytes                                  type  
 test           pg_catalog          bytes[]                                type         admin    ALL             false
 test           pg_catalog          bytes[]                                type         public   USAGE           false
 test           pg_catalog          bytes[]                                type         root     ALL             false
-test           pg_catalog          citext                                 type         admin    ALL             false
-test           pg_catalog          citext                                 type         public   USAGE           false
-test           pg_catalog          citext                                 type         root     ALL             false
-test           pg_catalog          citext[]                               type         admin    ALL             false
-test           pg_catalog          citext[]                               type         public   USAGE           false
-test           pg_catalog          citext[]                               type         root     ALL             false
 test           pg_catalog          date                                   type         admin    ALL             false
 test           pg_catalog          date                                   type         public   USAGE           false
 test           pg_catalog          date                                   type         root     ALL             false
@@ -251,12 +245,6 @@ test           pg_catalog          jsonpath                               type  
 test           pg_catalog          jsonpath[]                             type         admin    ALL             false
 test           pg_catalog          jsonpath[]                             type         public   USAGE           false
 test           pg_catalog          jsonpath[]                             type         root     ALL             false
-test           pg_catalog          ltree                                  type         admin    ALL             false
-test           pg_catalog          ltree                                  type         public   USAGE           false
-test           pg_catalog          ltree                                  type         root     ALL             false
-test           pg_catalog          ltree[]                                type         admin    ALL             false
-test           pg_catalog          ltree[]                                type         public   USAGE           false
-test           pg_catalog          ltree[]                                type         root     ALL             false
 test           pg_catalog          name                                   type         admin    ALL             false
 test           pg_catalog          name                                   type         public   USAGE           false
 test           pg_catalog          name                                   type         root     ALL             false
@@ -578,10 +566,6 @@ test           pg_catalog   bytes           type         admin    ALL           
 test           pg_catalog   bytes           type         root     ALL             false
 test           pg_catalog   bytes[]         type         admin    ALL             false
 test           pg_catalog   bytes[]         type         root     ALL             false
-test           pg_catalog   citext          type         admin    ALL             false
-test           pg_catalog   citext          type         root     ALL             false
-test           pg_catalog   citext[]        type         admin    ALL             false
-test           pg_catalog   citext[]        type         root     ALL             false
 test           pg_catalog   date            type         admin    ALL             false
 test           pg_catalog   date            type         root     ALL             false
 test           pg_catalog   date[]          type         admin    ALL             false
@@ -638,10 +622,6 @@ test           pg_catalog   jsonpath        type         admin    ALL           
 test           pg_catalog   jsonpath        type         root     ALL             false
 test           pg_catalog   jsonpath[]      type         admin    ALL             false
 test           pg_catalog   jsonpath[]      type         root     ALL             false
-test           pg_catalog   ltree           type         admin    ALL             false
-test           pg_catalog   ltree           type         root     ALL             false
-test           pg_catalog   ltree[]         type         admin    ALL             false
-test           pg_catalog   ltree[]         type         root     ALL             false
 test           pg_catalog   name            type         admin    ALL             false
 test           pg_catalog   name            type         root     ALL             false
 test           pg_catalog   name[]          type         admin    ALL             false
@@ -838,10 +818,6 @@ a              pg_catalog   bytes           type         admin    ALL           
 a              pg_catalog   bytes           type         root     ALL             false
 a              pg_catalog   bytes[]         type         admin    ALL             false
 a              pg_catalog   bytes[]         type         root     ALL             false
-a              pg_catalog   citext          type         admin    ALL             false
-a              pg_catalog   citext          type         root     ALL             false
-a              pg_catalog   citext[]        type         admin    ALL             false
-a              pg_catalog   citext[]        type         root     ALL             false
 a              pg_catalog   date            type         admin    ALL             false
 a              pg_catalog   date            type         root     ALL             false
 a              pg_catalog   date[]          type         admin    ALL             false
@@ -898,10 +874,6 @@ a              pg_catalog   jsonpath        type         admin    ALL           
 a              pg_catalog   jsonpath        type         root     ALL             false
 a              pg_catalog   jsonpath[]      type         admin    ALL             false
 a              pg_catalog   jsonpath[]      type         root     ALL             false
-a              pg_catalog   ltree           type         admin    ALL             false
-a              pg_catalog   ltree           type         root     ALL             false
-a              pg_catalog   ltree[]         type         admin    ALL             false
-a              pg_catalog   ltree[]         type         root     ALL             false
 a              pg_catalog   name            type         admin    ALL             false
 a              pg_catalog   name            type         root     ALL             false
 a              pg_catalog   name[]          type         admin    ALL             false
@@ -1036,10 +1008,6 @@ defaultdb      pg_catalog   bytes           type         admin    ALL           
 defaultdb      pg_catalog   bytes           type         root     ALL             false
 defaultdb      pg_catalog   bytes[]         type         admin    ALL             false
 defaultdb      pg_catalog   bytes[]         type         root     ALL             false
-defaultdb      pg_catalog   citext          type         admin    ALL             false
-defaultdb      pg_catalog   citext          type         root     ALL             false
-defaultdb      pg_catalog   citext[]        type         admin    ALL             false
-defaultdb      pg_catalog   citext[]        type         root     ALL             false
 defaultdb      pg_catalog   date            type         admin    ALL             false
 defaultdb      pg_catalog   date            type         root     ALL             false
 defaultdb      pg_catalog   date[]          type         admin    ALL             false
@@ -1096,10 +1064,6 @@ defaultdb      pg_catalog   jsonpath        type         admin    ALL           
 defaultdb      pg_catalog   jsonpath        type         root     ALL             false
 defaultdb      pg_catalog   jsonpath[]      type         admin    ALL             false
 defaultdb      pg_catalog   jsonpath[]      type         root     ALL             false
-defaultdb      pg_catalog   ltree           type         admin    ALL             false
-defaultdb      pg_catalog   ltree           type         root     ALL             false
-defaultdb      pg_catalog   ltree[]         type         admin    ALL             false
-defaultdb      pg_catalog   ltree[]         type         root     ALL             false
 defaultdb      pg_catalog   name            type         admin    ALL             false
 defaultdb      pg_catalog   name            type         root     ALL             false
 defaultdb      pg_catalog   name[]          type         admin    ALL             false
@@ -1234,10 +1198,6 @@ postgres       pg_catalog   bytes           type         admin    ALL           
 postgres       pg_catalog   bytes           type         root     ALL             false
 postgres       pg_catalog   bytes[]         type         admin    ALL             false
 postgres       pg_catalog   bytes[]         type         root     ALL             false
-postgres       pg_catalog   citext          type         admin    ALL             false
-postgres       pg_catalog   citext          type         root     ALL             false
-postgres       pg_catalog   citext[]        type         admin    ALL             false
-postgres       pg_catalog   citext[]        type         root     ALL             false
 postgres       pg_catalog   date            type         admin    ALL             false
 postgres       pg_catalog   date            type         root     ALL             false
 postgres       pg_catalog   date[]          type         admin    ALL             false
@@ -1294,10 +1254,6 @@ postgres       pg_catalog   jsonpath        type         admin    ALL           
 postgres       pg_catalog   jsonpath        type         root     ALL             false
 postgres       pg_catalog   jsonpath[]      type         admin    ALL             false
 postgres       pg_catalog   jsonpath[]      type         root     ALL             false
-postgres       pg_catalog   ltree           type         admin    ALL             false
-postgres       pg_catalog   ltree           type         root     ALL             false
-postgres       pg_catalog   ltree[]         type         admin    ALL             false
-postgres       pg_catalog   ltree[]         type         root     ALL             false
 postgres       pg_catalog   name            type         admin    ALL             false
 postgres       pg_catalog   name            type         root     ALL             false
 postgres       pg_catalog   name[]          type         admin    ALL             false
@@ -1440,10 +1396,6 @@ test           pg_catalog   bytes           type         admin    ALL           
 test           pg_catalog   bytes           type         root     ALL             false
 test           pg_catalog   bytes[]         type         admin    ALL             false
 test           pg_catalog   bytes[]         type         root     ALL             false
-test           pg_catalog   citext          type         admin    ALL             false
-test           pg_catalog   citext          type         root     ALL             false
-test           pg_catalog   citext[]        type         admin    ALL             false
-test           pg_catalog   citext[]        type         root     ALL             false
 test           pg_catalog   date            type         admin    ALL             false
 test           pg_catalog   date            type         root     ALL             false
 test           pg_catalog   date[]          type         admin    ALL             false
@@ -1500,10 +1452,6 @@ test           pg_catalog   jsonpath        type         admin    ALL           
 test           pg_catalog   jsonpath        type         root     ALL             false
 test           pg_catalog   jsonpath[]      type         admin    ALL             false
 test           pg_catalog   jsonpath[]      type         root     ALL             false
-test           pg_catalog   ltree           type         admin    ALL             false
-test           pg_catalog   ltree           type         root     ALL             false
-test           pg_catalog   ltree[]         type         admin    ALL             false
-test           pg_catalog   ltree[]         type         root     ALL             false
 test           pg_catalog   name            type         admin    ALL             false
 test           pg_catalog   name            type         root     ALL             false
 test           pg_catalog   name[]          type         admin    ALL             false
@@ -1671,7 +1619,6 @@ a  public  t  readwrite  BACKUP             false
 a  public  t  readwrite  CHANGEFEED         false
 a  public  t  readwrite  CREATE             false
 a  public  t  readwrite  DROP               false
-a  public  t  readwrite  INSPECT            false
 a  public  t  readwrite  REPLICATIONDEST    false
 a  public  t  readwrite  REPLICATIONSOURCE  false
 a  public  t  readwrite  SELECT             false
@@ -1683,7 +1630,6 @@ a  public  t  test-user  BACKUP             false
 a  public  t  test-user  CHANGEFEED         false
 a  public  t  test-user  CREATE             false
 a  public  t  test-user  DROP               false
-a  public  t  test-user  INSPECT            false
 a  public  t  test-user  REPLICATIONDEST    false
 a  public  t  test-user  REPLICATIONSOURCE  false
 a  public  t  test-user  SELECT             false
@@ -1698,7 +1644,6 @@ a  public  t  readwrite  BACKUP             false
 a  public  t  readwrite  CHANGEFEED         false
 a  public  t  readwrite  CREATE             false
 a  public  t  readwrite  DROP               false
-a  public  t  readwrite  INSPECT            false
 a  public  t  readwrite  REPLICATIONDEST    false
 a  public  t  readwrite  REPLICATIONSOURCE  false
 a  public  t  readwrite  SELECT             false
@@ -1709,7 +1654,6 @@ a  public  t  test-user  BACKUP             false
 a  public  t  test-user  CHANGEFEED         false
 a  public  t  test-user  CREATE             false
 a  public  t  test-user  DROP               false
-a  public  t  test-user  INSPECT            false
 a  public  t  test-user  REPLICATIONDEST    false
 a  public  t  test-user  REPLICATIONSOURCE  false
 a  public  t  test-user  SELECT             false
@@ -1728,7 +1672,6 @@ a  public  t  readwrite  BACKUP             false
 a  public  t  readwrite  CHANGEFEED         false
 a  public  t  readwrite  CREATE             false
 a  public  t  readwrite  DROP               false
-a  public  t  readwrite  INSPECT            false
 a  public  t  readwrite  REPLICATIONDEST    false
 a  public  t  readwrite  REPLICATIONSOURCE  false
 a  public  t  readwrite  SELECT             false
@@ -1740,7 +1683,6 @@ a  public  t  test-user  BACKUP             false
 a  public  t  test-user  CHANGEFEED         false
 a  public  t  test-user  CREATE             false
 a  public  t  test-user  DROP               false
-a  public  t  test-user  INSPECT            false
 a  public  t  test-user  REPLICATIONDEST    false
 a  public  t  test-user  REPLICATIONSOURCE  false
 a  public  t  test-user  TRIGGER            false
@@ -1754,7 +1696,6 @@ a  public  t  readwrite  BACKUP             false
 a  public  t  readwrite  CHANGEFEED         false
 a  public  t  readwrite  CREATE             false
 a  public  t  readwrite  DROP               false
-a  public  t  readwrite  INSPECT            false
 a  public  t  readwrite  REPLICATIONDEST    false
 a  public  t  readwrite  REPLICATIONSOURCE  false
 a  public  t  readwrite  SELECT             false
@@ -1765,7 +1706,6 @@ a  public  t  test-user  BACKUP             false
 a  public  t  test-user  CHANGEFEED         false
 a  public  t  test-user  CREATE             false
 a  public  t  test-user  DROP               false
-a  public  t  test-user  INSPECT            false
 a  public  t  test-user  REPLICATIONDEST    false
 a  public  t  test-user  REPLICATIONSOURCE  false
 a  public  t  test-user  TRIGGER            false
@@ -1832,7 +1772,6 @@ a  public  v  readwrite  BACKUP             false
 a  public  v  readwrite  CHANGEFEED         false
 a  public  v  readwrite  CREATE             false
 a  public  v  readwrite  DROP               false
-a  public  v  readwrite  INSPECT            false
 a  public  v  readwrite  REPLICATIONDEST    false
 a  public  v  readwrite  REPLICATIONSOURCE  false
 a  public  v  readwrite  SELECT             false
@@ -1844,7 +1783,6 @@ a  public  v  test-user  BACKUP             false
 a  public  v  test-user  CHANGEFEED         false
 a  public  v  test-user  CREATE             false
 a  public  v  test-user  DROP               false
-a  public  v  test-user  INSPECT            false
 a  public  v  test-user  REPLICATIONDEST    false
 a  public  v  test-user  REPLICATIONSOURCE  false
 a  public  v  test-user  SELECT             false
@@ -1859,7 +1797,6 @@ a  public  v  readwrite  BACKUP             false
 a  public  v  readwrite  CHANGEFEED         false
 a  public  v  readwrite  CREATE             false
 a  public  v  readwrite  DROP               false
-a  public  v  readwrite  INSPECT            false
 a  public  v  readwrite  REPLICATIONDEST    false
 a  public  v  readwrite  REPLICATIONSOURCE  false
 a  public  v  readwrite  SELECT             false
@@ -1870,7 +1807,6 @@ a  public  v  test-user  BACKUP             false
 a  public  v  test-user  CHANGEFEED         false
 a  public  v  test-user  CREATE             false
 a  public  v  test-user  DROP               false
-a  public  v  test-user  INSPECT            false
 a  public  v  test-user  REPLICATIONDEST    false
 a  public  v  test-user  REPLICATIONSOURCE  false
 a  public  v  test-user  SELECT             false
@@ -1889,7 +1825,6 @@ a  public  v  readwrite  BACKUP             false
 a  public  v  readwrite  CHANGEFEED         false
 a  public  v  readwrite  CREATE             false
 a  public  v  readwrite  DROP               false
-a  public  v  readwrite  INSPECT            false
 a  public  v  readwrite  REPLICATIONDEST    false
 a  public  v  readwrite  REPLICATIONSOURCE  false
 a  public  v  readwrite  SELECT             false
@@ -1901,7 +1836,6 @@ a  public  v  test-user  BACKUP             false
 a  public  v  test-user  CHANGEFEED         false
 a  public  v  test-user  CREATE             false
 a  public  v  test-user  DROP               false
-a  public  v  test-user  INSPECT            false
 a  public  v  test-user  REPLICATIONDEST    false
 a  public  v  test-user  REPLICATIONSOURCE  false
 a  public  v  test-user  TRIGGER            false
@@ -1915,7 +1849,6 @@ a  public  v  readwrite  BACKUP             false
 a  public  v  readwrite  CHANGEFEED         false
 a  public  v  readwrite  CREATE             false
 a  public  v  readwrite  DROP               false
-a  public  v  readwrite  INSPECT            false
 a  public  v  readwrite  REPLICATIONDEST    false
 a  public  v  readwrite  REPLICATIONSOURCE  false
 a  public  v  readwrite  SELECT             false
@@ -1926,7 +1859,6 @@ a  public  v  test-user  BACKUP             false
 a  public  v  test-user  CHANGEFEED         false
 a  public  v  test-user  CREATE             false
 a  public  v  test-user  DROP               false
-a  public  v  test-user  INSPECT            false
 a  public  v  test-user  REPLICATIONDEST    false
 a  public  v  test-user  REPLICATIONSOURCE  false
 a  public  v  test-user  TRIGGER            false
@@ -1943,7 +1875,6 @@ a  public  v     table     readwrite  BACKUP             false
 a  public  v     table     readwrite  CHANGEFEED         false
 a  public  v     table     readwrite  CREATE             false
 a  public  v     table     readwrite  DROP               false
-a  public  v     table     readwrite  INSPECT            false
 a  public  v     table     readwrite  REPLICATIONDEST    false
 a  public  v     table     readwrite  REPLICATIONSOURCE  false
 a  public  v     table     readwrite  SELECT             false
@@ -1954,7 +1885,6 @@ a  public  v     table     test-user  BACKUP             false
 a  public  v     table     test-user  CHANGEFEED         false
 a  public  v     table     test-user  CREATE             false
 a  public  v     table     test-user  DROP               false
-a  public  v     table     test-user  INSPECT            false
 a  public  v     table     test-user  REPLICATIONDEST    false
 a  public  v     table     test-user  REPLICATIONSOURCE  false
 a  public  v     table     test-user  TRIGGER            false
