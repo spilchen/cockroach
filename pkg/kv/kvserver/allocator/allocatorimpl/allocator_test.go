@@ -480,68 +480,60 @@ func mockStorePool(
 	decommissionedStoreIDs []roachpb.StoreID,
 	suspectedStoreIDs []roachpb.StoreID,
 ) {
+	storePool.DetailsMu.Lock()
+	defer storePool.DetailsMu.Unlock()
+
 	liveNodeSet := map[roachpb.NodeID]livenesspb.NodeLivenessStatus{}
+	storePool.DetailsMu.StoreDetails = map[roachpb.StoreID]*storepool.StoreDetail{}
 	for _, storeID := range aliveStoreIDs {
 		liveNodeSet[roachpb.NodeID(storeID)] = livenesspb.NodeLivenessStatus_LIVE
-		detail := storePool.GetStoreDetail(storeID)
-		detail.Lock()
+		detail := storePool.GetStoreDetailLocked(storeID)
 		detail.Desc = &roachpb.StoreDescriptor{
 			StoreID: storeID,
 			Node:    roachpb.NodeDescriptor{NodeID: roachpb.NodeID(storeID)},
 		}
-		detail.Unlock()
 	}
 	for _, storeID := range unavailableStoreIDs {
 		liveNodeSet[roachpb.NodeID(storeID)] = livenesspb.NodeLivenessStatus_UNAVAILABLE
-		detail := storePool.GetStoreDetail(storeID)
-		detail.Lock()
+		detail := storePool.GetStoreDetailLocked(storeID)
 		detail.Desc = &roachpb.StoreDescriptor{
 			StoreID: storeID,
 			Node:    roachpb.NodeDescriptor{NodeID: roachpb.NodeID(storeID)},
 		}
-		detail.Unlock()
 	}
 	for _, storeID := range deadStoreIDs {
 		liveNodeSet[roachpb.NodeID(storeID)] = livenesspb.NodeLivenessStatus_DEAD
-		detail := storePool.GetStoreDetail(storeID)
-		detail.Lock()
+		detail := storePool.GetStoreDetailLocked(storeID)
 		detail.Desc = &roachpb.StoreDescriptor{
 			StoreID: storeID,
 			Node:    roachpb.NodeDescriptor{NodeID: roachpb.NodeID(storeID)},
 		}
-		detail.Unlock()
 	}
 	for _, storeID := range decommissioningStoreIDs {
 		liveNodeSet[roachpb.NodeID(storeID)] = livenesspb.NodeLivenessStatus_DECOMMISSIONING
-		detail := storePool.GetStoreDetail(storeID)
-		detail.Lock()
+		detail := storePool.GetStoreDetailLocked(storeID)
 		detail.Desc = &roachpb.StoreDescriptor{
 			StoreID: storeID,
 			Node:    roachpb.NodeDescriptor{NodeID: roachpb.NodeID(storeID)},
 		}
-		detail.Unlock()
 	}
 	for _, storeID := range decommissionedStoreIDs {
 		liveNodeSet[roachpb.NodeID(storeID)] = livenesspb.NodeLivenessStatus_DECOMMISSIONED
-		detail := storePool.GetStoreDetail(storeID)
-		detail.Lock()
+		detail := storePool.GetStoreDetailLocked(storeID)
 		detail.Desc = &roachpb.StoreDescriptor{
 			StoreID: storeID,
 			Node:    roachpb.NodeDescriptor{NodeID: roachpb.NodeID(storeID)},
 		}
-		detail.Unlock()
 	}
 
 	for _, storeID := range suspectedStoreIDs {
 		liveNodeSet[roachpb.NodeID(storeID)] = livenesspb.NodeLivenessStatus_LIVE
-		detail := storePool.GetStoreDetail(storeID)
-		detail.Lock()
+		detail := storePool.GetStoreDetailLocked(storeID)
 		detail.LastUnavailable = storePool.Clock().Now()
 		detail.Desc = &roachpb.StoreDescriptor{
 			StoreID: storeID,
 			Node:    roachpb.NodeDescriptor{NodeID: roachpb.NodeID(storeID)},
 		}
-		detail.Unlock()
 	}
 
 	// Set the node liveness function using the set we constructed.
@@ -1388,20 +1380,16 @@ func TestAllocatorRebalanceDeadNodes(t *testing.T) {
 	}
 
 	// Initialize 8 stores: where store 6 is the target for rebalancing.
-	updateDescCapacity := func(storeID roachpb.StoreID, capacity roachpb.StoreCapacity) {
-		sd := sp.GetStoreDetail(storeID)
-		sd.Lock()
-		sd.Desc.Capacity = capacity
-		sd.Unlock()
-	}
-	updateDescCapacity(1, ranges(100))
-	updateDescCapacity(2, ranges(100))
-	updateDescCapacity(3, ranges(100))
-	updateDescCapacity(4, ranges(100))
-	updateDescCapacity(5, ranges(100))
-	updateDescCapacity(6, ranges(0))
-	updateDescCapacity(7, ranges(100))
-	updateDescCapacity(8, ranges(100))
+	sp.DetailsMu.Lock()
+	sp.GetStoreDetailLocked(1).Desc.Capacity = ranges(100)
+	sp.GetStoreDetailLocked(2).Desc.Capacity = ranges(100)
+	sp.GetStoreDetailLocked(3).Desc.Capacity = ranges(100)
+	sp.GetStoreDetailLocked(4).Desc.Capacity = ranges(100)
+	sp.GetStoreDetailLocked(5).Desc.Capacity = ranges(100)
+	sp.GetStoreDetailLocked(6).Desc.Capacity = ranges(0)
+	sp.GetStoreDetailLocked(7).Desc.Capacity = ranges(100)
+	sp.GetStoreDetailLocked(8).Desc.Capacity = ranges(100)
+	sp.DetailsMu.Unlock()
 
 	// Each test case should describe a repair situation which has a lower
 	// priority than the previous test case.
@@ -1940,7 +1928,7 @@ func (r *mockRepl) RaftStatus() *raft.Status {
 	return raftStatus
 }
 
-func (r *mockRepl) GetCompactedIndex() kvpb.RaftIndex {
+func (r *mockRepl) GetFirstIndex() kvpb.RaftIndex {
 	return 0
 }
 
@@ -2852,7 +2840,7 @@ func TestAllocatorRebalanceDifferentLocalitySizes(t *testing.T) {
 	}
 
 	for i, tc := range testCases2 {
-		log.Dev.Infof(ctx, "case #%d", i)
+		log.Infof(ctx, "case #%d", i)
 		var rangeUsageInfo allocator.RangeUsageInfo
 		result, _, details, ok := a.RebalanceVoter(
 			ctx,
@@ -8764,13 +8752,13 @@ func (ts *testStore) rebalance(ots *testStore, bytes int64, qps float64, do Disk
 	// almost out of disk. (In a real allocator this is, for example, in
 	// rankedCandidateListFor{Allocation,Rebalancing}).
 	if !do.maxCapacityCheck(ots.StoreDescriptor) {
-		log.Dev.Infof(
+		log.Infof(
 			context.Background(),
 			"s%d too full to accept snapshot from s%d: %v", ots.StoreID, ts.StoreID, ots.Capacity,
 		)
 		return
 	}
-	log.Dev.Infof(context.Background(), "s%d accepting snapshot from s%d", ots.StoreID, ts.StoreID)
+	log.Infof(context.Background(), "s%d accepting snapshot from s%d", ots.StoreID, ts.StoreID)
 	ts.Capacity.RangeCount--
 	ts.Capacity.QueriesPerSecond -= qps
 	if ts.immediateCompaction {
@@ -8829,7 +8817,7 @@ func TestAllocatorFullDisks(t *testing.T) {
 
 	var wg sync.WaitGroup
 	g.RegisterCallback(gossip.MakePrefixPattern(gossip.KeyStoreDescPrefix),
-		func(_ string, _ roachpb.Value, _ int64) { wg.Done() },
+		func(_ string, _ roachpb.Value) { wg.Done() },
 		// Redundant callbacks are required by this test.
 		gossip.Redundant)
 
@@ -8909,7 +8897,7 @@ func TestAllocatorFullDisks(t *testing.T) {
 					)
 					if ok {
 						if log.V(1) {
-							log.Dev.Infof(ctx, "rebalancing to %v; details: %s", target, details)
+							log.Infof(ctx, "rebalancing to %v; details: %s", target, details)
 						}
 						testStores[k].rebalance(&testStores[int(target.StoreID)], rangeSize, 0 /* qps */, do)
 					}
@@ -8955,7 +8943,7 @@ func Example_rangeCountRebalancing() {
 			alloc.ScorerOptions(ctx),
 		)
 		if ok {
-			log.Dev.Infof(ctx, "rebalancing to %v; details: %s", target, details)
+			log.Infof(ctx, "rebalancing to %v; details: %s", target, details)
 			ts.rebalance(
 				&testStores[int(target.StoreID)],
 				alloc.randGen.Int63n(1<<20),
@@ -9070,7 +9058,7 @@ func qpsBasedRebalanceFn(
 		opts,
 	)
 	if ok {
-		log.Dev.Infof(ctx, "rebalancing from %v to %v; details: %s", remove, add, details)
+		log.Infof(ctx, "rebalancing from %v to %v; details: %s", remove, add, details)
 		candidate.rebalance(&testStores[int(add.StoreID)], alloc.randGen.Int63n(1<<20), jitteredQPS, opts.DiskOptions)
 	}
 }
@@ -9284,6 +9272,10 @@ func exampleRebalancing(
 	}, nil)
 
 	var wg sync.WaitGroup
+	g.RegisterCallback(gossip.MakePrefixPattern(gossip.KeyStoreDescPrefix),
+		func(_ string, _ roachpb.Value) { wg.Done() },
+		// Redundant callbacks are required by this test.
+		gossip.Redundant)
 
 	// Initialize testStores.
 	initTestStores(
@@ -9306,12 +9298,13 @@ func exampleRebalancing(
 	const generations = 100
 	for i := 0; i < generations; i++ {
 		// First loop through test stores and add data.
+		wg.Add(len(testStores))
 		for j := 0; j < len(testStores); j++ {
 			// Add a pretend range to the testStore if there's already one.
 			if testStores[j].Capacity.RangeCount > 0 {
 				testStores[j].add(alloc.randGen.Int63n(1<<20), 0)
 			}
-			if err := g.TestingAddInfoProtoAndWaitForAllCallbacks(
+			if err := g.AddInfoProto(
 				gossip.MakeStoreDescKey(roachpb.StoreID(j)),
 				&testStores[j].StoreDescriptor,
 				0,

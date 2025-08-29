@@ -142,15 +142,14 @@ func (b *ConstraintBuilder) Init(
 
 // Build returns a Constraint that constrains a lookup join on the given index.
 // The constraint returned may be unconstrained if no constraint could be built.
-// equalityLookupCols indicates the ColumnIDs of index columns that were
-// constrained via equality conditions; this can be used to decide whether to
-// build a lookup join. `derivedFkOnFilters` is a set of extra equijoin
-// predicates, derived from a foreign key constraint, to add to the explicit ON
-// clause, but which should not be used in calculating join selectivity
-// estimates.
+// foundEqualityCols indicates whether any equality conditions were used to
+// constrain the index columns; this can be used to decide whether to build a
+// lookup join. `derivedFkOnFilters` is a set of extra equijoin predicates,
+// derived from a foreign key constraint, to add to the explicit ON clause,
+// but which should not be used in calculating join selectivity estimates.
 func (b *ConstraintBuilder) Build(
 	index cat.Index, onFilters, optionalFilters, derivedFkOnFilters memo.FiltersExpr,
-) (_ Constraint, equalityLookupCols opt.ColSet) {
+) (_ Constraint, foundEqualityCols bool) {
 	// Combine the ON and derived FK filters which can contain equality
 	// conditions.
 	if cap(b.allFilters) >= len(onFilters)+len(derivedFkOnFilters)+len(optionalFilters) {
@@ -191,7 +190,7 @@ func (b *ConstraintBuilder) Build(
 		if _, ok := b.findComputedColJoinEquality(b.table, firstIdxCol, rightEq.ToSet()); !ok {
 			if !HasJoinFilterConstants(b.ctx, b.allFilters, firstIdxCol, b.evalCtx) {
 				if _, ok := rightCmp.Find(firstIdxCol); !ok {
-					return Constraint{}, opt.ColSet{}
+					return Constraint{}, false
 				}
 			}
 		}
@@ -246,6 +245,17 @@ func (b *ConstraintBuilder) Build(
 		rightSideCols = append(rightSideCols, rightCol)
 	}
 
+	// rightEqIdenticalTypeCols is the set of columns in rightEq that have
+	// identical types to the corresponding columns in leftEq. This is used to
+	// determine if a computed column can be synthesized for a column in the
+	// index in order to allow a lookup join.
+	var rightEqIdenticalTypeCols opt.ColSet
+	for i := range rightEq {
+		if b.md.ColumnMeta(rightEq[i]).Type.Identical(b.md.ColumnMeta(leftEq[i]).Type) {
+			rightEqIdenticalTypeCols.Add(rightEq[i])
+		}
+	}
+
 	// All the lookup conditions must apply to the prefix of the index and so
 	// the projected columns created must be created in order.
 	for j := 0; j < numIndexKeyCols; j++ {
@@ -255,7 +265,7 @@ func (b *ConstraintBuilder) Build(
 			allLookupFilters = append(allLookupFilters, b.allFilters[eqFilterOrds[eqIdx]])
 			addEqualityColumns(leftEq[eqIdx], idxCol)
 			filterOrdsToExclude.Add(eqFilterOrds[eqIdx])
-			equalityLookupCols.Add(idxCol)
+			foundEqualityCols = true
 			foundLookupCols = true
 			optionalMultiValFilterSuffixLen = 0
 			continue
@@ -270,7 +280,7 @@ func (b *ConstraintBuilder) Build(
 		//
 		// NOTE: we must only consider equivalent columns with identical types,
 		// since column remapping is otherwise not valid.
-		if expr, ok := b.findComputedColJoinEquality(b.table, idxCol, rightEq.ToSet()); ok {
+		if expr, ok := b.findComputedColJoinEquality(b.table, idxCol, rightEqIdenticalTypeCols); ok {
 			colMeta := b.md.ColumnMeta(idxCol)
 			compEqCol := b.md.AddColumn(fmt.Sprintf("%s_eq", colMeta.Alias), colMeta.Type)
 
@@ -283,27 +293,12 @@ func (b *ConstraintBuilder) Build(
 
 			// Project the computed column expression, mapping all columns
 			// in rightEq to corresponding columns in leftEq.
-			var replace norm.ReplaceFunc
-			replace = func(e opt.Expr) opt.Expr {
-				if v, ok := e.(*memo.VariableExpr); ok {
-					if col, ok := b.eqColMap.Get(int(v.Col)); ok {
-						// If the column is a computed column, we need to
-						// cast it to the type of the original column so that
-						// functions which are type sensitive still return the
-						// expected results.
-						return b.f.ConstructCast(b.f.ConstructVariable(opt.ColumnID(col)), b.md.ColumnMeta(v.Col).Type)
-					} else {
-						return e
-					}
-				}
-				return b.f.Replace(e, replace)
-			}
-			projection := b.f.ConstructProjectionsItem(b.f.Replace(expr, replace).(opt.ScalarExpr), compEqCol)
+			projection := b.f.ConstructProjectionsItem(b.f.RemapCols(expr, b.eqColMap), compEqCol)
 			inputProjections = append(inputProjections, projection)
 			addEqualityColumns(compEqCol, idxCol)
 			derivedEquivCols.Add(compEqCol)
 			derivedEquivCols.Add(idxCol)
-			equalityLookupCols.Add(idxCol)
+			foundEqualityCols = true
 			foundLookupCols = true
 			optionalMultiValFilterSuffixLen = 0
 			continue
@@ -413,7 +408,7 @@ func (b *ConstraintBuilder) Build(
 	// Lookup join constraints that contain no lookup columns (e.g., a lookup
 	// expression x=1) are not useful.
 	if !foundLookupCols {
-		return Constraint{}, opt.ColSet{}
+		return Constraint{}, false
 	}
 
 	// Remove the suffix of index columns constrained to multiple values by
@@ -452,7 +447,7 @@ func (b *ConstraintBuilder) Build(
 	}
 	c.RemainingFilters = remainingFilters
 
-	return c, equalityLookupCols
+	return c, foundEqualityCols
 }
 
 // findComputedColJoinEquality returns the computed column expression of col and

@@ -27,7 +27,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
-	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/metric"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
@@ -162,15 +161,6 @@ func (a AllocatorAction) Remove() bool {
 		a == AllocatorRemoveDeadNonVoter ||
 		a == AllocatorRemoveDecommissioningVoter ||
 		a == AllocatorRemoveDecommissioningNonVoter
-}
-
-// Decommissioning indicates an action replacing or removing a decommissioning
-// replicas.
-func (a AllocatorAction) Decommissioning() bool {
-	return a == AllocatorRemoveDecommissioningVoter ||
-		a == AllocatorRemoveDecommissioningNonVoter ||
-		a == AllocatorReplaceDecommissioningVoter ||
-		a == AllocatorReplaceDecommissioningNonVoter
 }
 
 // TargetReplicaType returns that the action is for a voter or non-voter replica.
@@ -956,23 +946,8 @@ func (a *Allocator) ComputeAction(
 		return action, action.Priority()
 	}
 
-	action, priority = a.computeAction(ctx, storePool, conf, desc.Replicas().VoterDescriptors(),
+	return a.computeAction(ctx, storePool, conf, desc.Replicas().VoterDescriptors(),
 		desc.Replicas().NonVoterDescriptors())
-	// Ensure that priority is never -1. Typically, computeAction return
-	// action.Priority(), but we sometimes modify the priority for specific
-	// actions like AllocatorAddVoter, AllocatorRemoveDeadVoter, and
-	// AllocatorRemoveVoter. A priority of -1 is a special case, indicating that
-	// the caller expects the processing logic to be invoked even if there's a
-	// priority inversion. If the priority is not -1, the range might be re-queued
-	// to be processed with the correct priority.
-	if priority == -1 {
-		if buildutil.CrdbTestBuild {
-			log.Dev.Fatalf(ctx, "allocator returned -1 priority for range %s: %v", desc, action)
-		} else {
-			log.Dev.Warningf(ctx, "allocator returned -1 priority for range %s: %v", desc, action)
-		}
-	}
-	return action, priority
 }
 
 func (a *Allocator) computeAction(
@@ -2040,7 +2015,7 @@ func (a *Allocator) ValidLeaseTargets(
 	leaseRepl interface {
 		StoreID() roachpb.StoreID
 		RaftStatus() *raft.Status
-		GetCompactedIndex() kvpb.RaftIndex
+		GetFirstIndex() kvpb.RaftIndex
 		SendStreamStats(*rac2.RangeSendStreamStats)
 	},
 	opts allocator.TransferLeaseOptions,
@@ -2104,7 +2079,7 @@ func (a *Allocator) ValidLeaseTargets(
 		}
 
 		candidates = append(validSnapshotCandidates, excludeReplicasInNeedOfSnapshots(
-			ctx, status, leaseRepl.GetCompactedIndex(), candidates)...)
+			ctx, status, leaseRepl.GetFirstIndex(), candidates)...)
 		candidates = excludeReplicasInNeedOfCatchup(
 			ctx, leaseRepl.SendStreamStats, candidates)
 	}
@@ -2214,7 +2189,7 @@ func (a *Allocator) LeaseholderShouldMoveDueToPreferences(
 	leaseRepl interface {
 		StoreID() roachpb.StoreID
 		RaftStatus() *raft.Status
-		GetCompactedIndex() kvpb.RaftIndex
+		GetFirstIndex() kvpb.RaftIndex
 		SendStreamStats(*rac2.RangeSendStreamStats)
 	},
 	allExistingReplicas []roachpb.ReplicaDescriptor,
@@ -2247,7 +2222,7 @@ func (a *Allocator) LeaseholderShouldMoveDueToPreferences(
 	preferred := a.PreferredLeaseholders(storePool, conf, candidates)
 	if exclReplsInNeedOfSnapshots {
 		preferred = excludeReplicasInNeedOfSnapshots(
-			ctx, leaseRepl.RaftStatus(), leaseRepl.GetCompactedIndex(), preferred)
+			ctx, leaseRepl.RaftStatus(), leaseRepl.GetFirstIndex(), preferred)
 		preferred = excludeReplicasInNeedOfCatchup(
 			ctx, leaseRepl.SendStreamStats, preferred)
 	}
@@ -2307,7 +2282,7 @@ func (a *Allocator) TransferLeaseTarget(
 		StoreID() roachpb.StoreID
 		GetRangeID() roachpb.RangeID
 		RaftStatus() *raft.Status
-		GetCompactedIndex() kvpb.RaftIndex
+		GetFirstIndex() kvpb.RaftIndex
 		SendStreamStats(*rac2.RangeSendStreamStats)
 	},
 	usageInfo allocator.RangeUsageInfo,
@@ -2676,7 +2651,7 @@ func (a *Allocator) ShouldTransferLease(
 	leaseRepl interface {
 		StoreID() roachpb.StoreID
 		RaftStatus() *raft.Status
-		GetCompactedIndex() kvpb.RaftIndex
+		GetFirstIndex() kvpb.RaftIndex
 		SendStreamStats(*rac2.RangeSendStreamStats)
 	},
 	usageInfo allocator.RangeUsageInfo,
@@ -3058,12 +3033,12 @@ func FilterBehindReplicas(
 func excludeReplicasInNeedOfSnapshots(
 	ctx context.Context,
 	st *raft.Status,
-	compacted kvpb.RaftIndex,
+	firstIndex kvpb.RaftIndex,
 	replicas []roachpb.ReplicaDescriptor,
 ) []roachpb.ReplicaDescriptor {
 	filled := 0
 	for _, repl := range replicas {
-		snapStatus := raftutil.ReplicaMayNeedSnapshot(st, compacted, repl.ReplicaID)
+		snapStatus := raftutil.ReplicaMayNeedSnapshot(st, firstIndex, repl.ReplicaID)
 		if snapStatus != raftutil.NoSnapshotNeeded {
 			log.KvDistribution.VEventf(
 				ctx,

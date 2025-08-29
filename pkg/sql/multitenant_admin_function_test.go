@@ -20,7 +20,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
-	"github.com/cockroachdb/cockroach/pkg/multitenant/tenantcapabilitiespb"
+	"github.com/cockroachdb/cockroach/pkg/multitenant/tenantcapabilities"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/server"
 	"github.com/cockroachdb/cockroach/pkg/settings"
@@ -58,7 +58,7 @@ func createTestClusterArgs(ctx context.Context, numReplicas, numVoters int32) ba
 	zoneCfg.NumVoters = proto.Int32(numVoters)
 
 	clusterSettings := cluster.MakeTestingClusterSettings()
-	kvserverbase.LoadBasedRebalancingMode.Override(ctx, &clusterSettings.SV, kvserverbase.LBRebalancingOff)
+	kvserver.LoadBasedRebalancingMode.Override(ctx, &clusterSettings.SV, kvserver.LBRebalancingOff)
 	kvserverbase.MergeQueueEnabled.Override(ctx, &clusterSettings.SV, false)
 
 	// Set allocator intervals to scan faster to help with recovery from race
@@ -232,7 +232,7 @@ type testCase struct {
 }
 
 type capValue struct {
-	cap   tenantcapabilitiespb.ID
+	cap   tenantcapabilities.ID
 	value string
 }
 
@@ -305,7 +305,7 @@ func (tc testCase) runTest(
 		}
 		capVals = caps
 		if len(capVals) > 0 {
-			expected := map[tenantcapabilitiespb.ID]string{}
+			expected := map[tenantcapabilities.ID]string{}
 			for _, capVal := range capVals {
 				query := fmt.Sprintf("ALTER TENANT [$1] GRANT CAPABILITY %s = %s", capVal.cap.String(), capVal.value)
 				_, err := systemDB.ExecContext(ctx, query, tenantID.ToUint64())
@@ -432,7 +432,7 @@ func (te tenantExpected) validate(
 	})
 }
 
-func bcap(cap tenantcapabilitiespb.ID, val bool) capValue {
+func bcap(cap tenantcapabilities.ID, val bool) capValue {
 	return capValue{cap: cap, value: fmt.Sprint(val)}
 }
 
@@ -455,7 +455,7 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 			secondaryWithoutCapability: tenantExpected{
 				result: [][]string{{ignore, ignore, `does not have capability "can_admin_relocate_range"`}},
 			},
-			queryCapability: bcap(tenantcapabilitiespb.CanAdminRelocateRange, true),
+			queryCapability: bcap(tenantcapabilities.CanAdminRelocateRange, true),
 		},
 		{
 			desc:  "ALTER RANGE RELOCATE LEASE",
@@ -469,7 +469,7 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 			secondaryWithoutCapability: tenantExpected{
 				result: [][]string{{ignore, ignore, `does not have capability "can_admin_relocate_range"`}},
 			},
-			queryCapability: bcap(tenantcapabilitiespb.CanAdminRelocateRange, true),
+			queryCapability: bcap(tenantcapabilities.CanAdminRelocateRange, true),
 		},
 		{
 			desc:  "ALTER TABLE x EXPERIMENTAL_RELOCATE LEASE",
@@ -483,7 +483,7 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 			secondaryWithoutCapability: tenantExpected{
 				errorMessage: `client tenant does not have capability "can_admin_relocate_range"`,
 			},
-			queryCapability: bcap(tenantcapabilitiespb.CanAdminRelocateRange, true),
+			queryCapability: bcap(tenantcapabilities.CanAdminRelocateRange, true),
 		},
 		{
 			desc:  "ALTER TABLE x SPLIT AT",
@@ -495,8 +495,8 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 				errorMessage: "operation is disabled within a virtual cluster",
 			},
 			queryClusterSetting: sql.SecondaryTenantSplitAtEnabled,
-			setupCapability:     bcap(tenantcapabilitiespb.CanAdminSplit, false),
-			queryCapability:     bcap(tenantcapabilitiespb.CanAdminSplit, true),
+			setupCapability:     bcap(tenantcapabilities.CanAdminSplit, false),
+			queryCapability:     bcap(tenantcapabilities.CanAdminSplit, true),
 		},
 		{
 			desc:  "ALTER INDEX x SPLIT AT",
@@ -509,8 +509,8 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 				errorMessage: "operation is disabled within a virtual cluster",
 			},
 			queryClusterSetting: sql.SecondaryTenantSplitAtEnabled,
-			setupCapability:     bcap(tenantcapabilitiespb.CanAdminSplit, true),
-			queryCapability:     bcap(tenantcapabilitiespb.CanAdminSplit, true),
+			setupCapability:     bcap(tenantcapabilities.CanAdminSplit, true),
+			queryCapability:     bcap(tenantcapabilities.CanAdminSplit, true),
 		},
 		{
 			desc:  "ALTER TABLE x UNSPLIT AT",
@@ -526,8 +526,8 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 				errorMessage: `does not have capability "can_admin_unsplit"`,
 			},
 			setupClusterSetting: sql.SecondaryTenantSplitAtEnabled,
-			setupCapability:     bcap(tenantcapabilitiespb.CanAdminSplit, true),
-			queryCapability:     bcap(tenantcapabilitiespb.CanAdminUnsplit, true),
+			setupCapability:     bcap(tenantcapabilities.CanAdminSplit, true),
+			queryCapability:     bcap(tenantcapabilities.CanAdminUnsplit, true),
 		},
 		{
 			desc: "ALTER INDEX x UNSPLIT AT",
@@ -546,8 +546,8 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 				errorMessage: `does not have capability "can_admin_unsplit"`,
 			},
 			setupClusterSetting: sql.SecondaryTenantSplitAtEnabled,
-			setupCapability:     bcap(tenantcapabilitiespb.CanAdminSplit, true),
-			queryCapability:     bcap(tenantcapabilitiespb.CanAdminUnsplit, true),
+			setupCapability:     bcap(tenantcapabilities.CanAdminSplit, true),
+			queryCapability:     bcap(tenantcapabilities.CanAdminUnsplit, true),
 		},
 		{
 			desc:  "ALTER TABLE x UNSPLIT ALL",
@@ -563,8 +563,8 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 				errorMessage: `does not have capability "can_admin_unsplit"`,
 			},
 			setupClusterSetting: sql.SecondaryTenantSplitAtEnabled,
-			setupCapability:     bcap(tenantcapabilitiespb.CanAdminSplit, true),
-			queryCapability:     bcap(tenantcapabilitiespb.CanAdminUnsplit, true),
+			setupCapability:     bcap(tenantcapabilities.CanAdminSplit, true),
+			queryCapability:     bcap(tenantcapabilities.CanAdminUnsplit, true),
 		},
 		{
 			desc: "ALTER INDEX x UNSPLIT ALL",
@@ -583,8 +583,8 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 				errorMessage: `does not have capability "can_admin_unsplit"`,
 			},
 			setupClusterSetting: sql.SecondaryTenantSplitAtEnabled,
-			setupCapability:     bcap(tenantcapabilitiespb.CanAdminSplit, true),
-			queryCapability:     bcap(tenantcapabilitiespb.CanAdminUnsplit, true),
+			setupCapability:     bcap(tenantcapabilities.CanAdminSplit, true),
+			queryCapability:     bcap(tenantcapabilities.CanAdminUnsplit, true),
 		},
 		{
 			desc:  "ALTER TABLE x SCATTER",
@@ -599,8 +599,8 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 				errorMessage: `does not have capability "can_admin_scatter"`,
 			},
 			queryClusterSetting: sql.SecondaryTenantScatterEnabled,
-			setupCapability:     bcap(tenantcapabilitiespb.CanAdminScatter, false),
-			queryCapability:     bcap(tenantcapabilitiespb.CanAdminScatter, true),
+			setupCapability:     bcap(tenantcapabilities.CanAdminScatter, false),
+			queryCapability:     bcap(tenantcapabilities.CanAdminScatter, true),
 		},
 		{
 			desc:  "ALTER INDEX x SCATTER",
@@ -613,8 +613,8 @@ func TestMultiTenantAdminFunction(t *testing.T) {
 				errorMessage: "operation is disabled within a virtual cluster",
 			},
 			queryClusterSetting: sql.SecondaryTenantScatterEnabled,
-			setupCapability:     bcap(tenantcapabilitiespb.CanAdminScatter, true),
-			queryCapability:     bcap(tenantcapabilitiespb.CanAdminScatter, true),
+			setupCapability:     bcap(tenantcapabilities.CanAdminScatter, true),
+			queryCapability:     bcap(tenantcapabilities.CanAdminScatter, true),
 		},
 	}
 
@@ -668,8 +668,8 @@ func TestTruncateTable(t *testing.T) {
 			},
 		},
 		setupClusterSetting: sql.SecondaryTenantSplitAtEnabled,
-		setupCapability:     bcap(tenantcapabilitiespb.CanAdminSplit, true),
-		queryCapability:     bcap(tenantcapabilitiespb.CanAdminScatter, true),
+		setupCapability:     bcap(tenantcapabilities.CanAdminSplit, true),
+		queryCapability:     bcap(tenantcapabilities.CanAdminScatter, true),
 	}
 	tc.runTest(
 		t,
@@ -719,7 +719,7 @@ func TestRelocateVoters(t *testing.T) {
 			secondaryWithoutCapability: tenantExpected{
 				result: [][]string{{ignore, ignore, `does not have capability "can_admin_relocate_range"`}},
 			},
-			queryCapability: bcap(tenantcapabilitiespb.CanAdminRelocateRange, true),
+			queryCapability: bcap(tenantcapabilities.CanAdminRelocateRange, true),
 		},
 		{
 			desc:  "ALTER RANGE RELOCATE VOTERS",
@@ -733,7 +733,7 @@ func TestRelocateVoters(t *testing.T) {
 			secondaryWithoutCapability: tenantExpected{
 				result: [][]string{{ignore, ignore, `does not have capability "can_admin_relocate_range"`}},
 			},
-			queryCapability: bcap(tenantcapabilitiespb.CanAdminRelocateRange, true),
+			queryCapability: bcap(tenantcapabilities.CanAdminRelocateRange, true),
 		},
 	}
 
@@ -814,7 +814,7 @@ func TestExperimentalRelocateVoters(t *testing.T) {
 			secondaryWithoutCapability: tenantExpected{
 				errorMessage: `client tenant does not have capability "can_admin_relocate_range"`,
 			},
-			queryCapability: bcap(tenantcapabilitiespb.CanAdminRelocateRange, true),
+			queryCapability: bcap(tenantcapabilities.CanAdminRelocateRange, true),
 		},
 	}
 
@@ -894,7 +894,7 @@ func TestRelocateNonVoters(t *testing.T) {
 			secondaryWithoutCapability: tenantExpected{
 				result: [][]string{{ignore, ignore, `does not have capability "can_admin_relocate_range"`}},
 			},
-			queryCapability: bcap(tenantcapabilitiespb.CanAdminRelocateRange, true),
+			queryCapability: bcap(tenantcapabilities.CanAdminRelocateRange, true),
 		},
 		{
 			desc:  "ALTER RANGE RELOCATE NONVOTERS",
@@ -908,7 +908,7 @@ func TestRelocateNonVoters(t *testing.T) {
 			secondaryWithoutCapability: tenantExpected{
 				result: [][]string{{ignore, ignore, `does not have capability "can_admin_relocate_range"`}},
 			},
-			queryCapability: bcap(tenantcapabilitiespb.CanAdminRelocateRange, true),
+			queryCapability: bcap(tenantcapabilities.CanAdminRelocateRange, true),
 		},
 	}
 
@@ -983,7 +983,7 @@ func TestExperimentalRelocateNonVoters(t *testing.T) {
 			secondaryWithoutCapability: tenantExpected{
 				errorMessage: `client tenant does not have capability "can_admin_relocate_range"`,
 			},
-			queryCapability: bcap(tenantcapabilitiespb.CanAdminRelocateRange, true),
+			queryCapability: bcap(tenantcapabilities.CanAdminRelocateRange, true),
 		},
 	}
 
