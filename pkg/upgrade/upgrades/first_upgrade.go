@@ -8,15 +8,14 @@ package upgrades
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/kv"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catalogkeys"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/lease"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/nstree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/upgrade"
@@ -24,7 +23,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/redact"
 )
 
 // RunFirstUpgradePrecondition short-circuits FirstUpgradeFromReleasePrecondition if set to false.
@@ -79,17 +77,13 @@ func upgradeDescriptors(
 	batchSize := 100
 	// Any batch size below this will use high priority.
 	const HighPriBatchSize = 25
-	repairBatchTimeLimit := 1 * time.Minute
+	repairBatchTimeLimit := lease.LeaseDuration.Get(&d.Settings.SV)
 	currentIdx := 0
 	idsToRewrite := ids.Ordered()
 	for currentIdx <= len(idsToRewrite) {
 		descBatch := idsToRewrite[currentIdx:min(currentIdx+batchSize, len(idsToRewrite))]
 		err := timeutil.RunWithTimeout(ctx, "repair-post-deserialization", repairBatchTimeLimit, func(ctx context.Context) error {
 			return d.DB.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
-				// We explicitly specify a low retry limit because this operation is
-				// wrapped with its own retry function that will also take care of
-				// adjusting the batch size on each retry.
-				txn.KV().SetMaxAutoRetries(10)
 				if batchSize <= HighPriBatchSize {
 					if err := txn.KV().SetUserPriority(roachpb.MaxUserPriority); err != nil {
 						return err
@@ -102,18 +96,7 @@ func upgradeDescriptors(
 				b := txn.KV().NewBatch()
 				for _, mut := range muts {
 					if !mut.GetPostDeserializationChanges().HasChanges() {
-						// In the upgrade to 25.4, we do a one-time rewrite of all
-						// descriptors in order to upgrade them to use the new type
-						// serialization format.
-						// See https://github.com/cockroachdb/cockroach/issues/152629.
-						if d.Settings.Version.IsActive(ctx, clusterversion.V25_4) {
-							continue
-						}
-						// Skip the unconditional rewrite if this is a database descriptor,
-						// as those never reference types.
-						if mut.DescriptorType() == catalog.Database {
-							continue
-						}
+						continue
 					}
 					key := catalogkeys.MakeDescMetadataKey(d.Codec, mut.GetID())
 					b.CPut(key, mut.DescriptorProto(), mut.GetRawBytesInStorage())
@@ -127,7 +110,7 @@ func upgradeDescriptors(
 			if kv.IsAutoRetryLimitExhaustedError(err) ||
 				errors.HasType(err, (*timeutil.TimeoutError)(nil)) {
 				batchSize = max(batchSize/2, 1)
-				log.Dev.Infof(ctx, "reducing batch size of invalid_object repair query to %d (hipri=%t)",
+				log.Infof(ctx, "reducing batch size of invalid_object repair query to %d (hipri=%t)",
 					batchSize,
 					batchSize <= HighPriBatchSize)
 				continue
@@ -171,28 +154,16 @@ func FirstUpgradeFromReleasePrecondition(
 	// there are no corruptions now. Otherwise, we retry and do everything
 	// without an AOST clause henceforth.
 	withAOST := firstUpgradePreconditionUsesAOST
-	diagnose := func(tbl redact.SafeString) (hasRows bool, err error) {
-		withAOST := withAOST
-		for {
-			q := fmt.Sprintf("SELECT count(*) FROM \"\".crdb_internal.%s", tbl)
-			if withAOST {
-				q = q + " AS OF SYSTEM TIME '-10s'"
-			}
-			row, err := d.InternalExecutor.QueryRow(ctx, redact.Sprintf("query-%s", tbl), nil /* txn */, q)
-			if err == nil && row[0].String() != "0" {
-				hasRows = true
-			}
-			// In tests like "declarative_schema_changer/job-compatibility-mixed-version", its
-			// possible to hit BatchTimestampBeforeGCError, because the GC interval is
-			// set to a second. If we ever see BatchTimestampBeforeGCError re-run without
-			// AOST.
-			if withAOST && errors.HasType(err, &kvpb.BatchTimestampBeforeGCError{}) {
-				// Retry with the AOST removed.
-				withAOST = false
-				continue
-			}
-			return hasRows, err
+	diagnose := func(tbl string) (hasRows bool, err error) {
+		q := fmt.Sprintf("SELECT count(*) FROM \"\".crdb_internal.%s", tbl)
+		if withAOST {
+			q = q + " AS OF SYSTEM TIME '-10s'"
 		}
+		row, err := d.InternalExecutor.QueryRow(ctx, "query-"+tbl, nil /* txn */, q)
+		if err == nil && row[0].String() != "0" {
+			hasRows = true
+		}
+		return hasRows, err
 	}
 	// Check for possibility of time travel.
 	if hasRows, err := diagnose("databases"); err != nil {
@@ -207,7 +178,7 @@ func FirstUpgradeFromReleasePrecondition(
 		return err
 	} else if hasRows {
 		// Attempt to repair catalog corruptions in batches.
-		log.Dev.Info(ctx, "auto-repairing catalog corruptions detected during upgrade attempt")
+		log.Info(ctx, "auto-repairing catalog corruptions detected during upgrade attempt")
 		var n int
 		const repairQuery = `
 SELECT
@@ -226,15 +197,11 @@ WHERE
 		batchSize := 100
 		// Any batch size below this will use high priority.
 		const HighPriBatchSize = 25
-		repairBatchTimeLimit := 1 * time.Minute
+		repairBatchTimeLimit := lease.LeaseDuration.Get(&d.Settings.SV)
 		for {
 			var rowsUpdated tree.DInt
 			err := timeutil.RunWithTimeout(ctx, "descriptor-repair", repairBatchTimeLimit, func(ctx context.Context) error {
 				return d.DB.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
-					// We explicitly specify a low retry limit because this operation is
-					// wrapped with its own retry function that will also take care of
-					// adjusting the batch size on each retry.
-					txn.KV().SetMaxAutoRetries(10)
 					if batchSize <= HighPriBatchSize {
 						if err = txn.KV().SetUserPriority(roachpb.MaxUserPriority); err != nil {
 							return err
@@ -256,7 +223,7 @@ WHERE
 				if kv.IsAutoRetryLimitExhaustedError(err) ||
 					errors.HasType(err, (*timeutil.TimeoutError)(nil)) {
 					batchSize = max(batchSize/2, 1)
-					log.Dev.Infof(ctx, "reducing batch size of invalid_object repair query to %d (hipri=%t)",
+					log.Infof(ctx, "reducing batch size of invalid_object repair query to %d (hipri=%t)",
 						batchSize,
 						batchSize <= HighPriBatchSize)
 					continue
@@ -268,14 +235,14 @@ WHERE
 				break
 			}
 			n += int(rowsUpdated)
-			log.Dev.Infof(ctx, "repaired %d catalog corruptions", rowsUpdated)
+			log.Infof(ctx, "repaired %d catalog corruptions", rowsUpdated)
 		}
 		if n == 0 {
-			log.Dev.Info(ctx, "no catalog corruptions found to repair during upgrade attempt")
+			log.Info(ctx, "no catalog corruptions found to repair during upgrade attempt")
 		} else {
 			// Repairs have actually been performed: stop all time travel henceforth.
 			withAOST = false
-			log.Dev.Infof(ctx, "%d catalog corruptions have been repaired in total", n)
+			log.Infof(ctx, "%d catalog corruptions have been repaired in total", n)
 		}
 	}
 	// Check for all known catalog corruptions.
