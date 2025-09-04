@@ -80,8 +80,6 @@ var (
 	// LocalRangeAppliedStateSuffix is the suffix for the range applied state
 	// key.
 	LocalRangeAppliedStateSuffix = []byte("rask")
-	// LocalRangeForceFlushSuffix is the suffix for the range force flush key.
-	LocalRangeForceFlushSuffix = []byte("rffk")
 	// This was previously used for the replicated RaftTruncatedState. It is no
 	// longer used and this key has been removed via a migration. See
 	// LocalRaftTruncatedStateSuffix for the corresponding unreplicated
@@ -226,8 +224,6 @@ var (
 	// SupporterMeta stores the highest timestamp at which support has been
 	// withdrawn.
 	localStoreLivenessSupporterMeta = []byte("slsm")
-	// localStoreWAGNodeSuffix is the suffix for WAG nodes.
-	localStoreWAGNodeSuffix = []byte("wagn")
 	// localStoreLivenessSupportFor stores the Store Liveness support by the local
 	// store for a store in the cluster. It includes the epoch and expiration of
 	// support.

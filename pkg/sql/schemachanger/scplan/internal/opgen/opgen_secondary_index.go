@@ -52,17 +52,6 @@ func init() {
 						BackReferencedTableID: this.TableID,
 					}
 				}),
-				emit(func(this *scpb.SecondaryIndex) *scop.AddTableIndexBackReferencesInFunctions {
-					if this.EmbeddedExpr == nil ||
-						len(this.EmbeddedExpr.UsesFunctionIDs) == 0 {
-						return nil
-					}
-					return &scop.AddTableIndexBackReferencesInFunctions{
-						FunctionIDs:           this.EmbeddedExpr.UsesFunctionIDs,
-						BackReferencedTableID: this.TableID,
-						BackReferencedIndexID: this.IndexID,
-					}
-				}),
 			),
 			to(scpb.Status_BACKFILLED,
 				emit(func(this *scpb.SecondaryIndex, md *opGenContext) *scop.BackfillIndex {
@@ -136,20 +125,6 @@ func init() {
 				}),
 			),
 			to(scpb.Status_PUBLIC,
-				emit(func(this *scpb.SecondaryIndex, md *opGenContext) *scop.MarkRecreatedIndexAsInvisible {
-					// Recreated indexes are not visible until their final primary index
-					// is usable. While they maybe made public we need to make sure they
-					// are not accidentally used.
-					if this.RecreateTargetIndexID == 0 {
-						return nil
-					}
-					return &scop.MarkRecreatedIndexAsInvisible{
-						TableID:              this.TableID,
-						IndexID:              this.IndexID,
-						TargetPrimaryIndexID: this.RecreateTargetIndexID,
-						SetHideIndexFlag:     this.HideForPrimaryKeyRecreated,
-					}
-				}),
 				emit(func(this *scpb.SecondaryIndex) *scop.MakeValidatedSecondaryIndexPublic {
 					return &scop.MakeValidatedSecondaryIndexPublic{
 						TableID: this.TableID,
@@ -166,29 +141,6 @@ func init() {
 		toAbsent(
 			scpb.Status_PUBLIC,
 			to(scpb.Status_VALIDATED,
-				emit(func(this *scpb.SecondaryIndex, md *opGenContext) *scop.MarkRecreatedIndexAsVisible {
-					// If this index is being replaced because of a primary key swap,
-					// we need to make sure that the index that was created to replace it is
-					// visible, right before this one disappears.
-					for _, target := range md.Targets {
-						idx := target.GetSecondaryIndex()
-						// Skip unrelated indexes and indexes that are supposed
-						// to be invisible. Older versions will rely on the
-						// primary key swap to make the index public.
-						if idx == nil ||
-							idx.TableID != this.TableID ||
-							idx.RecreateSourceIndexID != this.IndexID ||
-							!idx.HideForPrimaryKeyRecreated {
-							continue
-						}
-						return &scop.MarkRecreatedIndexAsVisible{
-							TableID:         this.TableID,
-							IndexID:         idx.IndexID,
-							IndexVisibility: idx.Invisibility,
-						}
-					}
-					return nil
-				}),
 				emit(func(this *scpb.SecondaryIndex) *scop.MakePublicSecondaryIndexWriteOnly {
 					// Most of this logic is taken from MakeMutationComplete().
 					return &scop.MakePublicSecondaryIndexWriteOnly{
@@ -209,10 +161,6 @@ func init() {
 						IndexID: this.IndexID,
 					}
 				}),
-			),
-			equiv(scpb.Status_BACKFILLED),
-			equiv(scpb.Status_BACKFILL_ONLY),
-			to(scpb.Status_ABSENT,
 				emit(func(this *scpb.SecondaryIndex) *scop.RemoveDroppedIndexPartialPredicate {
 					if this.EmbeddedExpr == nil {
 						return nil
@@ -231,17 +179,10 @@ func init() {
 						BackReferencedTableID: this.TableID,
 					}
 				}),
-				emit(func(this *scpb.SecondaryIndex) *scop.RemoveTableIndexBackReferencesInFunctions {
-					if this.EmbeddedExpr == nil ||
-						len(this.EmbeddedExpr.UsesFunctionIDs) == 0 {
-						return nil
-					}
-					return &scop.RemoveTableIndexBackReferencesInFunctions{
-						FunctionIDs:           this.EmbeddedExpr.UsesFunctionIDs,
-						BackReferencedTableID: this.TableID,
-						BackReferencedIndexID: this.IndexID,
-					}
-				}),
+			),
+			equiv(scpb.Status_BACKFILLED),
+			equiv(scpb.Status_BACKFILL_ONLY),
+			to(scpb.Status_ABSENT,
 				emit(func(this *scpb.SecondaryIndex, md *opGenContext) *scop.CreateGCJobForIndex {
 					return nil
 				}),
