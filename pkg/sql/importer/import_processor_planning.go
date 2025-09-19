@@ -47,10 +47,6 @@ var replanFrequency = settings.RegisterDurationSetting(
 	settings.PositiveDuration,
 )
 
-// importProgressDebugName is used to mark the transaction for updating
-// import job progress.
-const importProgressDebugName = `import_progress`
-
 // distImport is used by IMPORT to run a DistSQL flow to ingest data by starting
 // reader processes on many nodes that each read and ingest their assigned files
 // and then send back a summary of what they ingested. The combined summary is
@@ -125,7 +121,8 @@ func distImport(
 	}
 
 	// accumulatedBulkSummary accumulates the BulkOpSummary returned from each
-	// processor in their progress updates. It is used to update the job progress.
+	// processor in their progress updates. It stores stats about the amount of
+	// data written since the last time we update the job progress.
 	accumulatedBulkSummary := struct {
 		syncutil.Mutex
 		kvpb.BulkOpSummary
@@ -161,7 +158,7 @@ func distImport(
 	fractionProgress := make([]uint32, len(from))
 
 	updateJobProgress := func() error {
-		return job.DebugNameNoTxn(importProgressDebugName).FractionProgressed(ctx, func(
+		return job.NoTxn().FractionProgressed(ctx, func(
 			ctx context.Context, details jobspb.ProgressDetails,
 		) float32 {
 			var overall float32
@@ -176,7 +173,8 @@ func distImport(
 			}
 
 			accumulatedBulkSummary.Lock()
-			prog.Summary = accumulatedBulkSummary.BulkOpSummary
+			prog.Summary.Add(accumulatedBulkSummary.BulkOpSummary)
+			accumulatedBulkSummary.Reset()
 			accumulatedBulkSummary.Unlock()
 			return overall / float32(len(from))
 		},

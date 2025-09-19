@@ -41,7 +41,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/pebble/objstorage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -680,7 +679,7 @@ func assertEqualKVs(
 			var sst []byte
 			maxSize := uint64(0)
 			prevStart := start
-			var sstFile objstorage.MemObj
+			var sstFile bytes.Buffer
 			summary, resumeInfo, err := storage.MVCCExportToSST(ctx, st, e, storage.MVCCExportOptions{
 				StartKey:           start,
 				EndKey:             endKey,
@@ -693,7 +692,7 @@ func assertEqualKVs(
 			}, &sstFile)
 			require.NoError(t, err)
 			start = resumeInfo.ResumeKey
-			sst = sstFile.Data()
+			sst = sstFile.Bytes()
 			loaded := loadSST(t, sst, startKey, endKey)
 			// Ensure that the pagination worked properly.
 			if start.Key != nil {
@@ -739,7 +738,7 @@ func assertEqualKVs(
 					TargetSize:         targetSize,
 					MaxSize:            maxSize,
 					StopMidKey:         false,
-				}, &objstorage.MemObj{})
+				}, &bytes.Buffer{})
 				require.Regexp(t, fmt.Sprintf("export size \\(%d bytes\\) exceeds max size \\(%d bytes\\)",
 					dataSizeWhenExceeded, maxSize), err)
 			}

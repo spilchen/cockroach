@@ -1,4 +1,5 @@
-# LogicTest: !local-prepared
+# LogicTest: !local-mixed-24.3
+
 statement ok
 CREATE TABLE t (x INT);
 

@@ -179,17 +179,17 @@ query T
 SELECT table_name FROM [SHOW TABLES]
 ORDER BY table_name
 ----
-comments
-descriptor_id_se'q
-jo b_progress
-mvcc_statistics
-sche%vduled_j%qobs
-settings
-span_stats_unique_keys
+prepared_transactions
+protected_ts_reco"rds
+ro😪l|e_options
+set                             tings
+span_stats'_bucke ts
+statement_diagnostics_requests
+statement_statisti😍cs
 sta😣tement_statistics
-tenant_id_seq
-tenant_se\\x7bttings
-users
+tenant_tasks
+tran\\u9A2Esaction_statistics
+us ers
 
 # Again, the column names are randomized.
 query TTT
@@ -198,27 +198,26 @@ WHERE table_catalog = 'newdb2' AND table_schema = 'public'
 ORDER BY table_name, column_name
 LIMIT 20
 ----
-comments              """ sub_i d"   bigint
-comments              "c omment"     text
-comments              "object_id "   bigint
-comments              rowid          bigint
-comments              "t😌y p😂e"      bigint
-"descriptor_id_se'q"  rowid          bigint
-"descriptor_id_se'q"  value          bigint
-"jo b_progress"       fractio😲n      double precision
-"jo b_progress"       "job_i'd"      bigint
-"jo b_progress"       "resoLve%qd"   numeric
-"jo b_progress"       rowid          bigint
-"jo b_progress"       written        timestamp with time zone
-mvcc_statistics       "!created_at"  timestamp with time zone
-mvcc_statistics       database_id    bigint
-mvcc_statistics       "inde%vx_id
-"                     bigint
-mvcc_statistics       rowid              bigint
-mvcc_statistics       "statisti%pcs"     jsonb
-mvcc_statistics       "ta\\x2dble_id"    bigint
-"sche%vduled_j%qobs"  created            timestamp with time zone
-"sche%vduled_j%qobs"  "execution_a?rgs"  bytea
+prepared_transactions     database         text
+prepared_transactions     global_id        text
+prepared_transactions     heuristic        text
+prepared_transactions     prepared         timestamp with time zone
+prepared_transactions     rowid            bigint
+prepared_transactions     transaction_id_  uuid
+prepared_transactions     transaction_key  bytea
+prepared_transactions     "😠owne\gr"       text
+"protected_ts_reco""rds"  "*meta"          bytea
+"protected_ts_reco""rds"  id               uuid
+"protected_ts_reco""rds"  "meta_typ%ve"    text
+"protected_ts_reco""rds"  num_spans        bigint
+"protected_ts_reco""rds"  rowid            bigint
+"protected_ts_reco""rds"  spans            bytea
+"protected_ts_reco""rds"  target           bytea
+"protected_ts_reco""rds"  ts               numeric
+"protected_ts_reco""rds"  "veri!fied"      boolean
+"ro😪l|e_options"          "opti}o& n"      text
+"ro😪l|e_options"          rowid            bigint
+"ro😪l|e_options"          "us'er_id"       oid
 
 subtest templates/different_templates_in_each_db
 
@@ -236,15 +235,15 @@ SELECT quote_ident(database_name), quote_ident(schema_name), quote_ident(name)
 FROM "".crdb_internal.tables WHERE database_name ILIKE '%d%b%t%'
 ORDER BY database_name, schema_name, name
 ----
-"d%qbt_1"  public  "%56ev                              entlo\ng%v"
-"d%qbt_1"  public  descriptor_id_seq
-"d%qbt_1"  public  scheduled_jobs
-"d%qbt_2"  public  jobs
-"d%qbt_2"  public  "privil)eges"
-"d%qbt_2"  public  "transaction_executio%pn_insights"
-dbt_3      public  "job_i nfo"
-dbt_3      public  sql_instances
-dbt_3      public  "statement_diagnostIcs"
+"d%qbt_1"  public  "external_connect ions"
+"d%qbt_1"  public  reports_meta
+"d%qbt_1"  public  "sta""tement_bundle_chunks"
+"d%qbt_2"  public  "job_progres s"
+"d%qbt_2"  public  web_sessions
+"d%qbt_2"  public  zones
+dbt_3      public  "namespa ce"
+dbt_3      public  "rolE_members"
+dbt_3      public  span_stats_tenant_boundaries
 
 
 statement ok

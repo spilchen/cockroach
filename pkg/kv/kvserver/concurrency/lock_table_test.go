@@ -450,22 +450,6 @@ func TestLockTableBasic(t *testing.T) {
 				}
 				return lt.String()
 
-			case "update-txn-not-observed":
-				var txnName string
-				d.ScanArgs(t, "txn", &txnName)
-				txnMeta, ok := txnsByName[txnName]
-				if !ok {
-					d.Fatalf(t, "unknown txn %s", txnName)
-				}
-				ts := scanTimestamp(t, d)
-				var epoch int
-				d.ScanArgs(t, "epoch", &epoch)
-				txnMeta = &enginepb.TxnMeta{ID: txnMeta.ID, Sequence: txnMeta.Sequence}
-				txnMeta.Epoch = enginepb.TxnEpoch(epoch)
-				txnMeta.WriteTimestamp = ts
-				txnsByName[txnName] = txnMeta
-				return ""
-
 			case "add-discovered":
 				var reqName string
 				d.ScanArgs(t, "r", &reqName)
@@ -1168,6 +1152,7 @@ func doWork(ctx context.Context, item *workItem, e *workloadExecutor) error {
 				case <-ctx.Done():
 					return ctx.Err()
 				case <-timer.C:
+					timer.Read = true
 					return errors.AssertionFailedf(
 						"request %d has been waiting for more than 5 minutes; lock table state:\n%s\n",
 						g.(*lockTableGuardImpl).seqNum,
@@ -2036,7 +2021,7 @@ func BenchmarkLockTable(b *testing.B) {
 							runRequests(b, iters, requestsPerGroup[0], env)
 						}
 						if log.V(1) {
-							log.Dev.Infof(context.Background(), "num requests that waited: %d, num scan calls: %d\n",
+							log.Infof(context.Background(), "num requests that waited: %d, num scan calls: %d\n",
 								atomic.LoadUint64(&numRequestsWaited), atomic.LoadUint64(&numScanCalls))
 						}
 					})
