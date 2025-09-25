@@ -519,9 +519,6 @@ var MVCCMerger = &pebble.Merger{
 	},
 }
 
-// DefaultMemtableSize is the default size of a memtable.
-const DefaultMemtableSize = 64 << 20 // 64 MB
-
 const mvccWallTimeIntervalCollector = "MVCCTimeInterval"
 
 // DefaultPebbleOptions returns the default pebble options.
@@ -535,7 +532,7 @@ func DefaultPebbleOptions() *pebble.Options {
 		L0CompactionThreshold:       2,
 		L0StopWritesThreshold:       1000,
 		LBaseMaxBytes:               64 << 20, // 64 MB
-		MemTableSize:                DefaultMemtableSize,
+		MemTableSize:                64 << 20, // 64 MB
 		MemTableStopWritesThreshold: 4,
 		Merger:                      MVCCMerger,
 		BlockPropertyCollectors:     cockroachkvs.BlockPropertyCollectors,
