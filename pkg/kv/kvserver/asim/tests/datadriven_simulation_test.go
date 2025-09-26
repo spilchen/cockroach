@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/tracing/tracingpb"
 	"github.com/cockroachdb/datadriven"
 	"github.com/cockroachdb/logtags"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -492,6 +494,7 @@ func TestDataDriven(t *testing.T) {
 					metricsMap[s] = struct{}{}
 				}
 
+				seedGen := rand.New(rand.NewSource(seed))
 				require.NotZero(t, rangeGen)
 
 				knownConfigurations := map[string]func(eg *gen.StaticEvents){
@@ -552,11 +555,26 @@ func TestDataDriven(t *testing.T) {
 						// parameter to the `eval` command.
 						testName := name + "_" + mv
 
-						seedGen := rand.New(rand.NewSource(seed))
 						for sample := 0; sample < samples; sample++ {
-							tr := makeTraceHelper(rewrite, plotDir, testName, sample+1, duration)
-							settingsGen.Settings.OnRecording = func(storeID int64, atDuration time.Duration, rec tracingpb.Recording) {
-								tr.OnRecording(t, storeID, atDuration, rec)
+							recIdx := map[int64]int{}
+							settingsGen.Settings.OnRecording = func(storeID int64, rec tracingpb.Recording) {
+								if !rewrite || len(rec[0].Logs) == 0 {
+									return
+								}
+								traceDir := filepath.Join(plotDir, "traces", fmt.Sprintf("s%d", storeID))
+								if recIdx[storeID] == 0 {
+									require.NoError(t, os.MkdirAll(traceDir, 0755))
+								}
+								re := regexp.MustCompile(`[^a-zA-Z0-9]+`)
+								outName := fmt.Sprintf("%s_%s_s%d", mv, re.ReplaceAllString(rec[0].Operation, "_"), storeID)
+								if sample > 0 {
+									outName += fmt.Sprintf("_sample%d", sample+1)
+								}
+								outName += "_" + fmt.Sprintf("%03d.txt", recIdx[storeID])
+								assert.NoError(t, os.WriteFile(
+									filepath.Join(traceDir, outName),
+									[]byte(rec.String()), 0644))
+								recIdx[storeID] += 1
 							}
 
 							assertionFailures := []string{}

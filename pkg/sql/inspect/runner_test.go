@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
@@ -29,13 +28,6 @@ type mockInspectCheck struct {
 }
 
 var _ inspectCheck = &mockInspectCheck{}
-var _ inspectCheckApplicability = &mockInspectCheck{}
-
-// AppliesTo implements the inspectCheckApplicability interface.
-func (m *mockInspectCheck) AppliesTo(codec keys.SQLCodec, span roachpb.Span) (bool, error) {
-	// For testing, assume all checks apply to all spans
-	return true, nil
-}
 
 func (m *mockInspectCheck) Started() bool {
 	return m.started
