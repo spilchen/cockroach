@@ -12,6 +12,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
+	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/spf13/pflag"
 )
 
@@ -473,6 +474,12 @@ var (
 	_                         = registerRunFlag(&AutoKillThreshold, FlagInfo{
 		Name:  "auto-kill-threshold",
 		Usage: `Percentage of failed tests before all remaining tests are automatically terminated.`,
+	})
+
+	GlobalSeed int64 = randutil.NewPseudoSeed()
+	_                = registerRunFlag(&GlobalSeed, FlagInfo{
+		Name:  "global-seed",
+		Usage: `The global random seed used for all tests.`,
 	})
 
 	ClearClusterCache bool = true

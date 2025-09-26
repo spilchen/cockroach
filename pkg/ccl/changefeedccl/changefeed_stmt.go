@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/backup/backupresolver"
+	"github.com/cockroachdb/cockroach/pkg/build"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/cdceval"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/cdcprogresspb"
 	"github.com/cockroachdb/cockroach/pkg/ccl/changefeedccl/changefeedbase"
@@ -47,7 +48,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgnotice"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/asof"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondatapb"
@@ -67,7 +67,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
-	pbtypes "github.com/gogo/protobuf/types"
 )
 
 // featureChangefeedEnabled is used to enable and disable the CHANGEFEED feature.
@@ -193,6 +192,13 @@ func changefeedPlanHook(
 	changefeedStmt := getChangefeedStatement(stmt)
 	if changefeedStmt == nil {
 		return nil, nil, false, nil
+	}
+	if changefeedStmt.Level != tree.ChangefeedLevelTable {
+		return nil, nil, false,
+			errors.UnimplementedError(
+				errors.IssueLink{IssueURL: build.MakeIssueURL(154053)},
+				"database-level changefeed is not implemented yet",
+			)
 	}
 
 	exprEval := p.ExprEvaluator("CREATE CHANGEFEED")
@@ -702,22 +708,11 @@ func createChangefeedJobRecord(
 		if len(targetDatabaseDescs) == 0 || len(targetDatabaseDescs) > 1 {
 			return nil, changefeedbase.Targets{}, errors.Errorf("changefeed only supports one database target")
 		}
-		targetDatabaseDesc := targetDatabaseDescs[0]
-		if targetDatabaseDesc.GetID() == keys.SystemDatabaseID {
+		if targetDatabaseDescs[0].GetID() == keys.SystemDatabaseID {
 			return nil, changefeedbase.Targets{}, errors.Errorf("changefeed cannot target the system database")
 		}
-		if changefeedStmt.FilterOption != nil {
-			fqTableNames, err := getFullyQualifiedTableNames(
-				targetDatabaseDesc.GetName(), changefeedStmt.FilterOption.Tables,
-			)
-			if err != nil {
-				return nil, changefeedbase.Targets{}, err
-			}
-			changefeedStmt.FilterOption.Tables = fqTableNames
-		}
-		targetSpec := getDatabaseTargetSpec(targetDatabaseDesc, changefeedStmt.FilterOption)
 		details = jobspb.ChangefeedDetails{
-			TargetSpecifications: []jobspb.ChangefeedTargetSpecification{targetSpec},
+			TargetSpecifications: getDatabaseTargets(targetDatabaseDescs),
 			SinkURI:              sinkURI,
 			StatementTime:        statementTime,
 			EndTime:              endTime,
@@ -1226,53 +1221,19 @@ func getTargetsAndTables(
 	return targets, tables, nil
 }
 
-func getDatabaseTargetSpec(
-	targetDatabaseDesc catalog.DatabaseDescriptor, filterOpt *tree.ChangefeedFilterOption,
-) jobspb.ChangefeedTargetSpecification {
-	target := jobspb.ChangefeedTargetSpecification{
-		DescID:            targetDatabaseDesc.GetID(),
-		Type:              jobspb.ChangefeedTargetSpecification_DATABASE,
-		StatementTimeName: targetDatabaseDesc.GetName(),
-	}
-	if filterOpt != nil {
-		filterTables := make(map[string]pbtypes.Empty)
-		for _, table := range filterOpt.Tables {
-			filterTables[table.FQString()] = pbtypes.Empty{}
-		}
-		target.FilterList = &jobspb.FilterList{
-			FilterType: jobspb.FilterList_FilterType(filterOpt.FilterType),
-			Tables:     filterTables,
-		}
-	}
-	return target
-}
+func getDatabaseTargets(
+	targetDatabaseDescs []catalog.DatabaseDescriptor,
+) []jobspb.ChangefeedTargetSpecification {
+	targets := make([]jobspb.ChangefeedTargetSpecification, len(targetDatabaseDescs))
 
-func getFullyQualifiedTableNames(
-	targetDatabase string, tableNames tree.TableNames,
-) (tree.TableNames, error) {
-	var fqTableNames tree.TableNames
-
-	for _, tableName := range tableNames {
-		if tableName.SchemaName == "" {
-			// The table name is non-qualified e.g. foo. This will resolve to <targetDatabase>.public.foo.
-			tableName.SchemaName = catconstants.PublicSchemaName
-			tableName.CatalogName = tree.Name(targetDatabase)
-		} else if tableName.CatalogName == "" {
-			// The table name is partially qualified e.g. foo.bar. This will resolve to
-			// <targetDatabase>.foo.bar.
-			tableName.CatalogName = tree.Name(targetDatabase)
-		} else {
-			// Table name is fully qualfied e.g. foo.bar.fizz. This will resolve to
-			// foo.bar.fizz unless foo != <targetDatabase>, in which case it would fail.
-			if tableName.CatalogName != tree.Name(targetDatabase) {
-				return nil, errors.AssertionFailedf(
-					"table %q must be in target database %q", tableName.FQString(), targetDatabase,
-				)
-			}
+	for i, desc := range targetDatabaseDescs {
+		targets[i] = jobspb.ChangefeedTargetSpecification{
+			DescID:            desc.GetID(),
+			Type:              jobspb.ChangefeedTargetSpecification_DATABASE,
+			StatementTimeName: desc.GetName(),
 		}
-		fqTableNames = append(fqTableNames, tableName)
 	}
-	return fqTableNames, nil
+	return targets
 }
 
 func validateSink(

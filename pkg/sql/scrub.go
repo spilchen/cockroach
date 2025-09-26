@@ -227,14 +227,11 @@ func (n *scrubNode) startScrubTable(
 			return pgerror.Newf(pgcode.InvalidTransactionState,
 				"cannot run within a multi-statement transaction")
 		}
-
-		// If AS OF SYSTEM TIME is not provided, we pass in an empty timestamp to
-		// force the job to use the current time.
-		var asOfForJob hlc.Timestamp
-		if hasTS {
-			asOfForJob = ts
+		if !hasTS {
+			return pgerror.Newf(pgcode.Syntax,
+				"SCRUB with inspect jobs requires AS OF SYSTEM TIME")
 		}
-		return n.runScrubTableJob(ctx, p, tableDesc, asOfForJob)
+		return n.runScrubTableJob(ctx, p, tableDesc, ts)
 	}
 	// Process SCRUB options. These are only present during a SCRUB TABLE
 	// statement.

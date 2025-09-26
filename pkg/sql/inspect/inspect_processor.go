@@ -20,7 +20,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/rowexec"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
-	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
@@ -37,7 +36,7 @@ var (
 	)
 )
 
-type inspectCheckFactory func(asOf hlc.Timestamp) inspectCheck
+type inspectCheckFactory func() inspectCheck
 
 type inspectProcessor struct {
 	processorID    int32
@@ -48,7 +47,6 @@ type inspectProcessor struct {
 	spanSrc        spanSource
 	logger         inspectLogger
 	concurrency    int
-	clock          *hlc.Clock
 }
 
 var _ execinfra.Processor = (*inspectProcessor)(nil)
@@ -192,26 +190,10 @@ func getInspectLogger(flowCtx *execinfra.FlowCtx, jobID jobspb.JobID) inspectLog
 func (p *inspectProcessor) processSpan(
 	ctx context.Context, span roachpb.Span, workerIndex int,
 ) (err error) {
-	asOfToUse := p.getTimestampForSpan()
-
-	// Only create checks that apply to this span
-	var checks []inspectCheck
-	for _, factory := range p.checkFactories {
-		check := factory(asOfToUse)
-		applies, err := check.AppliesTo(p.cfg.Codec, span)
-		if err != nil {
-			return err
-		}
-		if applies {
-			checks = append(checks, check)
-		}
+	checks := make([]inspectCheck, len(p.checkFactories))
+	for i, factory := range p.checkFactories {
+		checks[i] = factory()
 	}
-
-	// If no checks apply to this span, there's nothing to do
-	if len(checks) == 0 {
-		return nil
-	}
-
 	runner := inspectRunner{
 		checks: checks,
 		logger: p.logger,
@@ -235,16 +217,6 @@ func (p *inspectProcessor) processSpan(
 	return nil
 }
 
-// getTimestampForSpan returns the timestamp to use for processing a span.
-// If AsOf is empty, it returns the current timestamp from the processor's clock.
-// Otherwise, it returns the specified AsOf timestamp.
-func (p *inspectProcessor) getTimestampForSpan() hlc.Timestamp {
-	if p.spec.InspectDetails.AsOf.IsEmpty() {
-		return p.clock.Now()
-	}
-	return p.spec.InspectDetails.AsOf
-}
-
 // newInspectProcessor constructs a new inspectProcessor from the given InspectSpec.
 // It parses the spec to generate a set of inspectCheck factories, sets up the span source,
 // and wires in logging and concurrency controls.
@@ -254,6 +226,9 @@ func (p *inspectProcessor) getTimestampForSpan() hlc.Timestamp {
 func newInspectProcessor(
 	ctx context.Context, flowCtx *execinfra.FlowCtx, processorID int32, spec execinfrapb.InspectSpec,
 ) (execinfra.Processor, error) {
+	if spec.InspectDetails.AsOf.IsEmpty() {
+		return nil, errors.AssertionFailedf("ASOF time must be set for INSPECT")
+	}
 	checkFactories, err := buildInspectCheckFactories(flowCtx, spec)
 	if err != nil {
 		return nil, err
@@ -268,7 +243,6 @@ func newInspectProcessor(
 		spanSrc:        newSliceSpanSource(spec.Spans),
 		logger:         getInspectLogger(flowCtx, spec.JobID),
 		concurrency:    getProcessorConcurrency(flowCtx),
-		clock:          flowCtx.Cfg.DB.KV().Clock(),
 	}, nil
 }
 
@@ -287,14 +261,12 @@ func buildInspectCheckFactories(
 		indexID := specCheck.IndexID
 		switch specCheck.Type {
 		case jobspb.InspectCheckIndexConsistency:
-			checkFactories = append(checkFactories, func(asOf hlc.Timestamp) inspectCheck {
+			checkFactories = append(checkFactories, func() inspectCheck {
 				return &indexConsistencyCheck{
-					indexConsistencyCheckApplicability: indexConsistencyCheckApplicability{
-						tableID: tableID,
-					},
 					flowCtx: flowCtx,
+					tableID: tableID,
 					indexID: indexID,
-					asOf:    asOf,
+					asOf:    spec.InspectDetails.AsOf,
 				}
 			})
 
