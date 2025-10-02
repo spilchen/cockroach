@@ -7,6 +7,7 @@ package tests
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -24,7 +25,20 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 )
 
-func registerIndexBackfill(r registry.Registry) {
+// admissionControlOperation defines a function that performs operations
+// during the workload to test admission control. It receives a context, test,
+// cluster, and database connection.
+type admissionControlOperation func(context.Context, test.Test, cluster.Cluster, *sql.DB) error
+
+// registerAdmissionControlIndexTest registers an admission control test that runs
+// TPC-E workload with concurrent operations.
+func registerAdmissionControlIndexTest(
+	r registry.Registry,
+	name string,
+	owner registry.Owner,
+	timeout time.Duration,
+	operation admissionControlOperation,
+) {
 	clusterSpec := r.MakeClusterSpec(
 		10, /* nodeCount */
 		spec.CPU(8),
@@ -37,9 +51,9 @@ func registerIndexBackfill(r registry.Registry) {
 	)
 
 	r.Add(registry.TestSpec{
-		Name:             "admission-control/index-backfill",
-		Timeout:          6 * time.Hour,
-		Owner:            registry.OwnerAdmissionControl,
+		Name:             name,
+		Timeout:          timeout,
+		Owner:            owner,
 		Benchmark:        true,
 		CompatibleClouds: registry.OnlyGCE,
 		Suites:           registry.ManualOnly,
@@ -176,38 +190,10 @@ func registerIndexBackfill(r registry.Registry) {
 					t.Status(fmt.Sprintf("recording baseline performance (<%s)", 5*time.Minute))
 					time.Sleep(5 * time.Minute)
 
-					// Choose index creations and primary key changes that would
-					// take ~30 minutes each. Offset them by 5 minutes.
-					//
-					// TODO(irfansharif): These now take closer to an hour after
-					// https://github.com/cockroachdb/cockroach/pull/109085. Do
-					// something about it if customers complain.
-					m := c.NewDeprecatedMonitor(ctx, c.CRDBNodes())
-					m.Go(func(ctx context.Context) error {
-						t.Status(fmt.Sprintf("starting index creation (<%s)", 30*time.Minute))
-						_, err := db.ExecContext(ctx,
-							fmt.Sprintf("CREATE INDEX index_%s ON tpce.cash_transaction (ct_dts)",
-								timeutil.Now().Format("20060102_T150405"),
-							),
-						)
-						t.Status("finished index creation")
+					// Run the provided operation function.
+					if err := operation(ctx, t, c, db); err != nil {
 						return err
-					})
-					m.Go(func(ctx context.Context) error {
-						// TODO(irfansharif): Is the re-entrant? As in,
-						// effective when re-running the roachtest against the
-						// same cluster that's already run the test once? Useful
-						// to make it so if possible, to run things more
-						// iteratively.
-						time.Sleep(5 * time.Minute)
-						t.Status(fmt.Sprintf("starting primary key change (<%s)", 30*time.Minute))
-						_, err := db.ExecContext(ctx,
-							"ALTER TABLE tpce.holding_history ALTER PRIMARY KEY USING COLUMNS (hh_h_t_id ASC, hh_t_id ASC, hh_before_qty ASC)",
-						)
-						t.Status("finished primary key change")
-						return err
-					})
-					m.Wait()
+					}
 
 					t.Status(fmt.Sprintf("waiting for workload to finish (<%s)", 50*time.Minute))
 					return nil
@@ -215,4 +201,53 @@ func registerIndexBackfill(r registry.Registry) {
 			})
 		},
 	})
+}
+
+// indexBackfillOperation performs concurrent index creation and primary key change operations.
+// This is the original operation from the admission-control/index-backfill test.
+func indexBackfillOperation(ctx context.Context, t test.Test, c cluster.Cluster, db *sql.DB) error {
+	// Choose index creations and primary key changes that would
+	// take ~30 minutes each. Offset them by 5 minutes.
+	//
+	// TODO(irfansharif): These now take closer to an hour after
+	// https://github.com/cockroachdb/cockroach/pull/109085. Do
+	// something about it if customers complain.
+	m := c.NewDeprecatedMonitor(ctx, c.CRDBNodes())
+	m.Go(func(ctx context.Context) error {
+		t.Status(fmt.Sprintf("starting index creation (<%s)", 30*time.Minute))
+		_, err := db.ExecContext(ctx,
+			fmt.Sprintf("CREATE INDEX index_%s ON tpce.cash_transaction (ct_dts)",
+				timeutil.Now().Format("20060102_T150405"),
+			),
+		)
+		t.Status("finished index creation")
+		return err
+	})
+	m.Go(func(ctx context.Context) error {
+		// TODO(irfansharif): Is the re-entrant? As in,
+		// effective when re-running the roachtest against the
+		// same cluster that's already run the test once? Useful
+		// to make it so if possible, to run things more
+		// iteratively.
+		time.Sleep(5 * time.Minute)
+		t.Status(fmt.Sprintf("starting primary key change (<%s)", 30*time.Minute))
+		_, err := db.ExecContext(ctx,
+			"ALTER TABLE tpce.holding_history ALTER PRIMARY KEY USING COLUMNS (hh_h_t_id ASC, hh_t_id ASC, hh_before_qty ASC)",
+		)
+		t.Status("finished primary key change")
+		return err
+	})
+	m.Wait()
+	return nil
+}
+
+// registerIndexBackfill registers the original index-backfill admission control test.
+func registerIndexBackfill(r registry.Registry) {
+	registerAdmissionControlIndexTest(
+		r,
+		"admission-control/index-backfill",
+		registry.OwnerAdmissionControl,
+		6*time.Hour,
+		indexBackfillOperation,
+	)
 }
