@@ -249,6 +249,36 @@ func registerLargeSchemaBenchmark(r registry.Registry, numTables int, isMultiReg
 				})
 			}
 			mon.Wait()
+
+			// TODO(148365): Once INSPECT is available, use it to run physical data
+			// validation against entire databases instead of individual tables.
+			// For now, we use EXPERIMENTAL SCRUB with scrub job enabled on the hot
+			// tables from the active databases.
+			t.L().Printf("Running INSPECT on select tables from active databases")
+			conn := c.Conn(ctx, t.L(), 1)
+			defer conn.Close()
+
+			// Enable scrub job for this session to run SCRUB as a background job.
+			_, err = conn.Exec("SET enable_scrub_job = true")
+			require.NoError(t, err)
+
+			// Run INSPECT on tables that have secondary indexes in each active database.
+			inspectTables := []string{"order", "customer"}
+			for _, dbAndSchema := range activeDBList {
+				parts := strings.Split(dbAndSchema, ".")
+				dbName := parts[0]
+				schemaName := parts[1]
+
+				for _, tableName := range inspectTables {
+					qualifiedTable := fmt.Sprintf("%s.%s.%s", dbName, schemaName, tableName)
+					t.L().Printf("Inspecting table: %s", qualifiedTable)
+					scrubQuery := fmt.Sprintf("EXPERIMENTAL SCRUB TABLE %s", qualifiedTable)
+					_, err := conn.Exec(scrubQuery)
+					require.NoError(t, err, "INSPECT failed for %s", qualifiedTable)
+				}
+			}
+
+			t.L().Printf("Completed INSPECT on tables")
 		},
 	})
 }
