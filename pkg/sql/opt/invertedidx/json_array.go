@@ -18,14 +18,12 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/norm"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/props"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/builtins/builtinconstants"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/eval"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree/treecmp"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
 	"github.com/cockroachdb/cockroach/pkg/util/json"
-	"github.com/cockroachdb/cockroach/pkg/util/jsonpath"
 	"github.com/cockroachdb/errors"
 )
 
@@ -414,20 +412,6 @@ func (j *jsonOrArrayFilterPlanner) extractInvertedFilterConditionFromLeaf(
 		}
 	case *memo.OverlapsExpr:
 		invertedExpr = j.extractArrayOverlapsCondition(ctx, evalCtx, t.Left, t.Right)
-	case *memo.FunctionExpr:
-		if t.Properties.Category == builtinconstants.CategoryJsonpath && t.Name == "jsonb_path_exists" {
-			if len(t.Args) > 1 {
-				if ce, ok := t.Args[1].(*memo.ConstExpr); ok {
-					if dJsonPath, ok := ce.Value.(*tree.DJsonpath); ok {
-						if dJsonPath.Strict {
-							return inverted.NonInvertedColExpression{}, expr, nil
-						}
-						jp := dJsonPath.Path
-						invertedExpr = j.extractJSONPathCondition(ctx, evalCtx, jp)
-					}
-				}
-			}
-		}
 	}
 
 	if invertedExpr == nil {
@@ -492,13 +476,6 @@ func (j *jsonOrArrayFilterPlanner) extractJSONInCondition(
 
 	return invertedExpr
 
-}
-
-func (j *jsonOrArrayFilterPlanner) extractJSONPathCondition(
-	ctx context.Context, evalCtx *eval.Context, jp jsonpath.Path,
-) inverted.Expression {
-	res := jsonpath.EncodeJsonPathInvertedIndexSpans(nil, jp)
-	return res
 }
 
 // extractArrayOverlapsCondition extracts an InvertedExpression

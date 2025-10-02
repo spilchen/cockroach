@@ -367,7 +367,6 @@ func (gssp *generativeSplitAndScatterProcessor) Start(ctx context.Context) {
 	}); err != nil {
 		gssp.scatterErr = err
 		cancel()
-		close(gssp.doneScatterCh)
 		close(workerDone)
 	}
 }

@@ -2226,13 +2226,10 @@ func (n *Node) muxRangeFeed(muxStream kvpb.RPCInternal_MuxRangeFeedStream) error
 
 	sm := &rangefeed.StreamManager{}
 	if kvserver.RangefeedUseBufferedSender.Get(&n.storeCfg.Settings.SV) {
-		sm = rangefeed.NewStreamManager(
-			rangefeed.NewBufferedSender(lockedMuxStream, n.storeCfg.Settings, n.metrics.BufferedSenderMetrics),
+		sm = rangefeed.NewStreamManager(rangefeed.NewBufferedSender(lockedMuxStream, n.metrics.BufferedSenderMetrics),
 			n.metrics.StreamManagerMetrics)
 	} else {
-		sm = rangefeed.NewStreamManager(
-			rangefeed.NewUnbufferedSender(lockedMuxStream),
-			n.metrics.StreamManagerMetrics)
+		sm = rangefeed.NewStreamManager(rangefeed.NewUnbufferedSender(lockedMuxStream), n.metrics.StreamManagerMetrics)
 	}
 
 	if err := sm.Start(ctx, n.stopper); err != nil {
@@ -2268,14 +2265,14 @@ func (n *Node) muxRangeFeed(muxStream kvpb.RPCInternal_MuxRangeFeedStream) error
 				continue
 			}
 
-			tags := logtags.BuildBuffer()
-			tags.Add("r", req.RangeID)
-			tags.Add("sm", req.Replica.StoreID)
-			tags.Add("sid", req.StreamID)
+			tags := &logtags.Buffer{}
+			tags = tags.Add("r", req.RangeID)
+			tags = tags.Add("sm", req.Replica.StoreID)
+			tags = tags.Add("sid", req.StreamID)
 			if req.ConsumerID != 0 {
-				tags.Add("cid", req.ConsumerID)
+				tags = tags.Add("cid", req.ConsumerID)
 			}
-			streamCtx := logtags.AddTags(ctx, tags.Finish())
+			streamCtx := logtags.AddTags(ctx, tags)
 
 			streamSink := sm.NewStream(req.StreamID, req.RangeID)
 

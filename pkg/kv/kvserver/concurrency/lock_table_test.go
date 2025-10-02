@@ -312,7 +312,6 @@ func TestLockTableBasic(t *testing.T) {
 				if d.HasArg("skip-locked") {
 					waitPolicy = lock.WaitPolicy_SkipLocked
 				}
-				updateRetainedTxn := !d.HasArg("no-update-retained-txn")
 				var maxLockWaitQueueLength int
 				if d.HasArg("max-lock-wait-queue-length") {
 					d.ScanArgs(t, "max-lock-wait-queue-length", &maxLockWaitQueueLength)
@@ -332,17 +331,11 @@ func TestLockTableBasic(t *testing.T) {
 				if txnMeta != nil {
 					// Update the transaction's timestamp, if necessary. The transaction
 					// may have needed to move its timestamp for any number of reasons.
-					if updateRetainedTxn {
-						txnMeta.WriteTimestamp = ts
-					}
+					txnMeta.WriteTimestamp = ts
 					ba.Txn = &roachpb.Transaction{
 						TxnMeta:       *txnMeta,
 						ReadTimestamp: ts,
 					}
-					if !updateRetainedTxn {
-						ba.Txn.WriteTimestamp = ts
-					}
-
 					req.Txn = ba.Txn
 				}
 				requestsByName[reqName] = req

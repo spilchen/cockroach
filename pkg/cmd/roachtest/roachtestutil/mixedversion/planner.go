@@ -7,10 +7,8 @@ package mixedversion
 
 import (
 	"fmt"
-	"maps"
 	"math/rand"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -359,7 +357,7 @@ func (p *testPlanner) Plan() (*TestPlan, error) {
 		addSteps(p.finalizeUpgradeSteps(service, to, scheduleHooks, virtualClusterRunning))
 
 		// run after upgrade steps, if any,
-		addSteps(p.afterUpgradeSteps(service, scheduleHooks))
+		addSteps(p.afterUpgradeSteps(service, from, to, scheduleHooks))
 
 		return steps
 	}
@@ -629,8 +627,7 @@ func (p *testPlanner) systemSetupSteps() []testStep {
 	if len(clusterStartHooks) > 0 {
 		steps = append(steps, p.concurrently(beforeClusterStartLabel, clusterStartHooks)...)
 	}
-
-	steps = append(steps,
+	return append(steps,
 		p.newSingleStepWithContext(setupContext, startStep{
 			version:            initialVersion,
 			rt:                 p.rt,
@@ -645,19 +642,6 @@ func (p *testPlanner) systemSetupSteps() []testStep {
 			virtualClusterName: install.SystemInterfaceName,
 		}),
 	)
-
-	if len(p.options.workloadNodes) > 0 {
-		// Add step for staging all workload binaries needed for test on workload
-		// node(s)
-		steps = append(steps,
-			p.newSingleStepWithContext(setupContext, stageAllWorkloadBinariesStep{
-				versions:      p.versions,
-				rt:            p.rt,
-				workloadNodes: p.options.workloadNodes,
-			}))
-	}
-
-	return steps
 }
 
 // tenantSetupSteps returns the series of steps needed to create the
@@ -669,15 +653,15 @@ func (p *testPlanner) tenantSetupSteps(v *clusterupgrade.Version) []testStep {
 	shouldGrantCapabilities := p.deploymentMode == SeparateProcessDeployment ||
 		(p.deploymentMode == SharedProcessDeployment && !v.AtLeast(TenantsAndSystemAlignedSettingsVersion))
 
-	var tenantSetupStep singleStepProtocol
+	var startStep singleStepProtocol
 	if p.deploymentMode == SharedProcessDeployment {
-		tenantSetupStep = startSharedProcessVirtualClusterStep{
+		startStep = startSharedProcessVirtualClusterStep{
 			name:       p.tenantName(),
 			initTarget: p.currentContext.Tenant.Descriptor.Nodes[0],
 			settings:   p.clusterSettingsForTenant(v),
 		}
 	} else {
-		tenantSetupStep = startSeparateProcessVirtualClusterStep{
+		startStep = startSeparateProcessVirtualClusterStep{
 			name:     p.tenantName(),
 			rt:       p.rt,
 			version:  v,
@@ -694,7 +678,7 @@ func (p *testPlanner) tenantSetupSteps(v *clusterupgrade.Version) []testStep {
 	// it as the default cluster, and finally give it all capabilities
 	// if necessary.
 	steps = append(steps,
-		p.newSingleStepWithContext(setupContext, tenantSetupStep),
+		p.newSingleStepWithContext(setupContext, startStep),
 		p.newSingleStepWithContext(setupContext, waitForStableClusterVersionStep{
 			nodes:              p.currentContext.Tenant.Descriptor.Nodes,
 			timeout:            p.options.upgradeTimeout,
@@ -814,17 +798,17 @@ func (p *testPlanner) initUpgradeSteps(
 // the same and then run any after-finalization hooks the user may
 // have provided.
 func (p *testPlanner) afterUpgradeSteps(
-	service *ServiceContext, scheduleHooks bool,
-) (steps []testStep) {
+	service *ServiceContext, fromVersion, toVersion *clusterupgrade.Version, scheduleHooks bool,
+) []testStep {
 	p.setFinalizing(service, false)
 	p.setStage(service, AfterUpgradeFinalizedStage)
-
 	if scheduleHooks {
-		steps = append(steps,
-			p.concurrently(afterTestLabel, p.hooks.AfterUpgradeFinalizedSteps(p.currentContext, p.prng))...)
+		return p.concurrently(afterTestLabel, p.hooks.AfterUpgradeFinalizedSteps(p.currentContext, p.prng))
 	}
-	// if we are not scheduling hooks, return a nil slice.
-	return steps
+
+	// Currently, we only schedule user-provided hooks after the upgrade
+	// is finalized; if we are not scheduling hooks, return a nil slice.
+	return nil
 }
 
 func (p *testPlanner) upgradeSteps(
@@ -1217,7 +1201,11 @@ func (up *upgradePlan) Add(steps []testStep) {
 	up.sequentialStep.steps = append(up.sequentialStep.steps, steps...)
 }
 
-func (plan *TestPlan) walkSteps(steps []testStep, f func(*singleStep, bool) []testStep) []testStep {
+// mapSingleSteps iterates over every step in the test plan and calls
+// the given function `f` for every `singleStep` (i.e., every step
+// that actually performs an action). The function should return a
+// list of testSteps that replace the given step in the plan.
+func (plan *TestPlan) mapSingleSteps(f func(*singleStep, bool) []testStep) {
 	var mapStep func(testStep, bool) []testStep
 	mapStep = func(step testStep, isConcurrent bool) []testStep {
 		switch s := step.(type) {
@@ -1261,61 +1249,47 @@ func (plan *TestPlan) walkSteps(steps []testStep, f func(*singleStep, bool) []te
 			return f(ss, isConcurrent)
 		}
 	}
-	var newSteps []testStep
-	for _, s := range steps {
-		newSteps = append(newSteps, mapStep(s, false)...)
+
+	mapSteps := func(steps []testStep) []testStep {
+		var newSteps []testStep
+		for _, s := range steps {
+			newSteps = append(newSteps, mapStep(s, false)...)
+		}
+
+		return newSteps
 	}
 
-	return newSteps
-}
+	mapUpgrades := func(upgrades []*upgradePlan) []*upgradePlan {
+		var newUpgrades []*upgradePlan
+		for _, upgrade := range upgrades {
+			newUpgrades = append(newUpgrades, &upgradePlan{
+				from: upgrade.from,
+				to:   upgrade.to,
+				sequentialStep: sequentialRunStep{
+					label: upgrade.sequentialStep.label,
+					steps: mapSteps(upgrade.sequentialStep.steps),
+				},
+			})
+		}
 
-// mapSingleSteps iterates over every step in the test plan and calls
-// the given function `f` for every `singleStep` (i.e., every step
-// that actually performs an action). The function should return a
-// list of testSteps that replace the given step in the plan.
-func (plan *TestPlan) mapSingleSteps(f func(*singleStep, bool) []testStep) {
-	plan.setup.systemSetup = plan.mapServiceSetup(plan.setup.systemSetup, f)
-	plan.setup.tenantSetup = plan.mapServiceSetup(plan.setup.tenantSetup, f)
-	plan.initSteps = plan.walkSteps(plan.initSteps, f)
-	plan.upgrades = plan.mapUpgrades(plan.upgrades, f)
-}
-
-func (plan *TestPlan) mapServiceSetup(
-	s *serviceSetup, f func(*singleStep, bool) []testStep,
-) *serviceSetup {
-	if s == nil {
-		return nil
+		return newUpgrades
 	}
 
-	return &serviceSetup{
-		steps:    plan.walkSteps(s.steps, f),
-		upgrades: plan.mapUpgrades(s.upgrades, f),
-	}
-}
+	mapServiceSetup := func(s *serviceSetup) *serviceSetup {
+		if s == nil {
+			return nil
+		}
 
-func (plan *TestPlan) mapUpgrades(
-	upgrades []*upgradePlan, f func(*singleStep, bool) []testStep,
-) []*upgradePlan {
-	var newUpgrades []*upgradePlan
-	for _, upgrade := range upgrades {
-		newUpgrades = append(newUpgrades, &upgradePlan{
-			from: upgrade.from,
-			to:   upgrade.to,
-			sequentialStep: sequentialRunStep{
-				label: upgrade.sequentialStep.label,
-				steps: plan.walkSteps(upgrade.sequentialStep.steps, f),
-			},
-		})
+		return &serviceSetup{
+			steps:    mapSteps(s.steps),
+			upgrades: mapUpgrades(s.upgrades),
+		}
 	}
 
-	return newUpgrades
-}
-
-func (plan *TestPlan) iterateSingleSteps(f func(*singleStep, bool) []testStep) {
-	plan.mapServiceSetup(plan.setup.systemSetup, f)
-	plan.mapServiceSetup(plan.setup.tenantSetup, f)
-	plan.walkSteps(plan.initSteps, f)
-	plan.mapUpgrades(plan.upgrades, f)
+	plan.setup.systemSetup = mapServiceSetup(plan.setup.systemSetup)
+	plan.setup.tenantSetup = mapServiceSetup(plan.setup.tenantSetup)
+	plan.initSteps = mapSteps(plan.initSteps)
+	plan.upgrades = mapUpgrades(plan.upgrades)
 }
 
 func newStepIndex(plan *TestPlan) stepIndex {
@@ -1749,7 +1723,6 @@ func (plan *TestPlan) prettyPrintInternal(debug bool) string {
 	var out strings.Builder
 	allSteps := plan.Steps()
 	for i, step := range allSteps {
-
 		plan.prettyPrintStep(&out, step, treeBranchString(i, len(allSteps)), debug)
 	}
 
@@ -1770,20 +1743,6 @@ func (plan *TestPlan) prettyPrintInternal(debug bool) string {
 		}
 
 		addLine("Mutators", strings.Join(mutatorNames, ", "))
-	}
-	// Extract user hooks from the plan.
-	userHooks := make(map[string]string)
-	plan.iterateSingleSteps(func(ss *singleStep, _ bool) []testStep {
-		if hook, ok := ss.impl.(runHookStep); ok {
-			userHooks[hook.hook.id] = hook.hook.name
-		}
-		return nil
-	})
-	if len(userHooks) > 0 {
-		names := slices.Collect(maps.Values(userHooks))
-		// N.B. sort the names to ensure deterministic output.
-		sort.Strings(names)
-		addLine("Hooks", strings.Join(names, ", "))
 	}
 
 	return fmt.Sprintf(
@@ -1832,7 +1791,7 @@ func (plan *TestPlan) prettyPrintStep(
 		}
 
 		out.WriteString(fmt.Sprintf(
-			"%s %s%s (%d)%s\n", prefix, ss.impl.Description(debug), extras, ss.ID, debugInfo,
+			"%s %s%s (%d)%s\n", prefix, ss.impl.Description(), extras, ss.ID, debugInfo,
 		))
 	}
 

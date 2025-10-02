@@ -33,10 +33,9 @@ import (
 // survives a temporary disk stall through failing over to a secondary disk.
 func registerDiskStalledWALFailover(r registry.Registry) {
 	r.Add(registry.TestSpec{
-		Name:  "disk-stalled/wal-failover/among-stores",
-		Owner: registry.OwnerStorage,
-		// TODO(darryl): Enable FIPS once we can upgrade to Ubuntu 22 and lsblk outputs in the same format.
-		Cluster:             r.MakeClusterSpec(4, spec.CPU(16), spec.WorkloadNode(), spec.ReuseNone(), spec.SSD(2), spec.Arch(spec.AllExceptFIPS)),
+		Name:                "disk-stalled/wal-failover/among-stores",
+		Owner:               registry.OwnerStorage,
+		Cluster:             r.MakeClusterSpec(4, spec.CPU(16), spec.WorkloadNode(), spec.ReuseNone(), spec.SSD(2)),
 		CompatibleClouds:    registry.OnlyGCE,
 		Suites:              registry.Suites(registry.Nightly),
 		Timeout:             3 * time.Hour,
@@ -210,8 +209,7 @@ func registerDiskStalledDetection(r registry.Registry) {
 			Owner: registry.OwnerStorage,
 			// Use PDs in an attempt to work around flakes encountered when using SSDs.
 			// See #97968.
-			// TODO(darryl): Enable FIPS once we can upgrade to Ubuntu 22 and use cgroups v2 for disk stalls.
-			Cluster:             r.MakeClusterSpec(4, spec.WorkloadNode(), spec.ReuseNone(), spec.DisableLocalSSD(), spec.Arch(spec.AllExceptFIPS)),
+			Cluster:             r.MakeClusterSpec(4, spec.WorkloadNode(), spec.ReuseNone(), spec.DisableLocalSSD()),
 			CompatibleClouds:    registry.OnlyGCE,
 			Suites:              registry.Suites(registry.Nightly),
 			Timeout:             30 * time.Minute,
@@ -439,8 +437,6 @@ func registerDiskStalledWALFailoverWithProgress(r registry.Registry) {
 			spec.GCEVolumeCount(2),
 			spec.GCEVolumeType("pd-ssd"),
 			spec.VolumeSize(100),
-			// TODO(darryl): Enable FIPS once we can upgrade to Ubuntu 22 and use cgroups v2 for disk stalls.
-			spec.Arch(spec.AllExceptFIPS),
 		),
 		CompatibleClouds:    registry.OnlyGCE,
 		Suites:              registry.Suites(registry.Nightly),
