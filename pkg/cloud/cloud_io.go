@@ -242,7 +242,6 @@ type ReaderOpenerAt func(ctx context.Context, pos int64) (io.ReadCloser, int64, 
 type ResumingReader struct {
 	Opener       ReaderOpenerAt   // Get additional content
 	Reader       io.ReadCloser    // Currently opened reader
-	ReaderSpan   *tracing.Span    // Span for the current reader, if Reader is non-nil
 	Filename     string           // Used for logging
 	Pos          int64            // How much data was received so far
 	Size         int64            // Total size of the file
@@ -285,10 +284,6 @@ func NewResumingReader(
 
 // Open opens the reader at its current offset.
 func (r *ResumingReader) Open(ctx context.Context) error {
-	if r.Reader != nil {
-		return errors.AssertionFailedf("reader already open")
-	}
-
 	if r.Size > 0 && r.Pos >= r.Size {
 		// Don't try to open a file if the size has been set and the position is
 		// at size. This generally results in an invalid range error for the
@@ -299,18 +294,10 @@ func (r *ResumingReader) Open(ctx context.Context) error {
 
 	return DelayedRetry(ctx, "Open", r.ErrFn, func() error {
 		var readErr error
-
-		ctx, span := tracing.ForkSpan(ctx, "resuming-reader")
 		r.Reader, r.Size, readErr = r.Opener(ctx, r.Pos)
 		if readErr != nil {
-			span.Finish()
 			return errors.Wrapf(readErr, "open %s", r.Filename)
 		}
-
-		// We hold onto the span for the lifetime of the reader because the reader
-		// may issue new HTTP requests after Open returns.
-		r.ReaderSpan = span
-
 		return nil
 	})
 }
@@ -353,9 +340,10 @@ func (r *ResumingReader) Read(ctx context.Context, p []byte) (int, error) {
 			}
 			log.Dev.Errorf(ctx, "Retry IO error: %s", lastErr)
 			lastErr = nil
-			// Ignore the error from Close(). We are already handling a read error
-			// so we know the handle is in a bad state.
-			_ = r.Close(ctx)
+			if r.Reader != nil {
+				r.Reader.Close()
+			}
+			r.Reader = nil
 		}
 	}
 
@@ -368,14 +356,10 @@ func (r *ResumingReader) Read(ctx context.Context, p []byte) (int, error) {
 
 // Close implements io.Closer.
 func (r *ResumingReader) Close(ctx context.Context) error {
-	if r.Reader == nil {
-		return nil
+	if r.Reader != nil {
+		return r.Reader.Close()
 	}
-
-	err := r.Reader.Close()
-	r.ReaderSpan.Finish()
-	r.Reader = nil
-	return err
+	return nil
 }
 
 // CheckHTTPContentRangeHeader parses Content-Range header and ensures that

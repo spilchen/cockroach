@@ -825,7 +825,7 @@ func (c *Counter) Inc(v int64) {
 // maintained elsewhere.
 func (c *Counter) Update(val int64) {
 	if buildutil.CrdbTestBuild {
-		if prev := c.count.Load(); val < prev && val != 0 {
+		if prev := c.count.Load(); val < prev {
 			panic(fmt.Sprintf("Counters should not decrease, prev: %d, new: %d.", prev, val))
 		}
 	}
@@ -1446,7 +1446,7 @@ func (cv *CounterVec) Update(labels map[string]string, v int64) {
 	}
 
 	currentValue := cv.Count(labels)
-	if currentValue > v && v != 0 {
+	if currentValue > v {
 		panic(fmt.Sprintf("Counters should not decrease, prev: %d, new: %d.", currentValue, v))
 	}
 
