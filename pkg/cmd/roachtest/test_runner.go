@@ -148,8 +148,6 @@ type testRunner struct {
 		skipClusterWipeOnAttach bool
 		// disableIssue disables posting GitHub issues for test failures.
 		disableIssue bool
-		// dryRunIssuePosting enables dry-run mode for GitHub issue posting.
-		dryRunIssuePosting bool
 		// overrideShutdownPromScrapeInterval overrides the default time a test runner waits to
 		// shut down, normally used to ensure a remote prometheus server has scraped the roachtest
 		// endpoint.
@@ -217,7 +215,6 @@ func newTestRunner(cr *clusterRegistry, stopper *stop.Stopper) *testRunner {
 	}
 	r.config.skipClusterWipeOnAttach = !roachtestflags.ClusterWipe
 	r.config.disableIssue = roachtestflags.DisableIssue
-	r.config.dryRunIssuePosting = roachtestflags.DryRunIssuePosting
 	r.workersMu.workers = make(map[string]*workerStatus)
 	return r
 }
@@ -2416,6 +2413,10 @@ func getTestParameters(t *testImpl, c *clusterImpl, createOpts *vm.CreateOpts) m
 		"coverageBuild":          fmt.Sprintf("%t", t.goCoverEnabled),
 	}
 
+	// Emit CPU architecture only if it was specified; otherwise, it's captured below, assuming cluster was created.
+	if spec.Cluster.Arch != "" {
+		clusterParams["arch"] = string(spec.Cluster.Arch)
+	}
 	// These params can be probabilistically set, so we pass them here to
 	// show what their actual values are in the posted issue.
 	if createOpts != nil {
@@ -2425,7 +2426,11 @@ func getTestParameters(t *testImpl, c *clusterImpl, createOpts *vm.CreateOpts) m
 
 	if c != nil {
 		clusterParams["encrypted"] = fmt.Sprintf("%v", c.encAtRest)
-		clusterParams["arch"] = string(c.arch)
+		if spec.Cluster.Arch == "" {
+			// N.B. when Arch is specified, it cannot differ from cluster's arch.
+			// Hence, we only emit when arch was unspecified.
+			clusterParams["arch"] = string(c.arch)
+		}
 
 		c.destroyState.mu.Lock()
 		saved, savedMsg := c.destroyState.mu.saved, c.destroyState.mu.savedMsg

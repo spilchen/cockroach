@@ -664,7 +664,7 @@ layers:
       derivative: NON_NEGATIVE_DERIVATIVE
     - name: sql.routine.delete.started.count
       exported_name: sql_routine_delete_started_count
-      labeled_name: 'sql.count{query_type: routine-started-delete}'
+      labeled_name: 'sql.started.count{query_type: routine-started-delete}'
       description: Number of SQL DELETE statements started within routine invocation
       y_axis_label: SQL Statements
       type: COUNTER
@@ -674,7 +674,7 @@ layers:
       how_to_use: This high-level metric reflects workload volume. Monitor this metric to identify abnormal application behavior or patterns over time. If abnormal patterns emerge, apply the metric's time range to the SQL Activity pages to investigate interesting outliers or patterns. For example, on the Transactions page and the Statements page, sort on the Execution Count column. To find problematic sessions, on the Sessions page, sort on the Transaction Count column. Find the sessions with high transaction counts and trace back to a user or application.
     - name: sql.routine.delete.started.count.internal
       exported_name: sql_routine_delete_started_count_internal
-      labeled_name: 'sql.count{query_type: routine-started-delete, query_internal: true}'
+      labeled_name: 'sql.started.count{query_type: routine-started-delete, query_internal: true}'
       description: Number of SQL DELETE statements started within routine invocation (internal queries)
       y_axis_label: SQL Internal Statements
       type: COUNTER
@@ -703,7 +703,7 @@ layers:
       derivative: NON_NEGATIVE_DERIVATIVE
     - name: sql.routine.insert.started.count
       exported_name: sql_routine_insert_started_count
-      labeled_name: 'sql.count{query_type: routine-started-insert}'
+      labeled_name: 'sql.started.count{query_type: routine-started-insert}'
       description: Number of SQL INSERT statements started within routine invocation
       y_axis_label: SQL Statements
       type: COUNTER
@@ -713,7 +713,7 @@ layers:
       how_to_use: This high-level metric reflects workload volume. Monitor this metric to identify abnormal application behavior or patterns over time. If abnormal patterns emerge, apply the metric's time range to the SQL Activity pages to investigate interesting outliers or patterns. For example, on the Transactions page and the Statements page, sort on the Execution Count column. To find problematic sessions, on the Sessions page, sort on the Transaction Count column. Find the sessions with high transaction counts and trace back to a user or application.
     - name: sql.routine.insert.started.count.internal
       exported_name: sql_routine_insert_started_count_internal
-      labeled_name: 'sql.count{query_type: routine-started-insert, query_internal: true}'
+      labeled_name: 'sql.started.count{query_type: routine-started-insert, query_internal: true}'
       description: Number of SQL INSERT statements started within routine invocation (internal queries)
       y_axis_label: SQL Internal Statements
       type: COUNTER
@@ -742,7 +742,7 @@ layers:
       derivative: NON_NEGATIVE_DERIVATIVE
     - name: sql.routine.select.started.count
       exported_name: sql_routine_select_started_count
-      labeled_name: 'sql.count{query_type: routine-started-select}'
+      labeled_name: 'sql.started.count{query_type: routine-started-select}'
       description: Number of SQL SELECT statements started within routine invocation
       y_axis_label: SQL Statements
       type: COUNTER
@@ -752,7 +752,7 @@ layers:
       how_to_use: This high-level metric reflects workload volume. Monitor this metric to identify abnormal application behavior or patterns over time. If abnormal patterns emerge, apply the metric's time range to the SQL Activity pages to investigate interesting outliers or patterns. For example, on the Transactions page and the Statements page, sort on the Execution Count column. To find problematic sessions, on the Sessions page, sort on the Transaction Count column. Find the sessions with high transaction counts and trace back to a user or application.
     - name: sql.routine.select.started.count.internal
       exported_name: sql_routine_select_started_count_internal
-      labeled_name: 'sql.count{query_type: routine-started-select, query_internal: true}'
+      labeled_name: 'sql.started.count{query_type: routine-started-select, query_internal: true}'
       description: Number of SQL SELECT statements started within routine invocation (internal queries)
       y_axis_label: SQL Internal Statements
       type: COUNTER
@@ -781,7 +781,7 @@ layers:
       derivative: NON_NEGATIVE_DERIVATIVE
     - name: sql.routine.update.started.count
       exported_name: sql_routine_update_started_count
-      labeled_name: 'sql.count{query_type: routine-started-update}'
+      labeled_name: 'sql.started.count{query_type: routine-started-update}'
       description: Number of SQL UPDATE statements started within routine invocation
       y_axis_label: SQL Statements
       type: COUNTER
@@ -791,7 +791,7 @@ layers:
       how_to_use: This high-level metric reflects workload volume. Monitor this metric to identify abnormal application behavior or patterns over time. If abnormal patterns emerge, apply the metric's time range to the SQL Activity pages to investigate interesting outliers or patterns. For example, on the Transactions page and the Statements page, sort on the Execution Count column. To find problematic sessions, on the Sessions page, sort on the Transaction Count column. Find the sessions with high transaction counts and trace back to a user or application.
     - name: sql.routine.update.started.count.internal
       exported_name: sql_routine_update_started_count_internal
-      labeled_name: 'sql.count{query_type: routine-started-update, query_internal: true}'
+      labeled_name: 'sql.started.count{query_type: routine-started-update, query_internal: true}'
       description: Number of SQL UPDATE statements started within routine invocation (internal queries)
       y_axis_label: SQL Internal Statements
       type: COUNTER
@@ -5290,6 +5290,14 @@ layers:
       unit: COUNT
       aggregation: AVG
       derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.inspect.issues_found
+      exported_name: jobs_inspect_issues_found
+      description: Total count of issues found by INSPECT jobs
+      y_axis_label: Issues
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
     - name: jobs.inspect.protected_age_sec
       exported_name: jobs_inspect_protected_age_sec
       labeled_name: 'jobs.protected_age_sec{type: inspect}'
@@ -5331,6 +5339,22 @@ layers:
       labeled_name: 'jobs.resume{name: inspect, status: retry_error}'
       description: Number of inspect jobs which failed with a retriable error
       y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.inspect.runs
+      exported_name: jobs_inspect_runs
+      description: Number of INSPECT jobs executed
+      y_axis_label: Jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.inspect.runs_with_issues
+      exported_name: jobs_inspect_runs_with_issues
+      description: Number of INSPECT jobs that found at least one issue
+      y_axis_label: Jobs
       type: COUNTER
       unit: COUNT
       aggregation: AVG
@@ -7194,14 +7218,6 @@ layers:
       unit: NANOSECONDS
       aggregation: AVG
       derivative: NONE
-    - name: physical_replication.catchup_ranges
-      exported_name: physical_replication_catchup_ranges
-      description: Source side ranges undergoing catch up scans
-      y_axis_label: Ranges
-      type: GAUGE
-      unit: COUNT
-      aggregation: AVG
-      derivative: NONE
     - name: physical_replication.commit_latency
       exported_name: physical_replication_commit_latency
       description: 'Event commit latency: a difference between event MVCC timestamp and the time it was flushed into disk. If we batch events, then the difference between the oldest event in the batch and flush is recorded'
@@ -7262,14 +7278,6 @@ layers:
       exported_name: physical_replication_running
       description: Number of currently running replication streams
       y_axis_label: Replication Streams
-      type: GAUGE
-      unit: COUNT
-      aggregation: AVG
-      derivative: NONE
-    - name: physical_replication.scanning_ranges
-      exported_name: physical_replication_scanning_ranges
-      description: Source side ranges undergoing an initial scan
-      y_axis_label: Ranges
       type: GAUGE
       unit: COUNT
       aggregation: AVG

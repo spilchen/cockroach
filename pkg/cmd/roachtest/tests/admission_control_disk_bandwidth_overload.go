@@ -40,9 +40,8 @@ func registerDiskBandwidthOverload(r registry.Registry) {
 		// for IBM tests, and this test was disabled on Azure as of 05/2025.
 		CompatibleClouds: registry.AllExceptAzure,
 		// TODO(aaditya): change to weekly once the test stabilizes.
-		Suites: registry.Suites(registry.Nightly),
-		// TODO(darryl): Enable FIPS once we can upgrade to Ubuntu 22 and use cgroups v2 for disk stalls.
-		Cluster: r.MakeClusterSpec(2, spec.CPU(8), spec.WorkloadNode(), spec.ReuseNone(), spec.Arch(spec.AllExceptFIPS)),
+		Suites:  registry.Suites(registry.Nightly),
+		Cluster: r.MakeClusterSpec(2, spec.CPU(8), spec.WorkloadNode(), spec.ReuseNone()),
 		Leases:  registry.MetamorphicLeases,
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			if c.Spec().NodeCount != 2 {

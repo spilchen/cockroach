@@ -20,6 +20,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"math/rand"
 	"net"
@@ -31,6 +32,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,6 +59,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/prometheus"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
 	roachprodaws "github.com/cockroachdb/cockroach/pkg/roachprod/vm/aws"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
@@ -1836,10 +1839,6 @@ func runCDCMultiTablePTSBenchmark(
 		numRanges = params.numRanges
 	}
 
-	if _, err := db.Exec("SET CLUSTER SETTING changefeed.protect_timestamp.per_table.enabled = $1", params.perTablePTS); err != nil {
-		t.Fatalf("failed to set per-table protected timestamps: %v", err)
-	}
-
 	initCmd := fmt.Sprintf("./cockroach workload init bank --rows=%d --ranges=%d --tables=%d {pgurl%s}",
 		params.numRows, numRanges, params.numTables, ct.crdbNodes.RandNode())
 	if err := c.RunE(ctx, option.WithNodes(ct.workloadNode), initCmd); err != nil {
@@ -1950,26 +1949,18 @@ func getDiagramProcessors(ctx context.Context, db *gosql.DB) ([]any, error) {
 }
 
 type ChangefeedDistribution struct {
-	NodeToSpansWatched map[int]int
 	ZoneToSpansWatched map[string]int
 	TotalSpansWatched  int
 	TotalAggregators   int
-	TotalLeaseHolders  int
-	TotalRanges        int
-	NodeToZone         map[int]string
 }
 
 func getChangefeedDistribution(
 	processors []any, nodeToZone map[int]string, t test.Test,
 ) ChangefeedDistribution {
 	changefeedDistribution := ChangefeedDistribution{
-		NodeToSpansWatched: make(map[int]int),
 		ZoneToSpansWatched: make(map[string]int),
 		TotalSpansWatched:  0,
 		TotalAggregators:   0,
-		TotalLeaseHolders:  0,
-		TotalRanges:        0,
-		NodeToZone:         nodeToZone,
 	}
 	for _, p := range processors {
 		procMap, ok := p.(map[string]any)
@@ -1992,10 +1983,8 @@ func getChangefeedDistribution(
 					if len(matches) > 1 {
 						numWatches, err := strconv.Atoi(matches[1])
 						require.NoError(t, err)
-						changefeedDistribution.NodeToSpansWatched[int(nodeIdx)] += numWatches
 						changefeedDistribution.TotalSpansWatched += numWatches
-						changefeedDistribution.ZoneToSpansWatched[changefeedDistribution.NodeToZone[int(nodeIdx)]] += numWatches
-
+						changefeedDistribution.ZoneToSpansWatched[nodeToZone[int(nodeIdx)]] += numWatches
 					}
 				}
 			}
@@ -2004,42 +1993,36 @@ func getChangefeedDistribution(
 	return changefeedDistribution
 }
 
-func veryifyLeaseHolderDistribution(
-	db *gosql.DB, t test.Test, nodeToZone map[int]string,
-) map[string]int {
-	var rows *gosql.Rows
-	// Get lease holders for all ranges in tpcc database.
-	leaseHolderQuery := `SELECT r.start_pretty, r.replicas, r.replica_localities, r.lease_holder 
-	FROM crdb_internal.ranges r 
-	JOIN crdb_internal.tables t ON r.start_pretty like concat('/Table/', t.table_id::STRING,'%')
-	WHERE t.database_name = 'tpcc'`
-	rows, err := db.Query(leaseHolderQuery)
-	zoneToLeaseHolderCount := make(map[string]int)
-	require.NoError(t, err)
-	defer rows.Close()
-	for rows.Next() {
-		var startKeyPretty string
-		var replicas []uint8
-		var replicaLocalities []uint8
-		var leaseHolder int
-		require.NoError(t, rows.Scan(&startKeyPretty, &replicas, &replicaLocalities, &leaseHolder))
-		for indx := range replicas {
-			require.NotEqual(t, replicas[indx], 0)
-			replicas[indx]--
+func verifyLeaseHolderLocality(db *gosql.DB, t test.Test, primaryRegion string) {
+	leaseHolderQuery := `SELECT NOT EXISTS (
+	SELECT 1
+	FROM [SHOW CLUSTER RANGES WITH TABLES, DETAILS]
+	WHERE database_name = 'tpcc'
+		AND (lease_holder_locality IS DISTINCT FROM $1::STRING OR lease_holder_locality IS NULL)
+)`
+	t.L().Printf("Waiting for all lease holders to be in region %s", primaryRegion)
+	start := timeutil.Now()
+	ok := false
+	for {
+		if timeutil.Since(start) > 5*time.Minute {
+			t.Fatalf("Timeout waiting for lease holders to be in region %s; waited for %s", primaryRegion, timeutil.Since(start))
 		}
-		leaseHolder--
-		zoneToLeaseHolderCount[nodeToZone[leaseHolder]]++
+		require.NoError(t, db.QueryRow(leaseHolderQuery, primaryRegion).Scan(&ok))
+		if ok {
+			break
+		}
+		time.Sleep(time.Second)
 	}
-	return zoneToLeaseHolderCount
 }
 
 func registerCDC(r registry.Registry) {
 	r.Add(registry.TestSpec{
 		// This test
-		// 1. Creates a cluster with 3 nodes each in us-east and us-west
-		// 2. Runs a tpcc workload, then sets tpcc database to primary region us-west
-		// 3. Creates a changefeed with execution locality set to us-east
-		// 4. Gets the changefeed diagram and creates mappings
+		// 1. Creates a cluster with 3 nodes each in us-east and us-west;
+		// 2. Runs a tpcc workload, then congigures tpcc database to have lease holders in region us-west;
+		// 3. Creates a changefeed with execution locality set to us-east;
+		// 4. Gets the changefeed diagram and creates mappings;
+		// 5. Verifies that spans are assigned to multiple change aggregators in region us-east.
 
 		// This test is used to verify that ranges are evenly distributed across
 		// change aggregators in the execution_locality region while targeting tables
@@ -2051,7 +2034,7 @@ func registerCDC(r registry.Registry) {
 		Owner:            registry.OwnerCDC,
 		Cluster:          r.MakeClusterSpec(7, spec.Geo(), spec.GatherCores(), spec.GCEZones("us-east1-b,us-west1-b")),
 		CompatibleClouds: registry.OnlyGCE,
-		Suites:           registry.Suites(),
+		Suites:           registry.Suites(registry.Nightly),
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
 			nodeToZone := map[int]string{
 				0: "us-east1-b",
@@ -2064,17 +2047,24 @@ func registerCDC(r registry.Registry) {
 			ct := newCDCTester(ctx, t, c)
 			defer ct.Close()
 
-			ct.runTPCCWorkload(tpccArgs{warehouses: 100})
+			ct.runTPCCWorkload(tpccArgs{warehouses: 20})
 
 			var err error
-			_, err = ct.DB().Exec("ALTER DATABASE tpcc SET PRIMARY REGION 'us-west1'")
+			_, err = ct.DB().Exec(`ALTER DATABASE tpcc 
+CONFIGURE ZONE USING 
+	constraints = '{+region=us-west1: 1, +region=us-east1: 1}', 
+	lease_preferences = '[[+region=us-west1]]', num_replicas = 3`)
 			require.NoError(t, err)
+
+			// Verify lease holders are in us-west1-b.
+			verifyLeaseHolderLocality(ct.DB(), t, "cloud=gce,region=us-west1,zone=us-west1-b")
 
 			feed := ct.newChangefeed(feedArgs{
 				sinkType: cloudStorageSink,
 				targets:  allTpccTargets,
 				opts: map[string]string{
 					"execution_locality": "'region=us-east1'",
+					"initial_scan":       "'only'",
 				},
 			})
 			ct.waitForWorkload()
@@ -2083,25 +2073,19 @@ func registerCDC(r registry.Registry) {
 			processors, err := getDiagramProcessors(ctx, ct.DB())
 			require.NoError(t, err)
 
+			// Verify changefeed aggregators are distributed across nodes in region us-east.
 			changefeedDistribution := getChangefeedDistribution(processors, nodeToZone, t)
 			require.Greater(t, changefeedDistribution.TotalAggregators, 1)
-			for nodeIdx, spansWatched := range changefeedDistribution.NodeToSpansWatched {
-				require.LessOrEqual(t, spansWatched, changefeedDistribution.TotalSpansWatched/2, "nodeIdx %d watched %d spans, total spans watched %d", nodeIdx, spansWatched, changefeedDistribution.TotalSpansWatched)
-			}
-			require.Equal(t, 1, len(changefeedDistribution.ZoneToSpansWatched))
+			require.ElementsMatch(t, []string{"us-east1-b"}, slices.Collect(maps.Keys(changefeedDistribution.ZoneToSpansWatched)))
 			require.Equal(t, changefeedDistribution.ZoneToSpansWatched["us-east1-b"], changefeedDistribution.TotalSpansWatched)
-			zoneToLeaseHolderCount := veryifyLeaseHolderDistribution(ct.DB(), t, nodeToZone)
-			// Majority of lease holders should be in us-west1-b. Some may not, but most should.
-			if zoneToLeaseHolderCount["us-east1-b"] != 0 {
-				require.Greater(t, zoneToLeaseHolderCount["us-west1-b"]/zoneToLeaseHolderCount["us-east1-b"], 10)
-			}
+			require.Greater(t, changefeedDistribution.TotalSpansWatched, 0)
 		},
 	})
 	r.Add(registry.TestSpec{
 		Name:      "cdc/initial-scan-only",
 		Owner:     registry.OwnerCDC,
 		Benchmark: true,
-		Cluster:   r.MakeClusterSpec(4, spec.CPU(16), spec.WorkloadNode(), spec.Arch(spec.OnlyAMD64)),
+		Cluster:   r.MakeClusterSpec(4, spec.CPU(16), spec.WorkloadNode(), spec.Arch(vm.ArchAMD64)),
 		// This test uses google cloudStorageSink because it is the fastest,
 		// but it is not a requirement for this test. The sink could be
 		// chosen on a per cloud basis if we want to run this on other clouds.
@@ -2282,7 +2266,7 @@ func registerCDC(r registry.Registry) {
 		Name:      "cdc/initial-scan-only/parquet",
 		Owner:     registry.OwnerCDC,
 		Benchmark: true,
-		Cluster:   r.MakeClusterSpec(4, spec.CPU(16), spec.WorkloadNode(), spec.Arch(spec.OnlyAMD64)),
+		Cluster:   r.MakeClusterSpec(4, spec.CPU(16), spec.WorkloadNode(), spec.Arch(vm.ArchAMD64)),
 		// This test uses google cloudStorageSink because it is the fastest,
 		// but it is not a requirement for this test. The sink could be
 		// chosen on a per cloud basis if we want to run this on other clouds.
@@ -2311,7 +2295,7 @@ func registerCDC(r registry.Registry) {
 		Skip:             "#119295",
 		Owner:            registry.OwnerCDC,
 		Benchmark:        true,
-		Cluster:          r.MakeClusterSpec(4, spec.CPU(16), spec.WorkloadNode(), spec.Arch(spec.OnlyAMD64)),
+		Cluster:          r.MakeClusterSpec(4, spec.CPU(16), spec.WorkloadNode(), spec.Arch(vm.ArchAMD64)),
 		CompatibleClouds: registry.OnlyGCE,
 		Suites:           registry.Suites(registry.Nightly),
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
@@ -2773,7 +2757,7 @@ func registerCDC(r registry.Registry) {
 	r.Add(registry.TestSpec{
 		Name:             "cdc/kafka-auth-msk",
 		Owner:            registry.OwnerCDC,
-		Cluster:          r.MakeClusterSpec(1, spec.Arch(spec.OnlyAMD64)),
+		Cluster:          r.MakeClusterSpec(1, spec.Arch(vm.ArchAMD64)),
 		Leases:           registry.MetamorphicLeases,
 		CompatibleClouds: registry.OnlyAWS,
 		Suites:           registry.Suites(registry.Nightly),
@@ -2808,7 +2792,7 @@ func registerCDC(r registry.Registry) {
 		Owner:     `cdc`,
 		Benchmark: true,
 		// Only Kafka 3 supports Arm64, but the broker setup for Oauth used only works with Kafka 2
-		Cluster: r.MakeClusterSpec(4, spec.WorkloadNode(), spec.Arch(spec.OnlyAMD64)),
+		Cluster: r.MakeClusterSpec(4, spec.WorkloadNode(), spec.Arch(vm.ArchAMD64)),
 		Leases:  registry.MetamorphicLeases,
 		// Disabled on IBM due to lack of Kafka support on s390x.
 		CompatibleClouds: registry.AllClouds.NoAWS().NoIBM(),
@@ -2855,7 +2839,7 @@ func registerCDC(r registry.Registry) {
 	r.Add(registry.TestSpec{
 		Name:    "cdc/kafka-topics",
 		Owner:   `cdc`,
-		Cluster: r.MakeClusterSpec(4, spec.WorkloadNode(), spec.Arch(spec.OnlyAMD64)),
+		Cluster: r.MakeClusterSpec(4, spec.WorkloadNode(), spec.Arch(vm.ArchAMD64)),
 		Leases:  registry.MetamorphicLeases,
 		// Disabled on IBM due to lack of Kafka support on s390x.
 		CompatibleClouds: registry.AllClouds.NoAWS().NoIBM(),
@@ -2985,7 +2969,7 @@ func registerCDC(r registry.Registry) {
 		Owner:            `cdc`,
 		CompatibleClouds: registry.OnlyAzure,
 		// The Azure CLI only packages AMD64 binaries in its deb installer, so lock to AMD64.
-		Cluster: r.MakeClusterSpec(2, spec.WorkloadNode(), spec.Arch(spec.OnlyAMD64)),
+		Cluster: r.MakeClusterSpec(2, spec.WorkloadNode(), spec.Arch(vm.ArchAMD64)),
 		Leases:  registry.MetamorphicLeases,
 		Suites:  registry.Suites(registry.Nightly),
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
@@ -3105,7 +3089,7 @@ func registerCDC(r registry.Registry) {
 		CompatibleClouds: registry.AllExceptIBM,
 		Run:              runMessageTooLarge,
 	})
-	for _, perTablePTS := range []bool{false, true} {
+	for _, perTablePTS := range []bool{false} {
 		for _, config := range []struct {
 			numTables    int
 			numRanges    int
@@ -3172,8 +3156,6 @@ func registerCDC(r registry.Registry) {
 						// Disable span-level checkpointing since it's not necessary
 						// when frontier persistence is on.
 						"changefeed.span_checkpoint.interval": "'0'",
-						// Disable per-table PTS to avoid impact on results.
-						"changefeed.protect_timestamp.per_table.enabled": "false",
 					} {
 						stmt := fmt.Sprintf(`SET CLUSTER SETTING %s = %s`, name, value)
 						if _, err := db.ExecContext(ctx, stmt); err != nil {

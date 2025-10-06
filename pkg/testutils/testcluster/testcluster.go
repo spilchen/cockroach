@@ -281,16 +281,16 @@ func (tc *TestCluster) validateDefaultTestTenant(
 // validateDefaultDRPCOption checks that per-server args don't override
 // the top-level DefaultDRPCOption setting inconsistently.
 func (tc *TestCluster) validateDefaultDRPCOption(
-	t serverutils.TestFataler, nodes int, clusterDRPCOption base.DefaultTestDRPCOption,
+	t serverutils.TestFataler, nodes int, defaultDRPCOption base.DefaultTestDRPCOption,
 ) {
 	for i := range nodes {
 		if args, ok := tc.clusterArgs.ServerArgsPerNode[i]; ok &&
 			args.DefaultDRPCOption != base.TestDRPCUnset &&
-			args.DefaultDRPCOption != clusterDRPCOption {
+			args.DefaultDRPCOption != defaultDRPCOption {
 			tc.Stopper().Stop(context.Background())
 			t.Fatalf("improper use of DefaultDRPCOption in per-server args: %v vs %v\n"+
-				"Use the top-level ServerArgs to set the default DRPC option.",
-				args.DefaultDRPCOption, clusterDRPCOption)
+				"Tip: use the top-level ServerArgs to set the default DRPC option.",
+				args.DefaultDRPCOption, defaultDRPCOption)
 		}
 	}
 }

@@ -727,19 +727,19 @@ func startGCJob(
 }
 
 func (sc *SchemaChanger) execLogTags() *logtags.Buffer {
-	buf := logtags.BuildBuffer()
-	buf.Add("scExec", nil)
+	buf := &logtags.Buffer{}
+	buf = buf.Add("scExec", nil)
 
-	buf.Add("id", sc.descID)
+	buf = buf.Add("id", sc.descID)
 	if sc.mutationID != descpb.InvalidMutationID {
-		buf.Add("mutation", sc.mutationID)
+		buf = buf.Add("mutation", sc.mutationID)
 	}
 	if sc.droppedDatabaseID != descpb.InvalidID {
-		buf.Add("db", sc.droppedDatabaseID)
+		buf = buf.Add("db", sc.droppedDatabaseID)
 	} else if !sc.droppedSchemaIDs.Empty() {
-		buf.Add("schema", sc.droppedSchemaIDs)
+		buf = buf.Add("schema", sc.droppedSchemaIDs)
 	}
-	return buf.Finish()
+	return buf
 }
 
 // notFirstInLine checks if that this schema changer is at the front of the line

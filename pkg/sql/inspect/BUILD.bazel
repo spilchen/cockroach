@@ -6,6 +6,7 @@ go_library(
         "index_consistency_check.go",
         "inspect_job.go",
         "inspect_logger.go",
+        "inspect_metrics.go",
         "inspect_processor.go",
         "issue.go",
         "log_sink.go",
@@ -18,6 +19,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/jobs",
+        "//pkg/jobs/jobfrontier",
         "//pkg/jobs/jobspb",
         "//pkg/keys",
         "//pkg/kv/kvserver/protectedts/ptpb",
@@ -47,7 +49,9 @@ go_library(
         "//pkg/util/ctxgroup",
         "//pkg/util/hlc",
         "//pkg/util/log",
-        "//pkg/util/stop",
+        "//pkg/util/metric",
+        "//pkg/util/protoutil",
+        "//pkg/util/span",
         "//pkg/util/syncutil",
         "//pkg/util/timeutil",
         "//pkg/util/tracing",
@@ -62,6 +66,7 @@ go_test(
     srcs = [
         "index_consistency_check_test.go",
         "inspect_job_test.go",
+        "inspect_metrics_test.go",
         "inspect_processor_test.go",
         "issue_test.go",
         "main_test.go",
@@ -77,6 +82,7 @@ go_test(
     deps = [
         "//pkg/base",
         "//pkg/jobs",
+        "//pkg/jobs/jobfrontier",
         "//pkg/jobs/jobspb",
         "//pkg/keys",
         "//pkg/kv",
