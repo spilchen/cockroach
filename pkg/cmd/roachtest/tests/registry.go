@@ -78,6 +78,7 @@ func RegisterTests(r registry.Registry) {
 	registerInconsistency(r)
 	registerIndexes(r)
 	registerInspectThoughput(r)
+	registerInspectAdmissionControl(r)
 	registerInvariantCheckDetection(r)
 	registerJasyncSQL(r)
 	registerJepsen(r)
