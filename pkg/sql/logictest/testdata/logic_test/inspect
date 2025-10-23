@@ -506,6 +506,9 @@ subtest end
 
 subtest refcursor_stored_column
 
+let $inspect_old_ts
+SELECT cluster_logical_timestamp()
+
 statement ok
 CREATE TABLE refcursor_tbl (id INT PRIMARY KEY, a INT, c REFCURSOR);
 
@@ -530,5 +533,26 @@ succeeded  1
 
 statement ok
 DROP TABLE refcursor_tbl;
+
+subtest end
+
+subtest inspect_old_aost
+
+let $inspect_old_ts
+SELECT cluster_logical_timestamp()
+
+statement ok
+CREATE TABLE t_aost (c1 INT, INDEX idx_c1 (c1));
+
+statement ok
+INSERT INTO t_aost VALUES (1), (2), (3);
+
+# Test INSPECT with an AOST that predates the table.
+# This should fail because the table descriptor doesn't exist at that timestamp.
+statement error pq: relation "t_aost" does not exist
+INSPECT TABLE t_aost AS OF SYSTEM TIME $inspect_old_ts WITH OPTIONS INDEX (idx_c1);
+
+statement ok
+DROP TABLE t_aost;
 
 subtest end
