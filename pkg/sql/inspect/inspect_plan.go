@@ -49,6 +49,20 @@ func newInspectRun(
 ) (inspectRun, error) {
 	var run inspectRun
 
+	avoidLeased := false
+	if aost := p.ExtendedEvalContext().AsOfSystemTime; aost != nil {
+		avoidLeased = true
+	}
+
+	if stmt.AsOf.Expr != nil {
+		asOf, err := p.EvalAsOfTimestamp(ctx, stmt.AsOf)
+		if err != nil {
+			return inspectRun{}, err
+		}
+		run.asOfTimestamp = asOf.Timestamp
+		avoidLeased = true
+	}
+
 	switch stmt.Typ {
 	case tree.InspectTable:
 		if table, err := p.ResolveExistingObjectEx(ctx, stmt.Table, true /* required */, tree.ResolveRequireTableDesc); err != nil {
@@ -57,13 +71,21 @@ func newInspectRun(
 			run.table = table
 		}
 
-		if db, err := p.Descriptors().ByIDWithLeased(p.Txn()).Get().Database(ctx, run.table.GetParentID()); err != nil {
+		dbGetter := p.Descriptors().ByIDWithLeased(p.Txn())
+		if avoidLeased {
+			dbGetter = p.Descriptors().ByIDWithoutLeased(p.Txn())
+		}
+		if db, err := dbGetter.Get().Database(ctx, run.table.GetParentID()); err != nil {
 			return inspectRun{}, err
 		} else {
 			run.db = db
 		}
 	case tree.InspectDatabase:
-		if db, err := p.Descriptors().ByNameWithLeased(p.Txn()).Get().Database(ctx, stmt.Database.ToUnresolvedName().String()); err != nil {
+		dbGetter := p.Descriptors().ByNameWithLeased(p.Txn())
+		if avoidLeased {
+			dbGetter = p.Descriptors().ByName(p.Txn())
+		}
+		if db, err := dbGetter.Get().Database(ctx, stmt.Database.ToUnresolvedName().String()); err != nil {
 			return inspectRun{}, err
 		} else {
 			run.db = db
@@ -94,7 +116,11 @@ func newInspectRun(
 		// Named indexes specified.
 		switch stmt.Typ {
 		case tree.InspectTable:
-			schema, err := p.Descriptors().ByIDWithLeased(p.Txn()).Get().Schema(ctx, run.table.GetParentSchemaID())
+			schemaGetter := p.Descriptors().ByIDWithLeased(p.Txn())
+			if avoidLeased {
+				schemaGetter = p.Descriptors().ByIDWithoutLeased(p.Txn())
+			}
+			schema, err := schemaGetter.Get().Schema(ctx, run.table.GetParentSchemaID())
 			if err != nil {
 				return inspectRun{}, err
 			}
@@ -120,14 +146,6 @@ func newInspectRun(
 		} else {
 			run.checks = checks
 		}
-	}
-
-	if stmt.AsOf.Expr != nil {
-		asOf, err := p.EvalAsOfTimestamp(ctx, stmt.AsOf)
-		if err != nil {
-			return inspectRun{}, err
-		}
-		run.asOfTimestamp = asOf.Timestamp
 	}
 
 	return run, nil
