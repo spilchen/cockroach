@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree/treecmp"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/spanutils"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
@@ -193,6 +194,23 @@ func (c *indexConsistencyCheck) Start(
 		pkColIDs.Set(colID, i)
 		pkColDirs[i] = c.priIndex.GetKeyColumnDirection(i)
 	}
+	comparablePrefix := comparablePrefixLength(pkColTypes)
+	if comparablePrefix > len(pkColTypes) {
+		return errors.AssertionFailedf("comparablePrefix %d > len(pkColTypes) %d", comparablePrefix, len(pkColTypes))
+	}
+
+	// When comparablePrefix is 0, the leading primary key column doesn't support
+	// inequality comparisons (e.g., LTREE[] arrays). This means we cannot use
+	// WHERE clause predicates to restrict the query to just this processor's span.
+	// In this case, each distributed processor will scan the entire table, which is
+	// inefficient but still produces correct results (the JOINs will find mismatches).
+	// This is rare in practice since most tables use comparable types (INT, STRING, LTREE, etc.)
+	// as leading primary key columns.
+	if comparablePrefix == 0 {
+		log.Dev.Infof(ctx, "INSPECT: table %s has non-comparable leading primary key column (type: %s); "+
+			"each processor will scan the entire table (inefficient but correct)",
+			c.tableDesc.GetName(), pkColTypes[0].SQLStringForError())
+	}
 
 	// Convert span to query bounds
 	alloc := &tree.DatumAlloc{}
@@ -223,24 +241,36 @@ func (c *indexConsistencyCheck) Start(
 		for i, colName := range pkColNames {
 			encodedPkColNames[i] = encodeColumnName(colName)
 		}
+
+		startLen := len(bounds.Start)
+		if comparablePrefix < startLen {
+			startLen = comparablePrefix
+		}
+		endLen := len(bounds.End)
+		if comparablePrefix < endLen {
+			endLen = comparablePrefix
+		}
+		startBounds := bounds.Start[:startLen]
+		endBounds := bounds.End[:endLen]
+
 		predicate, err = spanutils.RenderQueryBounds(
-			encodedPkColNames, pkColDirs, pkColTypes,
-			len(bounds.Start), len(bounds.End), true, 1,
+			encodedPkColNames[:comparablePrefix], pkColDirs[:comparablePrefix], pkColTypes[:comparablePrefix],
+			startLen, endLen, true, 1,
 		)
 		if err != nil {
 			return errors.Wrap(err, "rendering query bounds")
 		}
 
-		if strings.TrimSpace(predicate) == "" {
+		if strings.TrimSpace(predicate) == "" && (startLen > 0 || endLen > 0) {
 			return errors.AssertionFailedf("query bounds from span didn't produce predicate: %+v", bounds)
 		}
 
 		// Prepare query arguments: end bounds first, then start bounds
-		queryArgs = make([]interface{}, 0, len(bounds.End)+len(bounds.Start))
-		for _, datum := range bounds.End {
+		queryArgs = make([]interface{}, 0, len(endBounds)+len(startBounds))
+		for _, datum := range endBounds {
 			queryArgs = append(queryArgs, datum)
 		}
-		for _, datum := range bounds.Start {
+		for _, datum := range startBounds {
 			queryArgs = append(queryArgs, datum)
 		}
 	}
@@ -810,6 +840,44 @@ func hashInputExpression(columnNames []string) string {
 	}
 	encoded := fmt.Sprintf("crdb_internal.datums_to_bytes(%s)", strings.Join(args, ", "))
 	return fmt.Sprintf("COALESCE(%s, ''::BYTES)", encoded)
+}
+
+// comparablePrefixLength returns the number of leading primary key columns that
+// support strict inequality comparisons. Some array types (like LTREE[]) lack
+// < and > operators, so span predicates must stop before the first such column.
+func comparablePrefixLength(pkColTypes []*types.T) int {
+	for i, typ := range pkColTypes {
+		if typ == nil {
+			return i
+		}
+
+		// Check if this is an array type. Arrays have a generic comparison operator
+		// registered, but it doesn't work for all element types (e.g., ltree).
+		// We need to check if the element type supports comparison.
+		if typ.Family() == types.ArrayFamily {
+			elemType := typ.ArrayContents()
+			if elemType == nil {
+				return i
+			}
+
+			// Explicitly block arrays of types known not to support comparison.
+			// LTREE arrays fail at runtime with "unsupported comparison operator: <ltree[]> > <string[]>"
+			// even though the generic array comparison operator is registered.
+			if elemType.Family() == types.LTreeFamily {
+				return i
+			}
+
+			// Check if the element type supports comparison
+			if _, ok := tree.CmpOps[treecmp.LT].LookupImpl(elemType, elemType); !ok {
+				return i
+			}
+		}
+		// For non-array types, check directly
+		if _, ok := tree.CmpOps[treecmp.LT].LookupImpl(typ, typ); !ok {
+			return i
+		}
+	}
+	return len(pkColTypes)
 }
 
 // encodeColumnName properly encodes a column name for use in SQL.

@@ -6,6 +6,23 @@ statement ok
 SET enable_scrub_job = true;
 
 statement ok
+SET enable_inspect_command = true;
+
+# Make job adoption faster. This is needed to speed up DETACHED jobs.
+statement ok
+SET CLUSTER SETTING jobs.registry.interval.adopt = '500ms';
+
+statement ok
+CREATE VIEW last_inspect_job AS
+SELECT status, jsonb_array_length(
+    crdb_internal.pb_to_json('cockroach.sql.jobs.jobspb.Payload', payload)->'inspectDetails'->'checks'
+  ) AS num_checks
+FROM crdb_internal.system_jobs
+WHERE job_type = 'INSPECT'
+ORDER BY created DESC
+LIMIT 1
+
+statement ok
 CREATE TABLE data (a INT, b INT, c FLOAT, d DECIMAL, e BOOL, PRIMARY KEY (a, b, c, d), INDEX c_idx (c, d))
 
 # Split into ten parts.
@@ -55,6 +72,176 @@ SELECT description, status, finished IS NOT NULL AS finished FROM [SHOW JOBS] WH
 EXPERIMENTAL SCRUB TABLE data AS OF SYSTEM TIME '-1us'  succeeded  true
 
 subtest end
+
+
+subtest ltree_array_in_primary_key
+
+# Test INSPECT with LTREE[] (array) in primary key.
+# LTREE[] arrays don't support inequality comparison operators.
+
+statement ok
+CREATE TABLE table_ltree_array_pk (
+    col_float FLOAT8 NOT NULL,
+    col_char BPCHAR NOT NULL,
+    col_name NAME NOT NULL,
+    col_uuid UUID NOT NULL,
+    col_bit BIT(12) NOT NULL,
+    col_refcursor REFCURSOR NOT NULL,
+    col_ltree_array LTREE[] NOT NULL,
+    PRIMARY KEY (col_name DESC, col_ltree_array, col_char DESC),
+    UNIQUE (col_char DESC, col_float DESC) STORING (col_uuid, col_bit, col_refcursor)
+);
+
+statement ok
+INSERT INTO table_ltree_array_pk (col_float, col_char, col_name, col_uuid, col_bit, col_refcursor, col_ltree_array)
+VALUES
+    (1.64, e'\x0f', 'key1', 'd8b3accf-e148-4a82-89a2-e32797b5d30f', B'011001001110', '',
+     ARRAY['p6E.h.A.q1YjxK','XPDsE.Mh.FdK','y.jydxOA8Hf.c.gSEiY1.ezeZrn0Q7.8wG.k9e2sE4er.o5AciNw','_0LNA7hM.L7W_g.tiX6dfD.ii.HRg.bC1.j.Qpj0b6UL.eiOWONnD']),
+    (0.61, ')', 'key2', 'f4f5fa51-58f9-4d2a-9c62-b032bc00e73f', B'110000000001', 'kV3Z2',
+     ARRAY['foo.bar','e.m.yCg02.jK_.4WZwfY40.Fkz.YRWOyyT6.hBPlJa.V']),
+    (-1.18, '%', e'}*H\x04`x>\x18w', '050c8905-ee43-4d00-98be-8787d40877cd', B'001111010100', e'\x01X=j\x10~\b',
+     ARRAY['AoqZH5.iai.MiE.MT','S0CjFlo.SbdQTkXP8.0Lo.9cO6EZ.cVW6XoZm']),
+    (-1.53, 'f', 'key4', '4e2b8e84-83a9-4dda-8937-2a147cf23a1b', B'010001110000', e'8M$E\x15',
+     ARRAY['9jbOqw9i','foo','iayz67E.P3.ggcaKn2.9kszHb7.tb2JGGEx.2-M0QSF.7KCXvz6Sq','dCY.x0.3Eu.teuBG.c7r-P']),
+    (2.5, 'a', 'key5', 'd8b3accf-e148-4a82-89a2-e32797b5d30f', B'111111111111', 'ref1',
+     ARRAY['path1.path2','path3.path4.path5']),
+    (3.5, 'b', 'key6', 'f4f5fa51-58f9-4d2a-9c62-b032bc00e73f', B'000000000000', 'ref2',
+     ARRAY['x.y.z','a.b.c.d']),
+    (4.5, 'c', 'key7', '050c8905-ee43-4d00-98be-8787d40877cd', B'101010101010', 'ref3',
+     ARRAY['foo.bar.baz','qux.quux']),
+    (5.5, 'd', 'key8', 'd8b3accf-e148-4a82-89a2-e32797b5d30f', B'111100001111', 'ref4',
+     ARRAY['alpha.beta','gamma.delta']),
+    (6.5, 'e', 'key9', 'f4f5fa51-58f9-4d2a-9c62-b032bc00e73f', B'000011110000', 'ref5',
+     ARRAY['one.two.three','four.five.six']);
+
+# Split the table into multiple ranges to force distributed INSPECT queries.
+statement ok
+ALTER TABLE table_ltree_array_pk SPLIT AT VALUES ('key3', ARRAY['a.b']::LTREE[], 'a');
+
+statement ok
+ALTER TABLE table_ltree_array_pk SPLIT AT VALUES ('key6', ARRAY['x.y']::LTREE[], 'b');
+
+statement ok
+ALTER TABLE table_ltree_array_pk SPLIT AT VALUES ('key9', ARRAY['one.two']::LTREE[], 'e');
+
+statement ok
+ALTER TABLE table_ltree_array_pk SCATTER;
+
+statement ok
+INSPECT TABLE table_ltree_array_pk;
+
+query TI
+SELECT * FROM last_inspect_job;
+----
+succeeded 1
+
+statement ok
+DROP TABLE table_ltree_array_pk;
+
+subtest end
+
+
+subtest ltree_array_as_leading_pk_column
+
+# Test INSPECT with LTREE[] as the LEADING column in primary key.
+# This tests the edge case where comparablePrefix = 0, meaning no PK columns
+# support inequality comparisons. When this happens, each distributed processor
+# will scan the entire table (inefficient but correct). This is rare in practice
+# since most tables have comparable types as leading PK columns.
+
+statement ok
+CREATE TABLE table_ltree_array_leading (
+    pk_ltree_array LTREE[] NOT NULL,
+    pk_name NAME NOT NULL,
+    val INT,
+    PRIMARY KEY (pk_ltree_array, pk_name),
+    INDEX idx_val (val)
+);
+
+statement ok
+INSERT INTO table_ltree_array_leading VALUES
+    (ARRAY['a.b.c']::LTREE[], 'key1', 1),
+    (ARRAY['d.e.f']::LTREE[], 'key2', 2),
+    (ARRAY['g.h.i']::LTREE[], 'key3', 3),
+    (ARRAY['j.k.l']::LTREE[], 'key4', 4),
+    (ARRAY['m.n.o']::LTREE[], 'key5', 5),
+    (ARRAY['p.q.r']::LTREE[], 'key6', 6);
+
+# Split the table into multiple ranges to force distributed INSPECT queries.
+statement ok
+ALTER TABLE table_ltree_array_leading SPLIT AT VALUES (ARRAY['d.e.f']::LTREE[], 'key2');
+
+statement ok
+ALTER TABLE table_ltree_array_leading SPLIT AT VALUES (ARRAY['j.k.l']::LTREE[], 'key4');
+
+statement ok
+ALTER TABLE table_ltree_array_leading SCATTER;
+
+statement ok
+INSPECT TABLE table_ltree_array_leading;
+
+query TI
+SELECT * FROM last_inspect_job;
+----
+succeeded 1
+
+statement ok
+DROP TABLE table_ltree_array_leading;
+
+subtest end
+
+#subtest ttl_with_ltree_array_in_pk
+#
+## Test that TTL table creation and basic operations work with LTREE[] in primary key.
+## TTL uses the same spanutils.RenderQueryBounds() function as INSPECT, so it would
+## have the same issue with non-comparable types if not handled properly.
+## This test verifies that tables with LTREE[] in PK can be created with TTL enabled.
+#
+#statement ok
+#CREATE TABLE table_ttl_ltree_array (
+#    pk_ltree_array LTREE[] NOT NULL,
+#    pk_name NAME NOT NULL,
+#    val INT,
+#    PRIMARY KEY (pk_ltree_array, pk_name)
+#) WITH (ttl_expire_after = '10 minutes');
+#
+## Insert test rows
+#statement ok
+#INSERT INTO table_ttl_ltree_array VALUES
+#    (ARRAY['a.b.c']::LTREE[], 'key1', 1),
+#    (ARRAY['d.e.f']::LTREE[], 'key2', 2),
+#    (ARRAY['g.h.i']::LTREE[], 'key3', 3),
+#    (ARRAY['j.k.l']::LTREE[], 'key4', 4),
+#    (ARRAY['m.n.o']::LTREE[], 'key5', 5);
+#
+## Split the table into multiple ranges. If TTL has the same bug as INSPECT
+## had (not handling non-comparable types in query bounds), the TTL job will
+## fail when it tries to generate queries with LTREE[] in inequality comparisons.
+#statement ok
+#ALTER TABLE table_ttl_ltree_array SPLIT AT VALUES (ARRAY['d.e.f']::LTREE[], 'key2');
+#
+#statement ok
+#ALTER TABLE table_ttl_ltree_array SPLIT AT VALUES (ARRAY['j.k.l']::LTREE[], 'key4');
+#
+#statement ok
+#ALTER TABLE table_ttl_ltree_array SCATTER;
+#
+## Verify data is present
+#query I
+#SELECT count(*) FROM table_ttl_ltree_array;
+#----
+#5
+#
+## Verify the TTL expiration column was created
+#query T
+#SELECT column_name FROM [SHOW COLUMNS FROM table_ttl_ltree_array] WHERE column_name = 'crdb_internal_expiration';
+#----
+#crdb_internal_expiration
+#
+#statement ok
+#DROP TABLE table_ttl_ltree_array;
+#
+#subtest end
 
 subtest cleanup
 

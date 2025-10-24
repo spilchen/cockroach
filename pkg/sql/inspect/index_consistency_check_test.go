@@ -766,3 +766,4 @@ func TestMissingIndexEntryWithHistoricalQuery(t *testing.T) {
 	require.Contains(t, err.Error(), "INSPECT found inconsistencies",
 		"INSPECT should detect the missing index entry that existed at the historical timestamp")
 }
+

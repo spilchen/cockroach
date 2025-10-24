@@ -47,6 +47,7 @@ go_library(
         "//pkg/sql/rowexec",
         "//pkg/sql/sem/idxtype",
         "//pkg/sql/sem/tree",
+        "//pkg/sql/sem/tree/treecmp",
         "//pkg/sql/sessiondata",
         "//pkg/sql/sessiondatapb",
         "//pkg/sql/spanutils",
