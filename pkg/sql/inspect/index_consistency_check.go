@@ -123,7 +123,7 @@ func (c *indexConsistencyCheck) Start(
 		}
 		col := c.tableDesc.PublicColumns()[pos]
 		otherColumns = append(otherColumns, col)
-		if col.GetType().Family() == types.RefCursorFamily {
+		if isRefCursorType(col.GetType()) {
 			// Refcursor values do not support equality comparison, so we cannot use
 			// them in the join predicates that detect inconsistencies.
 			return
@@ -760,4 +760,33 @@ func buildWhereClause(predicate string, nullFilters []string) string {
 	}
 
 	return buf.String()
+}
+
+// isQueryConstructionError checks if the given error is due to
+// invalid syntax or references in the query construction.
+func isQueryConstructionError(err error) bool {
+	code := pgerror.GetPGCode(err)
+	switch code {
+	case pgcode.Syntax,
+		pgcode.UndefinedColumn,
+		pgcode.UndefinedTable,
+		pgcode.UndefinedFunction,
+		pgcode.DatatypeMismatch,
+		pgcode.InvalidColumnReference:
+		return true
+	default:
+		return false
+	}
+}
+
+// isRefCursorType returns true if the given type is REFCURSOR or an array of REFCURSOR.
+// These types don't support comparison operations and must be excluded from join predicates.
+func isRefCursorType(t *types.T) bool {
+	if t.Family() == types.RefCursorFamily {
+		return true
+	}
+	if t.Family() == types.ArrayFamily && t.ArrayContents() != nil {
+		return t.ArrayContents().Family() == types.RefCursorFamily
+	}
+	return false
 }
