@@ -113,16 +113,20 @@ SELECT
 FROM movr.rides;
 " --format=table
 
-  header_quick "Cluster connection information"
-  printf 'SQL: postgresql://root@%s/movr?sslmode=disable\n' "$LISTEN_ADDR"
-  printf 'HTTP: http://%s\n' "$HTTP_ADDR"
-  printf 'To stop the cluster: pkill -f "cockroach start-single-node"\n'
+  if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+    header_quick "Cluster connection information"
+    printf 'SQL: postgresql://root@%s/movr?sslmode=disable\n' "$LISTEN_ADDR"
+    printf 'HTTP: http://%s\n' "$HTTP_ADDR"
+    printf 'To stop the cluster: pkill -f "cockroach start-single-node"\n'
+  fi
 
   INSPECT_DEMO_URL="postgresql://root@${LISTEN_ADDR}/movr?sslmode=disable"
 fi
 
 
-header_quick "Verifying MovR dataset availability"
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  header_quick "Verifying MovR dataset availability"
+fi
 INFO_LINE=$("$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=tsv <<SQL | sed -n '2p'
 SELECT t.table_id, i.index_id, i.index_name
 FROM crdb_internal.tables AS t
@@ -139,9 +143,13 @@ if [[ -z "${TABLE_ID:-}" || -z "${INDEX_ID:-}" ]]; then
   exit 1
 fi
 INDEX_NAME=${INDEX_NAME_FOUND}
-echo "Table id: ${TABLE_ID}, index id: ${INDEX_ID} (${INDEX_NAME})"
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  echo "Table id: ${TABLE_ID}, index id: ${INDEX_ID} (${INDEX_NAME})"
+fi
 
-header_quick "Derive key columns for ${INDEX_NAME}"
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  header_quick "Derive key columns for ${INDEX_NAME}"
+fi
 COL_SELECT_LIST=$("$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=tsv <<SQL | sed -n '2p'
 SELECT string_agg(format('%I', col_name), ', ' ORDER BY seq) AS cols
 FROM (
@@ -164,23 +172,29 @@ if [[ -z "${COL_SELECT_LIST// }" ]]; then
   exit 1
 fi
 if [[ -n "${INDEX_KEY_COLUMNS// }" ]]; then
-  echo "Using key column override from INDEX_KEY_COLUMNS: ${INDEX_KEY_COLUMNS}"
+  if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+    echo "Using key column override from INDEX_KEY_COLUMNS: ${INDEX_KEY_COLUMNS}"
+  fi
   COL_SELECT_LIST=${INDEX_KEY_COLUMNS}
 else
-  echo "Derived key column order: ${COL_SELECT_LIST//\"/}"
+  if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+    echo "Derived key column order: ${COL_SELECT_LIST//\"/}"
+  fi
   if [[ "${TABLE_NAME}" == "vehicles" && "${INDEX_NAME}" == "vehicles_auto_index_fk_city_ref_users" ]]; then
     MOVR_EXPECTED_ORDER='city, owner_id, id'
     if [[ "${COL_SELECT_LIST//\"/}" != "${MOVR_EXPECTED_ORDER}" ]]; then
-      echo "Adjusting key column order to ${MOVR_EXPECTED_ORDER} for MovR vehicles index."
+      if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+        echo "Adjusting key column order to ${MOVR_EXPECTED_ORDER} for MovR vehicles index."
+      fi
       COL_SELECT_LIST=${MOVR_EXPECTED_ORDER}
     fi
   fi
 fi
 
-header "Run INSPECT" 
+header "Run INSPECT"
 "$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=table --echo-sql <<SQL
 SET enable_inspect_command = true;
-INSPECT TABLE ${DATABASE_NAME}.${TABLE_NAME} WITH OPTIONS INDEX (${INDEX_NAME});
+INSPECT TABLE ${DATABASE_NAME}.${TABLE_NAME};
 SQL
 
 header_quick "Latest INSPECT job status"
@@ -257,27 +271,11 @@ else
   KV_FLAGS_ARR=()
 fi
 
-header "Baseline query results for vehicle ${VEHICLE_ID}"
+header_quick "Baseline query results for vehicle ${VEHICLE_ID}"
 "$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=table --echo-sql <<SQL
 SELECT id, city, owner_id
-FROM ${DATABASE_NAME}.${TABLE_NAME}@{FORCE_INDEX=primary}
+FROM ${DATABASE_NAME}.${TABLE_NAME}
 WHERE id = '${VEHICLE_ID}';
-SQL
-"$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=table --echo-sql <<SQL
-SELECT id, city, owner_id
-FROM ${DATABASE_NAME}.${TABLE_NAME}@{FORCE_INDEX=${INDEX_NAME}}
-WHERE ROW(${COL_SELECT_LIST})
-    = (SELECT ROW(${COL_SELECT_LIST})
-       FROM ${DATABASE_NAME}.${TABLE_NAME}
-       WHERE id = '${VEHICLE_ID}');
-SQL
-
-header "Baseline raw index scan entry"
-"$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=table --echo-sql <<SQL
-SELECT city, owner_id, id
-FROM ${DATABASE_NAME}.${TABLE_NAME}@${INDEX_NAME}
-WHERE city = '${ESCAPED_CITY}'
-  AND owner_id = '${OWNER_ID}'::UUID;
 SQL
 
 INDEX_COUNT_BEFORE=$("$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=tsv <<SQL | awk 'NR==2 {print $1}'
@@ -288,9 +286,13 @@ WHERE city = '${ESCAPED_CITY}'
   AND id = '${VEHICLE_ID}'::UUID;
 SQL
 )
-echo "Baseline index entry count: ${INDEX_COUNT_BEFORE}"
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  echo "Baseline index entry count: ${INDEX_COUNT_BEFORE}"
+fi
 
-header_quick "Compute the secondary index key to delete"
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  header_quick "Compute the secondary index key to delete"
+fi
 INDEX_KEY=$("$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=tsv <<SQL | awk 'NR==2 {print $1}'
 WITH key_vals AS (
   SELECT ROW(${COL_SELECT_LIST}) AS key_tuple
@@ -320,20 +322,24 @@ if [[ -z "$INDEX_KEY" ]]; then
   echo "Failed to derive the index key to delete. Aborting." >&2
   exit 1
 fi
-echo "Encoded key (base64): $INDEX_KEY"
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  echo "Encoded key (base64): $INDEX_KEY"
 
-HEX_KEY=$("$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=tsv <<SQL | awk 'NR==2 {print $1}'
+  HEX_KEY=$("$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=tsv <<SQL | awk 'NR==2 {print $1}'
 SELECT encode(decode('${INDEX_KEY}', 'base64'), 'hex');
 SQL
 )
-PRETTY_KEY=$("$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=tsv <<SQL | awk 'NR==2 {print $1}'
+  PRETTY_KEY=$("$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=tsv <<SQL | awk 'NR==2 {print $1}'
 SELECT crdb_internal.pretty_key(decode('${INDEX_KEY}', 'base64'), 0);
 SQL
 )
-echo "Encoded key (hex): $HEX_KEY"
-INDEX_KEY_B64="$INDEX_KEY"
-echo "Pretty key: $PRETTY_KEY"
-echo "Index key length (base64 chars): ${#INDEX_KEY_B64}"
+  echo "Encoded key (hex): $HEX_KEY"
+  INDEX_KEY_B64="$INDEX_KEY"
+  echo "Pretty key: $PRETTY_KEY"
+  echo "Index key length (base64 chars): ${#INDEX_KEY_B64}"
+else
+  INDEX_KEY_B64="$INDEX_KEY"
+fi
 
 # Show current KV entries via a KV scan to aid debugging.
 START_KEY_BASE64="$INDEX_KEY_B64"
@@ -355,13 +361,15 @@ if [[ $? -ne 0 ]]; then
 fi
 read SCAN_START_B64 SCAN_END_B64 <<<"$SCAN_RANGE_OUTPUT"
 
-header_quick "Current KV entries for this index key (via debug scan)"
-SCAN_FILE=$(mktemp inspect-demo-kvscan-XXXXXX.json)
-cat > "$SCAN_FILE" <<EOF
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  header_quick "Current KV entries for this index key (via debug scan)"
+  SCAN_FILE=$(mktemp inspect-demo-kvscan-XXXXXX.json)
+  cat > "$SCAN_FILE" <<EOF
 {"requests":[{"scan":{"header":{"key":"$SCAN_START_B64","endKey":"$SCAN_END_B64"}}}]}
 EOF
-echo "$COCKROACH_BIN debug send-kv-batch --url ${KV_URL} ${KV_FLAGS_ARR[*]} $SCAN_FILE"
-"$COCKROACH_BIN" debug send-kv-batch --url "$KV_URL" "${KV_FLAGS_ARR[@]}" "$SCAN_FILE"
+  echo "$COCKROACH_BIN debug send-kv-batch --url ${KV_URL} ${KV_FLAGS_ARR[*]} $SCAN_FILE"
+  "$COCKROACH_BIN" debug send-kv-batch --url "$KV_URL" "${KV_FLAGS_ARR[@]}" "$SCAN_FILE"
+fi
 
 # Generate the exact KV keys for column families 0 and 1 by emulating MakeFamilyKey.
 if ! DELETE_KEYS=$(python3 -c '
@@ -398,8 +406,10 @@ print(fam0, fam1)
 fi
 read KV_KEY_FAM0 KV_KEY_FAM1 <<<"$DELETE_KEYS"
 
-echo "KV key family0 (base64): $KV_KEY_FAM0"
-echo "KV key family1 (base64): $KV_KEY_FAM1"
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  echo "KV key family0 (base64): $KV_KEY_FAM0"
+  echo "KV key family1 (base64): $KV_KEY_FAM1"
+fi
 
 BATCH_FILE=$(mktemp inspect-demo-kv-XXXXXX.json)
 cat > "$BATCH_FILE" <<EOF
@@ -408,7 +418,9 @@ cat > "$BATCH_FILE" <<EOF
   {"delete":{"header":{"key":"$KV_KEY_FAM1"}}}
 ]}
 EOF
-echo "Wrote delete batch to $BATCH_FILE"
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  echo "Wrote delete batch to $BATCH_FILE"
+fi
 
 header "Delete index entry via cockroach debug send-kv-batch"
 if [[ -n "${KV_HOST:-}" ]]; then
@@ -430,18 +442,7 @@ header "After corruption: forced secondary index scan misses the vehicle"
 "$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=table --echo-sql <<SQL
 SELECT id, city, owner_id
 FROM ${DATABASE_NAME}.${TABLE_NAME}@{FORCE_INDEX=${INDEX_NAME}}
-WHERE ROW(${COL_SELECT_LIST})
-    = (SELECT ROW(${COL_SELECT_LIST})
-       FROM ${DATABASE_NAME}.${TABLE_NAME}
-       WHERE id = '${VEHICLE_ID}');
-SQL
-
-header_quick "Post-corruption raw index scan entry"
-"$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=table --echo-sql <<SQL
-SELECT city, owner_id, id
-FROM ${DATABASE_NAME}.${TABLE_NAME}@${INDEX_NAME}
-WHERE city = '${ESCAPED_CITY}'
-  AND owner_id = '${OWNER_ID}'::UUID;
+WHERE id = '${VEHICLE_ID}';
 SQL
 
 INDEX_COUNT_AFTER=$("$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=tsv <<SQL | awk 'NR==2 {print $1}'
@@ -464,7 +465,7 @@ set +e
 INSPECT_OUTPUT=$(
   "$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=table --echo-sql 2>&1 <<SQL
 SET enable_inspect_command = true;
-INSPECT TABLE ${DATABASE_NAME}.${TABLE_NAME} WITH OPTIONS INDEX (${INDEX_NAME});
+INSPECT TABLE ${DATABASE_NAME}.${TABLE_NAME};
 SQL
 )
 set -e
@@ -487,16 +488,17 @@ if [[ -z "$JOB_ID" ]]; then
   echo "Failed to capture INSPECT job ID. Aborting." >&2
   exit 1
 fi
-echo "Latest INSPECT job id: $JOB_ID"
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  echo "Latest INSPECT job id: $JOB_ID"
+fi
 
-header "Wait for INSPECT job $JOB_ID to finish"
-"$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=records --echo-sql --execute "SHOW JOB WHEN COMPLETE $JOB_ID;"
-
-header "SHOW INSPECT ERRORS for job $JOB_ID (filtered to ${DATABASE_NAME}.${TABLE_NAME})"
+header "SHOW INSPECT ERRORS for job $JOB_ID"
 "$COCKROACH_BIN" sql --url "$INSPECT_DEMO_URL" --format=records --echo-sql <<SQL
 SET enable_inspect_command = true;
-SHOW INSPECT ERRORS FOR TABLE ${DATABASE_NAME}.${TABLE_NAME} FOR JOB $JOB_ID WITH DETAILS;
+SHOW INSPECT ERRORS FOR JOB $JOB_ID WITH DETAILS;
 SQL
 
-echo
-echo "Done. The kv-batch payload remains at: $BATCH_FILE"
+if [[ "${INSPECT_DEMO_VERBOSE:-false}" == 'true' ]]; then
+  echo
+  echo "Done. The kv-batch payload remains at: $BATCH_FILE"
+fi
