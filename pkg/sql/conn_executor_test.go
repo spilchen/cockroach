@@ -36,6 +36,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/mutations"
+	"github.com/cockroachdb/cockroach/pkg/sql/parser"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowexec"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
@@ -47,6 +48,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlstats/persistedsqlstats/sqlstatstestutil"
 	"github.com/cockroachdb/cockroach/pkg/testutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/pgtest"
+	"github.com/cockroachdb/cockroach/pkg/testutils/pgurlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
@@ -60,11 +62,59 @@ import (
 	"github.com/cockroachdb/datadriven"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/logtags"
+	"github.com/cockroachdb/redact"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
+	"github.com/pmezard/go-difflib/difflib"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAnonymizeStatementsForReporting(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	s := cluster.MakeTestingClusterSettings()
+	vt, err := sql.NewVirtualSchemaHolder(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const stmt1s = `
+INSERT INTO sensitive(super, sensible) VALUES('that', 'nobody', 'must', 'see')
+`
+	stmt1, err := parser.ParseOne(stmt1s)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rUnsafe := errors.New("some error")
+	safeErr := sql.WithAnonymizedStatement(rUnsafe, stmt1.AST, vt, nil /* ClientNoticeSender */)
+
+	const expMessage = "some error"
+	actMessage := safeErr.Error()
+	if actMessage != expMessage {
+		t.Errorf("wanted: %s\ngot: %s", expMessage, actMessage)
+	}
+
+	const expSafeRedactedMsgPrefix = `some error
+(1) while executing: INSERT INTO _(_, _) VALUES ('_', '_', __more1_10__)`
+
+	actSafeRedactedMessage := string(redact.Sprintf("%+v", safeErr))
+
+	if !strings.HasPrefix(actSafeRedactedMessage, expSafeRedactedMsgPrefix) {
+		diff, _ := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
+			A:        difflib.SplitLines(expSafeRedactedMsgPrefix),
+			B:        difflib.SplitLines(actSafeRedactedMessage[:len(expSafeRedactedMsgPrefix)]),
+			FromFile: "Expected Message Prefix",
+			FromDate: "",
+			ToFile:   "Actual Message Prefix",
+			ToDate:   "",
+			Context:  1,
+		})
+		t.Errorf("Diff:\n%s", diff)
+	}
+}
 
 // Test that a connection closed abruptly while a SQL txn is in progress results
 // in that txn being rolled back.
@@ -79,12 +129,11 @@ func TestSessionFinishRollsBackTxn(t *testing.T) {
 	defer aborter.Close(t)
 	params, _ := createTestServerParamsAllowTenants()
 	params.Knobs.SQLExecutor = aborter.executorKnobs()
-	srv, mainDB, _ := serverutils.StartServer(t, params)
-	defer srv.Stopper().Stop(context.Background())
-	s := srv.ApplicationLayer()
+	s, mainDB, _ := serverutils.StartServer(t, params)
+	defer s.Stopper().Stop(context.Background())
 	{
-		pgURL, cleanup := s.PGUrl(
-			t, serverutils.CertsDirPrefix("TestSessionFinishRollsBackTxn"), serverutils.User(username.RootUser))
+		pgURL, cleanup := pgurlutils.PGUrl(
+			t, s.AdvSQLAddr(), "TestSessionFinishRollsBackTxn", url.User(username.RootUser))
 		defer cleanup()
 		if err := aborter.Init(pgURL); err != nil {
 			t.Fatal(err)
@@ -108,7 +157,7 @@ CREATE TABLE t.test (k INT PRIMARY KEY, v TEXT);
 	for _, state := range tests {
 		t.Run(state, func(t *testing.T) {
 			// Create a low-level lib/pq connection so we can close it at will.
-			pgURL, cleanup := s.PGUrl(t)
+			pgURL, cleanup := s.ApplicationLayer().PGUrl(t)
 			defer cleanup()
 			c, err := pq.Open(pgURL.String())
 			if err != nil {
@@ -960,16 +1009,15 @@ func TestErrorDuringPrepareInExplicitTransactionPropagates(t *testing.T) {
 
 	ctx := context.Background()
 	filter := newDynamicRequestFilter()
-	srv, sqlDB, _ := serverutils.StartServer(t, base.TestServerArgs{
+	s, sqlDB, _ := serverutils.StartServer(t, base.TestServerArgs{
 		Knobs: base.TestingKnobs{
 			Store: &kvserver.StoreTestingKnobs{
 				TestingRequestFilter: filter.filter,
 			},
 		},
 	})
-	defer srv.Stopper().Stop(ctx)
-	s := srv.ApplicationLayer()
-	codec := s.Codec()
+	defer s.Stopper().Stop(ctx)
+	codec := s.ApplicationLayer().Codec()
 
 	testDB := sqlutils.MakeSQLRunner(sqlDB)
 	testDB.Exec(t, "CREATE TABLE foo (i INT PRIMARY KEY)")
@@ -982,7 +1030,7 @@ func TestErrorDuringPrepareInExplicitTransactionPropagates(t *testing.T) {
 	// transaction state evolves appropriately.
 
 	// Use pgx so that we can introspect error codes returned from cockroach.
-	pgURL, cleanup := s.PGUrl(t, serverutils.User(username.RootUser))
+	pgURL, cleanup := pgurlutils.PGUrl(t, s.AdvSQLAddr(), "", url.User("root"))
 	defer cleanup()
 	conf, err := pgx.ParseConfig(pgURL.String())
 	require.NoError(t, err)
@@ -1544,9 +1592,9 @@ func TestInjectRetryErrors(t *testing.T) {
 			}
 		},
 	}
-	srv, db, _ := serverutils.StartServer(t, params)
-	defer srv.Stopper().Stop(ctx)
-	s := srv.ApplicationLayer()
+	s, db, _ := serverutils.StartServer(t, params)
+	defer s.Stopper().Stop(ctx)
+	defer db.Close()
 
 	_, err := db.Exec("SET inject_retry_errors_enabled = 'true'")
 	require.NoError(t, err)
@@ -1657,9 +1705,8 @@ func TestInjectRetryErrors(t *testing.T) {
 
 		// Choose a small results_buffer_size and make sure the statement retry
 		// does not occur.
-		pgURL, cleanupFn := s.PGUrl(
-			t, serverutils.CertsDirPrefix(t.Name()), serverutils.User(username.RootUser),
-		)
+		pgURL, cleanupFn := pgurlutils.PGUrl(
+			t, s.AdvSQLAddr(), t.Name(), url.User(username.RootUser))
 		defer cleanupFn()
 		q := pgURL.Query()
 		q.Add("results_buffer_size", "4")

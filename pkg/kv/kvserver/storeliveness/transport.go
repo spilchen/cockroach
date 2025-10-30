@@ -168,7 +168,6 @@ func (t *Transport) stream(stream slpb.RPCStoreLiveness_StreamStream) error {
 					if err != nil {
 						return err
 					}
-					t.metrics.BatchesReceived.Inc(1)
 					if !batch.Now.IsEmpty() {
 						t.clock.Update(batch.Now)
 					}
@@ -398,8 +397,6 @@ func (t *Transport) processQueue(
 				t.metrics.MessagesSendDropped.Inc(int64(len(batch.Messages)))
 				return err
 			}
-
-			t.metrics.BatchesSent.Inc(1)
 			t.metrics.MessagesSent.Inc(int64(len(batch.Messages)))
 
 			// Reuse the Messages slice, but zero out the contents to avoid delaying

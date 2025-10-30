@@ -527,7 +527,8 @@ func (tc *TxnCoordSender) Send(
 		return nil, pErr
 	}
 
-	if ba.IsSingleEndTxnRequest() && !tc.hasAcquiredLocksOrBufferedWritesLocked() {
+	if ba.IsSingleEndTxnRequest() && !tc.interceptorAlloc.txnPipeliner.hasAcquiredLocks() &&
+		!tc.interceptorAlloc.txnWriteBuffer.hasBufferedWrites() {
 		return nil, tc.finalizeNonLockingTxnLocked(ctx, ba)
 	}
 
@@ -1722,8 +1723,4 @@ func (tc *TxnCoordSender) hasPerformedWritesLocked() bool {
 
 func (tc *TxnCoordSender) hasBufferedWritesLocked() bool {
 	return tc.interceptorAlloc.txnWriteBuffer.hasBufferedWrites()
-}
-
-func (tc *TxnCoordSender) hasAcquiredLocksOrBufferedWritesLocked() bool {
-	return tc.interceptorAlloc.txnPipeliner.hasAcquiredLocks() || tc.interceptorAlloc.txnWriteBuffer.hasBufferedWrites()
 }

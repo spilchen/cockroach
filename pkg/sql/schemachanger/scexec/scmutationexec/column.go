@@ -76,7 +76,11 @@ func (i *immediateVisitor) addNewColumnType(
 	col *descpb.ColumnDescriptor,
 ) error {
 	col.Type = op.ColumnType.Type
-	col.Nullable = true
+	if op.ColumnType.ElementCreationMetadata.In_23_1OrLater {
+		col.Nullable = true
+	} else {
+		col.Nullable = op.ColumnType.IsNullable
+	}
 	col.Virtual = op.ColumnType.IsVirtual
 	// ComputeExpr is deprecated in favor of a separate element
 	// (ColumnComputeExpression). Any changes in this if block

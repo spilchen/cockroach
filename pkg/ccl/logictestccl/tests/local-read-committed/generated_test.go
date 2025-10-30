@@ -2120,13 +2120,6 @@ func TestReadCommittedLogic_srfs(
 	runLogicTest(t, "srfs")
 }
 
-func TestReadCommittedLogic_statement_hint_builtins(
-	t *testing.T,
-) {
-	defer leaktest.AfterTest(t)()
-	runLogicTest(t, "statement_hint_builtins")
-}
-
 func TestReadCommittedLogic_statement_source(
 	t *testing.T,
 ) {
@@ -3021,6 +3014,13 @@ func TestReadCommittedExecBuild_fk_read_committed(
 ) {
 	defer leaktest.AfterTest(t)()
 	runExecBuildLogicTest(t, "fk_read_committed")
+}
+
+func TestReadCommittedExecBuild_geospatial(
+	t *testing.T,
+) {
+	defer leaktest.AfterTest(t)()
+	runExecBuildLogicTest(t, "geospatial")
 }
 
 func TestReadCommittedExecBuild_select_for_update_read_committed(

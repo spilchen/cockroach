@@ -41,7 +41,6 @@ go_library(
         "//pkg/sql/lexbase",
         "//pkg/sql/pgwire/pgcode",
         "//pkg/sql/pgwire/pgerror",
-        "//pkg/sql/pgwire/pgnotice",
         "//pkg/sql/physicalplan",
         "//pkg/sql/privilege",
         "//pkg/sql/rowexec",
@@ -121,7 +120,6 @@ go_test(
         "@com_github_cockroachdb_errors//:errors",
         "@com_github_cockroachdb_redact//:redact",
         "@com_github_gogo_protobuf//types",
-        "@com_github_lib_pq//:pq",
         "@com_github_stretchr_testify//require",
     ],
 )

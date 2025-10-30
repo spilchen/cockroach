@@ -563,6 +563,7 @@ func (w *walkCtx) walkColumn(tbl catalog.TableDescriptor, col catalog.Column) {
 		columnType := &scpb.ColumnType{
 			TableID:                 tbl.GetID(),
 			ColumnID:                col.GetID(),
+			IsNullable:              col.IsNullable(),
 			IsVirtual:               col.IsVirtual(),
 			ElementCreationMetadata: NewElementCreationMetadata(w.clusterVersion),
 		}

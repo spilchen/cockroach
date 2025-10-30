@@ -100,8 +100,7 @@ func (r *Registry) claimJobs(ctx context.Context, s sqlliveness.Session) error {
 		}
 		numRows, err := txn.Exec(
 			ctx, "claim-jobs", txn.KV(), claimQuery,
-			s.ID().UnsafeBytes(), r.ID(), maxAdoptionsPerLoop.Get(&r.settings.SV),
-		)
+			s.ID().UnsafeBytes(), r.ID(), maxAdoptionsPerLoop)
 		if err != nil {
 			return errors.Wrap(err, "could not query jobs table")
 		}

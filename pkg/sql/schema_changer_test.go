@@ -90,9 +90,8 @@ func TestSchemaChangeProcess(t *testing.T) {
 
 	params, _ := createTestServerParamsAllowTenants()
 
-	srv, sqlDB, kvDB := serverutils.StartServer(t, params)
-	defer srv.Stopper().Stop(context.Background())
-	s := srv.ApplicationLayer()
+	s, sqlDB, kvDB := serverutils.StartServer(t, params)
+	defer s.Stopper().Stop(context.Background())
 
 	// The descriptor changes made must have an immediate effect
 	// so disable leases on tables.
@@ -321,7 +320,7 @@ CREATE INDEX foo ON t.test (v)
 		mTest.CheckQueryResults(t, indexQuery, [][]string{{"b"}, {"d"}})
 	}
 
-	if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -426,7 +425,7 @@ SELECT count(*)
 	testutils.SucceedsSoon(t, func() error {
 		return sqltestutils.CheckTableKeyCount(ctx, kvDB, codec, keyMultiple, maxValue+numInserts)
 	})
-	if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -668,7 +667,7 @@ CREATE UNIQUE INDEX vidx ON t.test (v);
 		if err := sqltestutils.CheckTableKeyCount(ctx, kvDB, codec, 2, maxValue); err != nil {
 			return err
 		}
-		if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+		if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 			return err
 		}
 		return nil
@@ -874,7 +873,7 @@ CREATE UNIQUE INDEX vidx ON t.test (v);
 	if err := sqltestutils.CheckTableKeyCount(ctx, kvDB, codec, 2, maxValue); err != nil {
 		t.Fatal(err)
 	}
-	if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1191,7 +1190,7 @@ COMMIT;
 				return sqltestutils.CheckTableKeyCount(ctx, kvDB, codec, testCase.expectedNumKeysPerRow, maxValue)
 			})
 
-			if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+			if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -1543,14 +1542,13 @@ func TestSchemaChangeRetryOnVersionChange(t *testing.T) {
 		JobsTestingKnobs: jobs.NewTestingKnobsWithShortIntervals(),
 	}
 
-	srv, sqlDB, kvDB := serverutils.StartServer(t, params)
-	defer srv.Stopper().Stop(context.Background())
+	s, sqlDB, kvDB := serverutils.StartServer(t, params)
+	defer s.Stopper().Stop(context.Background())
 	defer func() {
 		t.Log("unblocking GC")
 		close(unblockGC)
 	}()
-	s := srv.ApplicationLayer()
-	codec := s.Codec()
+	codec := s.ApplicationLayer().Codec()
 
 	if _, err := sqlDB.Exec(`
 SET create_table_with_schema_locked=false;
@@ -1812,7 +1810,7 @@ CREATE TABLE t.test (
 		t.Fatal(err)
 	}
 
-	if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1914,7 +1912,7 @@ ALTER TABLE t.test ADD column v INT DEFAULT 0;
 	close(continueBackfillNotification)
 	wg.Wait()
 
-	if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -3420,7 +3418,7 @@ ALTER TABLE t.test ADD z INT8 AS (k + id) STORED;`); err != nil {
 
 	wg.Wait()
 
-	if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 		t.Fatal(err)
 	}
 	// Check data!
@@ -3553,7 +3551,7 @@ func TestBackfillCompletesOnChunkBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+			if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -3663,7 +3661,7 @@ INSERT INTO t.kv VALUES ('a', 'b');
 					t.Fatal(err)
 				}
 
-				if err := sqlutils.RunInspect(sqlDB, "t", "kv"); err != nil {
+				if err := sqlutils.RunScrub(sqlDB, "t", "kv"); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -3779,7 +3777,7 @@ CREATE TABLE d.t (
 				t.Errorf("expected one row but read %d", count)
 			}
 
-			if err := sqlutils.RunInspect(sqlDB, "d", "t"); err != nil {
+			if err := sqlutils.RunScrub(sqlDB, "d", "t"); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -3900,7 +3898,7 @@ CREATE TABLE t.test (k INT PRIMARY KEY, v INT, pi DECIMAL DEFAULT (DECIMAL '3.14
 	if err := sqltestutils.CheckTableKeyCount(ctx, kvDB, codec, 1, maxValue); err != nil {
 		t.Fatal(err)
 	}
-	if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3996,7 +3994,7 @@ func TestTruncateCompletion(t *testing.T) {
 			if err := sqltestutils.CheckTableKeyCount(ctx, kvDB, codec, 1, maxValue); err != nil {
 				t.Fatal(err)
 			}
-			if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+			if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 				t.Fatal(err)
 			}
 
@@ -4033,7 +4031,7 @@ func TestTruncateCompletion(t *testing.T) {
 			row.Scan(&count)
 			require.Equal(t, maxValue+1, count)
 
-			if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+			if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 				t.Fatal(err)
 			}
 
@@ -4381,7 +4379,7 @@ ALTER TABLE t.test ADD COLUMN c INT AS (v + 4) STORED, ADD COLUMN d INT DEFAULT 
 		t.Fatal(err)
 	}
 
-	if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -5168,10 +5166,10 @@ SET use_declarative_schema_changer = off;
 
 	wg.Wait()
 
-	if err := sqlutils.RunInspect(sqlDB, "t", "child"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "child"); err != nil {
 		t.Fatal(err)
 	}
-	if err := sqlutils.RunInspect(sqlDB, "t", "parent"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "parent"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -5250,7 +5248,7 @@ SET use_declarative_schema_changer = off;
 
 	wg.Wait()
 
-	if err := sqlutils.RunInspect(sqlDB, "t", "tab"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "tab"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -5347,7 +5345,7 @@ SET use_declarative_schema_changer = off;
 
 	wg.Wait()
 
-	if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -5444,7 +5442,7 @@ SET use_declarative_schema_changer = off;
 
 	wg.Wait()
 
-	if err := sqlutils.RunInspect(sqlDB, "t", "test"); err != nil {
+	if err := sqlutils.RunScrub(sqlDB, "t", "test"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -6501,7 +6499,7 @@ func TestRevertingJobsOnDatabasesAndSchemas(t *testing.T) {
 		params.Knobs = base.TestingKnobs{
 			SQLSchemaChanger: &sql.SchemaChangerTestingKnobs{
 				RunBeforeResume: func(jobID jobspb.JobID) error {
-					scJob, err := s.ApplicationLayer().JobRegistry().(*jobs.Registry).LoadJob(ctx, jobID)
+					scJob, err := s.JobRegistry().(*jobs.Registry).LoadJob(ctx, jobID)
 					if err != nil {
 						return err
 					}
@@ -6586,7 +6584,7 @@ func TestRevertingJobsOnDatabasesAndSchemas(t *testing.T) {
 		params.Knobs = base.TestingKnobs{
 			SQLSchemaChanger: &sql.SchemaChangerTestingKnobs{
 				RunBeforeResume: func(jobID jobspb.JobID) error {
-					scJob, err := s.ApplicationLayer().JobRegistry().(*jobs.Registry).LoadJob(ctx, jobID)
+					scJob, err := s.JobRegistry().(*jobs.Registry).LoadJob(ctx, jobID)
 					if err != nil {
 						return err
 					}
@@ -6660,7 +6658,7 @@ func TestCheckConstraintDropAndColumn(t *testing.T) {
 				// `channel` below.
 				lockHeld := true
 				jobControlMu.Lock()
-				scJob, err := s.ApplicationLayer().JobRegistry().(*jobs.Registry).LoadJob(ctx, jobID)
+				scJob, err := s.JobRegistry().(*jobs.Registry).LoadJob(ctx, jobID)
 				if err != nil {
 					jobControlMu.Unlock()
 					return err
@@ -6792,7 +6790,7 @@ func TestJobsWithoutMutationsAreCancelable(t *testing.T) {
 
 	var registry *jobs.Registry
 	var scJobID jobspb.JobID
-	srv, sqlDB, _ := serverutils.StartServer(t, base.TestServerArgs{
+	s, sqlDB, _ := serverutils.StartServer(t, base.TestServerArgs{
 		Knobs: base.TestingKnobs{SQLSchemaChanger: &sql.SchemaChangerTestingKnobs{
 			RunBeforeResume: func(jobID jobspb.JobID) error {
 				job, err := registry.LoadJob(ctx, jobID)
@@ -6806,8 +6804,7 @@ func TestJobsWithoutMutationsAreCancelable(t *testing.T) {
 			},
 		}},
 	})
-	defer srv.Stopper().Stop(ctx)
-	s := srv.ApplicationLayer()
+	defer s.Stopper().Stop(ctx)
 	tdb := sqlutils.MakeSQLRunner(sqlDB)
 	registry = s.JobRegistry().(*jobs.Registry)
 
@@ -7990,7 +7987,7 @@ func TestLeaseGenerationBumpWithSchemaChange(t *testing.T) {
 	descIDToDelay := descpb.InvalidID
 	grp := ctxgroup.WithContext(ctx)
 	var startDelayCallback func() chan struct{}
-	srv, sqlDB, kvDB := serverutils.StartServer(t, base.TestServerArgs{
+	s, sqlDB, kvDB := serverutils.StartServer(t, base.TestServerArgs{
 		Knobs: base.TestingKnobs{
 			SQLLeaseManager: &lease.ManagerTestingKnobs{
 				TestingOnNewVersion: func(id descpb.ID) {
@@ -8006,8 +8003,7 @@ func TestLeaseGenerationBumpWithSchemaChange(t *testing.T) {
 			},
 		},
 	})
-	defer srv.Stopper().Stop(ctx)
-	s := srv.ApplicationLayer()
+	defer s.Stopper().Stop(ctx)
 	runner := sqlutils.MakeSQLRunner(sqlDB)
 
 	var nextValue atomic.Int64
@@ -8025,7 +8021,7 @@ func TestLeaseGenerationBumpWithSchemaChange(t *testing.T) {
 
 	runner.Exec(t, "CREATE TABLE t1(n int not null, j int not null)")
 	runner.Exec(t, "INSERT INTO t1 VALUES ($1, $2)", nextValue.Add(1), nextValue.Add(1))
-	tableDesc := desctestutils.TestingGetPublicTableDescriptor(kvDB, s.Codec(), "defaultdb", "t1")
+	tableDesc := desctestutils.TestingGetPublicTableDescriptor(kvDB, keys.SystemSQLCodec, "defaultdb", "t1")
 	descIDToDelay = tableDesc.GetID()
 	runner.Exec(t, "ALTER TABLE t1 ALTER PRIMARY KEY USING COLUMNS(n, j)")
 	require.NoError(t, grp.Wait())

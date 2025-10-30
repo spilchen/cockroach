@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
+	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
@@ -198,9 +199,8 @@ func TestInvertedJoiner(t *testing.T) {
 
 	ctx := context.Background()
 
-	srv, sqlDB, kvDB := serverutils.StartServer(t, base.TestServerArgs{})
-	defer srv.Stopper().Stop(ctx)
-	s := srv.ApplicationLayer()
+	s, sqlDB, kvDB := serverutils.StartServer(t, base.TestServerArgs{})
+	defer s.Stopper().Stop(ctx)
 
 	aFn := func(row int) tree.Datum {
 		return tree.NewDInt(tree.DInt(row))
@@ -242,7 +242,7 @@ func TestInvertedJoiner(t *testing.T) {
 	const dciIndex = 4
 	const daciIndex = 5
 
-	td := desctestutils.TestingGetPublicTableDescriptor(kvDB, s.Codec(), "test", "t")
+	td := desctestutils.TestingGetPublicTableDescriptor(kvDB, keys.SystemSQLCodec, "test", "t")
 
 	type testCase struct {
 		description           string
@@ -641,7 +641,7 @@ func TestInvertedJoiner(t *testing.T) {
 			Settings:    st,
 			TempStorage: tempEngine,
 		},
-		Txn:         kv.NewTxn(ctx, s.DB(), srv.NodeID()),
+		Txn:         kv.NewTxn(ctx, s.DB(), s.NodeID()),
 		DiskMonitor: diskMonitor,
 	}
 	for _, c := range testCases {
@@ -654,7 +654,7 @@ func TestInvertedJoiner(t *testing.T) {
 				for rowIdx, row := range c.input {
 					encRow := make(rowenc.EncDatumRow, len(row))
 					for i, d := range row {
-						encRow[i] = rowenc.DatumToEncDatumUnsafe(c.inputTypes[i], d)
+						encRow[i] = rowenc.DatumToEncDatum(c.inputTypes[i], d)
 					}
 					encRows[rowIdx] = encRow
 				}
@@ -673,7 +673,7 @@ func TestInvertedJoiner(t *testing.T) {
 				var fetchSpec fetchpb.IndexFetchSpec
 				if err := rowenc.InitIndexFetchSpec(
 					&fetchSpec,
-					s.Codec(),
+					keys.SystemSQLCodec,
 					td, index, fetchColIDs,
 				); err != nil {
 					t.Fatal(err)
@@ -742,9 +742,8 @@ func TestInvertedJoinerDrain(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	srv, sqlDB, kvDB := serverutils.StartServer(t, base.TestServerArgs{})
-	defer srv.Stopper().Stop(context.Background())
-	s := srv.ApplicationLayer()
+	s, sqlDB, kvDB := serverutils.StartServer(t, base.TestServerArgs{})
+	defer s.Stopper().Stop(context.Background())
 
 	aFn := func(row int) tree.Datum {
 		return tree.NewDInt(tree.DInt(row))
@@ -759,7 +758,7 @@ func TestInvertedJoinerDrain(t *testing.T) {
 		invertedJoinerNumRows,
 		sqlutils.ToRowFn(aFn, bFn))
 	const biIndex = 1
-	td := desctestutils.TestingGetPublicTableDescriptor(kvDB, s.Codec(), "test", "t")
+	td := desctestutils.TestingGetPublicTableDescriptor(kvDB, keys.SystemSQLCodec, "test", "t")
 
 	tracer := s.TracerI().(*tracing.Tracer)
 	ctx, sp := tracer.StartSpanCtx(context.Background(), "test flow ctx", tracing.WithRecording(tracingpb.RecordingVerbose))
@@ -774,10 +773,10 @@ func TestInvertedJoinerDrain(t *testing.T) {
 	defer evalCtx.Stop(context.Background())
 	diskMonitor := execinfra.NewTestDiskMonitor(ctx, st)
 	defer diskMonitor.Stop(ctx)
-	rootTxn := kv.NewTxn(ctx, s.DB(), srv.NodeID())
+	rootTxn := kv.NewTxn(ctx, s.DB(), s.NodeID())
 	leafInputState, err := rootTxn.GetLeafTxnInputState(ctx, nil /* readsTree */)
 	require.NoError(t, err)
-	leafTxn := kv.NewLeafTxn(ctx, s.DB(), srv.NodeID(), leafInputState, nil /* header */)
+	leafTxn := kv.NewLeafTxn(ctx, s.DB(), s.NodeID(), leafInputState, nil /* header */)
 	flowCtx := execinfra.FlowCtx{
 		EvalCtx: &evalCtx,
 		Mon:     evalCtx.TestingMon,
@@ -794,7 +793,7 @@ func TestInvertedJoinerDrain(t *testing.T) {
 		var fetchSpec fetchpb.IndexFetchSpec
 		if err := rowenc.InitIndexFetchSpec(
 			&fetchSpec,
-			s.Codec(),
+			keys.SystemSQLCodec,
 			td, td.ActiveIndexes()[biIndex],
 			[]descpb.ColumnID{1, 2},
 		); err != nil {

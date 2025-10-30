@@ -521,9 +521,14 @@ func getEventDescriptorCached(
 	idVer := CacheKey{ID: desc.GetID(), Version: desc.GetVersion(), FamilyID: family.ID}
 
 	if v, ok := cache.Get(idVer); ok {
-		ed := v.(*EventDescriptor)
-		if catalog.UserDefinedTypeColsHaveSameVersion(ed.td, desc) {
-			return ed, nil
+		cached := v.(*EventDescriptor)
+		if catalog.UserDefinedTypeColsHaveSameVersion(cached.td, desc) {
+			// Make a shallow copy to avoid modifying the cached value. The cached
+			// EventDescriptor is shared across changefeed operations and may be
+			// referenced concurrently.
+			ed := *cached
+			ed.SchemaTS = schemaTS
+			return &ed, nil
 		}
 	}
 
@@ -810,7 +815,7 @@ func TestingMakeEventRowFromDatums(datums tree.Datums) Row {
 	for i, d := range datums {
 		desc.cols = append(desc.cols, ResultColumn{ord: i})
 		desc.valueCols = append(desc.valueCols, i)
-		encRow = append(encRow, rowenc.DatumToEncDatumUnsafe(d.ResolvedType(), d))
+		encRow = append(encRow, rowenc.DatumToEncDatum(d.ResolvedType(), d))
 	}
 	return Row{
 		EventDescriptor: &desc,

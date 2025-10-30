@@ -104,15 +104,7 @@ func TriggerInspectJob(
 func InspectChecksForDatabase(
 	ctx context.Context, p PlanHookState, db catalog.DatabaseDescriptor,
 ) ([]*jobspb.InspectDetails_Check, error) {
-	avoidLeased := false
-	if aost := p.ExtendedEvalContext().AsOfSystemTime; aost != nil {
-		avoidLeased = true
-	}
-	byNameGetter := p.Descriptors().ByNameWithLeased(p.Txn())
-	if avoidLeased {
-		byNameGetter = p.Descriptors().ByName(p.Txn())
-	}
-	tables, err := byNameGetter.Get().GetAllTablesInDatabase(ctx, p.Txn(), db)
+	tables, err := p.Descriptors().ByName(p.Txn()).Get().GetAllTablesInDatabase(ctx, p.Txn(), db)
 	if err != nil {
 		return nil, err
 	}
@@ -139,11 +131,6 @@ func InspectChecksForTable(
 	ctx context.Context, p PlanHookState, table catalog.TableDescriptor,
 ) ([]*jobspb.InspectDetails_Check, error) {
 	checks := []*jobspb.InspectDetails_Check{}
-
-	// Skip virtual tables since they don't have physical storage to inspect.
-	if table.IsVirtualTable() {
-		return checks, nil
-	}
 
 	for _, index := range table.PublicNonPrimaryIndexes() {
 		if isUnsupportedIndexForIndexConsistencyCheck(index, table) {
@@ -208,16 +195,6 @@ func isUnsupportedIndexForIndexConsistencyCheck(
 		return true
 	} else if table.IsExpressionIndex(index) {
 		return true
-	}
-
-	// Check if any of the index key columns are virtual columns.
-	// TODO(155841): add support for indexes on virtual columns.
-	for i := 0; i < index.NumKeyColumns(); i++ {
-		colID := index.GetKeyColumnID(i)
-		col := catalog.FindColumnByID(table, colID)
-		if col != nil && col.IsVirtual() {
-			return true
-		}
 	}
 
 	switch t := index.GetType(); t {

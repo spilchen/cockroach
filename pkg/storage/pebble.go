@@ -299,9 +299,6 @@ const (
 
 	// StoreCompressionGood uses pebble.DBCompressionGood.
 	StoreCompressionGood StoreCompressionSetting = 7
-
-	// StoreCompressionFast uses pebble.DBCompressionFast.
-	StoreCompressionFast StoreCompressionSetting = 8
 )
 
 var storeCompressionSettingToString = map[StoreCompressionSetting]string{
@@ -310,7 +307,6 @@ var storeCompressionSettingToString = map[StoreCompressionSetting]string{
 	StoreCompressionNone:   "none",
 	StoreCompressionZstd:   "zstd",
 
-	StoreCompressionFast:     "fast",
 	StoreCompressionFastest:  "fastest",
 	StoreCompressionBalanced: "balanced",
 	StoreCompressionGood:     "good",
@@ -325,7 +321,6 @@ var storeCompressionSettings = map[StoreCompressionSetting]pebble.DBCompressionS
 	StoreCompressionFastest:  pebble.DBCompressionFastest,
 	StoreCompressionBalanced: pebble.DBCompressionBalanced,
 	StoreCompressionGood:     pebble.DBCompressionGood,
-	StoreCompressionFast:     pebble.DBCompressionFast,
 }
 
 // String implements fmt.Stringer for StoreCompressionSetting.
@@ -359,7 +354,7 @@ const compressionSettingClass = settings.SystemVisible
 var CompressionAlgorithmStorage = settings.RegisterEnumSetting[StoreCompressionSetting](
 	compressionSettingClass,
 	"storage.sstable.compression_algorithm",
-	`determines the compression algorithm to use for Pebble stores`,
+	`determines the compression algorithm to use when compressing sstable data blocks for use in a Pebble store (balanced,good are experimental);`,
 	// TODO(radu,jackson): use a metamorphic constant.
 	StoreCompressionFastest.String(),
 	storeCompressionSettingToString,
@@ -524,14 +519,6 @@ var baselineDeletionRate = settings.RegisterIntSetting(
 	settings.NonNegativeInt,
 )
 
-var tombstoneDenseCompactionThreshold = settings.RegisterIntSetting(
-	settings.ApplicationLevel,
-	"storage.tombstone_dense_compaction_threshold",
-	"percentage of tombstone-dense data blocks that trigger a compaction (0 = disabled)",
-	10, // 10%
-	settings.IntInRange(0, 100),
-)
-
 // EngineComparer is a pebble.Comparer object that implements MVCC-specific
 // comparator settings for use with Pebble.
 var EngineComparer = func() pebble.Comparer {
@@ -617,10 +604,6 @@ func DefaultPebbleOptions() *pebble.Options {
 
 	opts.Experimental.SpanPolicyFunc = spanPolicyFunc
 	opts.Experimental.UserKeyCategories = userKeyCategories
-
-	// Every 5 minutes, log iterators that have been open for more than 1 minute.
-	opts.Experimental.IteratorTracking.PollInterval = 5 * time.Minute
-	opts.Experimental.IteratorTracking.MaxAge = time.Minute
 
 	opts.Levels[0] = pebble.LevelOptions{
 		BlockSize:      32 << 10,  // 32 KB
@@ -967,11 +950,8 @@ func newPebble(ctx context.Context, cfg engineConfig) (p *Pebble, err error) {
 			return int(concurrentDownloadCompactions.Get(&cfg.settings.SV))
 		}
 	}
-	cfg.opts.DeletionPacing.BaselineRate = func() uint64 {
-		return uint64(baselineDeletionRate.Get(&cfg.settings.SV))
-	}
-	cfg.opts.Experimental.TombstoneDenseCompactionThreshold = func() float64 {
-		return 0.01 * float64(tombstoneDenseCompactionThreshold.Get(&cfg.settings.SV))
+	cfg.opts.TargetByteDeletionRate = func() int {
+		return int(baselineDeletionRate.Get(&cfg.settings.SV))
 	}
 	if cfg.opts.Experimental.UseDeprecatedCompensatedScore == nil {
 		cfg.opts.Experimental.UseDeprecatedCompensatedScore = func() bool {
@@ -986,11 +966,9 @@ func newPebble(ctx context.Context, cfg engineConfig) (p *Pebble, err error) {
 	logCtx := logtags.WithTags(context.Background(), logtags.FromContext(ctx))
 	// The store id, could not necessarily be determined when this function
 	// is called. Therefore, we use a container for the store id.
-	tags := logtags.BuildBuffer()
 	storeIDContainer := &base.StoreIDContainer{}
-	tags.Add("s", storeIDContainer)
-	tags.Add("pebble", nil)
-	logCtx = logtags.AddTags(logCtx, tags.Finish())
+	logCtx = logtags.AddTag(logCtx, "s", storeIDContainer)
+	logCtx = logtags.AddTag(logCtx, "pebble", nil)
 
 	cfg.opts.Local.ReadaheadConfig = objstorageprovider.NewReadaheadConfig()
 	updateReadaheadFn := func(ctx context.Context) {
@@ -2833,8 +2811,11 @@ func (p *pebbleReadOnly) ConsistentIterators() bool {
 // PinEngineStateForIterators implements the Engine interface.
 func (p *pebbleReadOnly) PinEngineStateForIterators(readCategory fs.ReadCategory) error {
 	if p.iter == nil {
-		o := makeIterOptions(readCategory, p.durability)
-		iter, err := p.parent.db.NewIter(&o)
+		o := &pebble.IterOptions{Category: readCategory.PebbleCategory()}
+		if p.durability == GuaranteedDurability {
+			o.OnlyReadGuaranteedDurable = true
+		}
+		iter, err := p.parent.db.NewIter(o)
 		if err != nil {
 			return err
 		}
