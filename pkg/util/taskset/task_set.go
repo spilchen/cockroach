@@ -7,11 +7,12 @@ package taskset
 
 type TaskId int64
 
-// TaskIdDone is a special task id that indicates the task is done.
-const TaskIdDone = TaskId(-1)
+// taskIdDone is an internal sentinel value indicating no more tasks are available.
+// Use TaskId.IsDone() to check if a task is done.
+const taskIdDone = TaskId(-1)
 
 func (t TaskId) IsDone() bool {
-	return t == TaskIdDone
+	return t == taskIdDone
 }
 
 func MakeTaskSet(taskCount int64) TaskSet {
@@ -42,7 +43,7 @@ type TaskSet struct {
 // the same span until it is exhausted.
 func (t *TaskSet) ClaimFirst() TaskId {
 	if len(t.unassigned) == 0 {
-		return TaskIdDone
+		return taskIdDone
 	}
 
 	// Find the largest span
@@ -55,7 +56,7 @@ func (t *TaskSet) ClaimFirst() TaskId {
 
 	largestSpan := t.unassigned[largest]
 	if largestSpan.size() == 0 {
-		return TaskIdDone
+		return taskIdDone
 	}
 	if largestSpan.size() == 1 {
 		t.lockedRemoveSpan(largest)
