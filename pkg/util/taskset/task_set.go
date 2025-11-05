@@ -8,9 +8,6 @@ package taskset
 type TaskId int64
 
 // TaskIdDone is a special task id that indicates the task is done.
-//
-// TODO(jeffswenson): refactor the API of task set to return TaskIdDone instead
-// of false.
 const TaskIdDone = TaskId(-1)
 
 func (t TaskId) IsDone() bool {
@@ -38,7 +35,7 @@ type TaskSet struct {
 }
 
 // ClaimFirst should be called when a worker claims its first task. It returns
-// the taskId to process and true if there are more tasks to claim.
+// the taskId to process, or TaskIdDone if no tasks are available.
 //
 // ClaimFirst is distinct from ClaimNext because ClaimFirst will always split
 // the largest span in the unassigned set, whereas ClaimNext will assign from
@@ -78,7 +75,7 @@ func (t *TaskSet) ClaimFirst() TaskId {
 }
 
 // ClaimNext should be called when a worker has completed its current task. It
-// returns the taskId to process and true if there are more tasks to claim.
+// returns the next taskId to process, or TaskIdDone if no tasks are available.
 func (t *TaskSet) ClaimNext(lastTask TaskId) TaskId {
 	next := lastTask + 1
 
