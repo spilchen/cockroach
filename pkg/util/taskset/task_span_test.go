@@ -9,10 +9,15 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTaskSetSingleWorker(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
 	// When a single worker claims tasks from a taskSet, it should claim all
 	// tasks in sequential order now that we use FIFO claiming.
 	tasks := MakeTaskSet(10, 1)
@@ -27,6 +32,9 @@ func TestTaskSetSingleWorker(t *testing.T) {
 }
 
 func TestTaskSetParallel(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
 	taskCount := min(rand.Int63n(10000), 16)
 	tasks := MakeTaskSet(taskCount, 16)
 	workers := make([]TaskID, 16)
@@ -58,6 +66,9 @@ func TestTaskSetParallel(t *testing.T) {
 }
 
 func TestMakeTaskSet(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
 	// Test with evenly divisible tasks - simulate 4 workers each calling ClaimFirst once
 	tasks := MakeTaskSet(100, 4)
 	var claimed []TaskID
@@ -104,6 +115,9 @@ func TestMakeTaskSet(t *testing.T) {
 }
 
 func TestTaskSetLoadBalancing(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
 	// Simulate 4 workers processing 100 tasks
 	tasks := MakeTaskSet(100, 4)
 
@@ -157,5 +171,67 @@ func TestTaskSetLoadBalancing(t *testing.T) {
 	// With round-robin processing, each worker should get approximately equal work
 	for i, w := range workers {
 		require.InDelta(t, 25, len(w.tasks), 2, "worker %d got %d tasks", i, len(w.tasks))
+	}
+}
+
+func TestTaskSetMoreWorkersThanTasks(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	// Simulate scenario with more workers than tasks: 10 tasks, 64 workers
+	tasks := MakeTaskSet(10, 64)
+
+	type worker struct {
+		id    int
+		tasks []TaskID
+	}
+	workers := make([]worker, 64)
+
+	// Each worker tries to claim their first task
+	workersWithTasks := 0
+	workersWithoutTasks := 0
+	for i := range workers {
+		workers[i].id = i
+		task := tasks.ClaimFirst()
+		if !task.IsDone() {
+			workers[i].tasks = append(workers[i].tasks, task)
+			workersWithTasks++
+		} else {
+			workersWithoutTasks++
+		}
+	}
+
+	// Only 10 workers should get tasks (one per task)
+	require.Equal(t, 10, workersWithTasks, "expected 10 workers to get tasks")
+	require.Equal(t, 54, workersWithoutTasks, "expected 54 workers to get no tasks")
+
+	// Verify the workers that got tasks received unique tasks
+	seenTasks := make(map[TaskID]bool)
+	for _, w := range workers {
+		if len(w.tasks) > 0 {
+			require.Len(t, w.tasks, 1, "worker %d should have exactly 1 task initially", w.id)
+			task := w.tasks[0]
+			require.False(t, seenTasks[task], "task %d assigned to multiple workers", task)
+			seenTasks[task] = true
+		}
+	}
+	require.Len(t, seenTasks, 10, "all 10 tasks should be assigned")
+
+	// Verify the tasks are distributed round-robin (0-9)
+	expectedTasks := []TaskID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	actualTasks := make([]TaskID, 0, 10)
+	for _, w := range workers {
+		if len(w.tasks) > 0 {
+			actualTasks = append(actualTasks, w.tasks[0])
+		}
+	}
+	require.Equal(t, expectedTasks, actualTasks, "tasks should be assigned round-robin")
+
+	// Simulate workers trying to claim more tasks (all should fail)
+	for i := range workers {
+		if len(workers[i].tasks) > 0 {
+			next := tasks.ClaimNext(workers[i].tasks[0])
+			require.True(t, next.IsDone(), "no more tasks should be available")
+		}
 	}
 }

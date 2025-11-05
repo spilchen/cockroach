@@ -15,5 +15,9 @@ go_test(
     name = "taskset_test",
     srcs = ["task_span_test.go"],
     embed = [":taskset"],
-    deps = ["@com_github_stretchr_testify//require"],
+    deps = [
+        "//pkg/util/leaktest",
+        "//pkg/util/log",
+        "@com_github_stretchr_testify//require",
+    ],
 )

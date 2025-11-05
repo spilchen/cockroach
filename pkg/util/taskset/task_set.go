@@ -130,7 +130,7 @@ func (t *TaskSet) claimFirstLocked() TaskID {
 	}
 
 	// Take the first task from the first span, then rotate that span to the end.
-	// This provides round-robin distribution when used with MakeTaskSetForWorkers,
+	// This provides round-robin distribution when used with MakeTaskSet,
 	// ensuring each worker gets tasks from different regions initially for better
 	// load balancing.
 	span := t.unassigned[0]
