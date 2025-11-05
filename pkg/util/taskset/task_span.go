@@ -6,8 +6,8 @@
 package taskset
 
 type taskSpan struct {
-	start TaskId
-	end   TaskId
+	start TaskID
+	end   TaskID
 }
 
 func (t *taskSpan) size() int {

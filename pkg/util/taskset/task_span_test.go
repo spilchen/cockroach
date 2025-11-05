@@ -16,7 +16,7 @@ func TestTaskSetSingleWorker(t *testing.T) {
 	// When a single worker claims tasks from a taskSet, it should claim all
 	// tasks in order.
 	tasks := MakeTaskSet(10)
-	var found []TaskId
+	var found []TaskID
 
 	for next := tasks.ClaimFirst(); !next.IsDone(); next = tasks.ClaimNext(next) {
 		found = append(found, next)
@@ -25,7 +25,7 @@ func TestTaskSetSingleWorker(t *testing.T) {
 	// The tasks are claimed in a weird order because it assumes the first span
 	// is already claimed. It's possible to get a smoother task distribution by
 	// allocating tasks and splitting the spans when initializing the workers.
-	require.Equal(t, []TaskId{
+	require.Equal(t, []TaskID{
 		5, 6, 7, 8, 9,
 		2, 3, 4,
 		1,
@@ -36,8 +36,8 @@ func TestTaskSetSingleWorker(t *testing.T) {
 func TestTaskSetParallel(t *testing.T) {
 	taskCount := min(rand.Int63n(10000), 16)
 	tasks := MakeTaskSet(taskCount)
-	workers := make([]TaskId, 16)
-	var found []TaskId
+	workers := make([]TaskID, 16)
+	var found []TaskID
 
 	for i := range workers {
 		workers[i] = tasks.ClaimFirst()
@@ -57,7 +57,7 @@ func TestTaskSetParallel(t *testing.T) {
 	}
 
 	// build a map of the found tasks to ensure they are unique
-	taskMap := make(map[TaskId]struct{})
+	taskMap := make(map[TaskID]struct{})
 	for _, task := range found {
 		taskMap[task] = struct{}{}
 	}

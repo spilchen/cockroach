@@ -5,8 +5,8 @@
 
 // Package taskset provides a generic work distribution mechanism for
 // coordinating parallel workers. TaskSet hands out integer identifiers
-// (TaskIds) that workers can claim and process. The TaskIds themselves have no
-// inherent meaning - it's up to the caller to map each TaskId to actual work
+// (TaskIDs) that workers can claim and process. The TaskIDs themselves have no
+// inherent meaning - it's up to the caller to map each TaskID to actual work
 // (e.g., file indices, key ranges, batch numbers, etc.).
 //
 // Example usage:
@@ -24,48 +24,48 @@ package taskset
 
 import "sync"
 
-// TaskId is an abstract integer identifier for a unit of work. The TaskId
-// itself has no inherent meaning - callers decide what each TaskId represents
+// TaskID is an abstract integer identifier for a unit of work. The TaskID
+// itself has no inherent meaning - callers decide what each TaskID represents
 // (e.g., which file to process, which key range to handle, etc.).
-type TaskId int64
+type TaskID int64
 
-// taskIdDone is an internal sentinel value indicating no more tasks are available.
-// Use TaskId.IsDone() to check if a task is done.
-const taskIdDone = TaskId(-1)
+// taskIDDone is an internal sentinel value indicating no more tasks are available.
+// Use TaskID.IsDone() to check if a task is done.
+const taskIDDone = TaskID(-1)
 
-func (t TaskId) IsDone() bool {
-	return t == taskIdDone
+func (t TaskID) IsDone() bool {
+	return t == taskIDDone
 }
 
 // MakeTaskSet creates a new TaskSet with taskCount work items numbered 0
 // through taskCount-1. These are abstract identifiers that have no inherent
-// meaning - the caller decides what each TaskId represents.
+// meaning - the caller decides what each TaskID represents.
 //
 // For example, if you have 100 files to process, create MakeTaskSet(100) and
-// map TaskId N to files[N]. Or for key range processing, map TaskId N to the
+// map TaskID N to files[N]. Or for key range processing, map TaskID N to the
 // range between splits[N-1] and splits[N].
 func MakeTaskSet(taskCount int64) TaskSet {
 	// TODO(jeffswenson): Should this be initialized with a set of initial
 	// workers? Right now it doesn't start with a perfect span split, so if tasks
 	// sizes are evenly distributed, we might split spans more than necessary.
 	return TaskSet{
-		unassigned: []taskSpan{{start: 0, end: TaskId(taskCount)}},
+		unassigned: []taskSpan{{start: 0, end: TaskID(taskCount)}},
 	}
 }
 
 // TaskSet is a generic work distribution coordinator that manages a collection
-// of abstract task identifiers (TaskIds) that can be claimed by workers.
+// of abstract task identifiers (TaskIDs) that can be claimed by workers.
 //
 // TaskSet implements a work-stealing algorithm optimized for task locality:
 // - When a worker completes task N, it tries to claim task N+1 (sequential locality)
 // - If task N+1 is unavailable, it splits the largest remaining span of unclaimed tasks
 // - This balances load across workers while maintaining locality within each worker
 //
-// The TaskIds themselves are just integers (0 through taskCount-1) with no
+// The TaskIDs themselves are just integers (0 through taskCount-1) with no
 // inherent meaning. Callers map these identifiers to actual work units such as:
-// - File indices (TaskId 5 → process files[5])
-// - Key ranges (TaskId 5 → process range [splits[4], splits[5]))
-// - Batch numbers (TaskId 5 → process rows [5000, 6000))
+// - File indices (TaskID 5 → process files[5])
+// - Key ranges (TaskID 5 → process range [splits[4], splits[5]))
+// - Batch numbers (TaskID 5 → process rows [5000, 6000))
 //
 // TaskSet is safe for concurrent use by multiple goroutines.
 type TaskSet struct {
@@ -74,14 +74,14 @@ type TaskSet struct {
 }
 
 // ClaimFirst should be called when a worker claims its first task. It returns
-// an abstract TaskId to process. The caller decides what this TaskId represents
-// (e.g., which file to process, which key range to handle). Returns a TaskId
+// an abstract TaskID to process. The caller decides what this TaskID represents
+// (e.g., which file to process, which key range to handle). Returns a TaskID
 // where .IsDone() is true if no tasks are available.
 //
 // ClaimFirst is distinct from ClaimNext because ClaimFirst will always split
 // the largest span in the unassigned set, whereas ClaimNext will assign from
 // the same span until it is exhausted.
-func (t *TaskSet) ClaimFirst() TaskId {
+func (t *TaskSet) ClaimFirst() TaskID {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.claimFirstLocked()
@@ -89,9 +89,9 @@ func (t *TaskSet) ClaimFirst() TaskId {
 
 // claimFirstLocked is the internal implementation of ClaimFirst.
 // The caller must hold t.mu.
-func (t *TaskSet) claimFirstLocked() TaskId {
+func (t *TaskSet) claimFirstLocked() TaskID {
 	if len(t.unassigned) == 0 {
-		return taskIdDone
+		return taskIDDone
 	}
 
 	// Find the largest span
@@ -104,7 +104,7 @@ func (t *TaskSet) claimFirstLocked() TaskId {
 
 	largestSpan := t.unassigned[largest]
 	if largestSpan.size() == 0 {
-		return taskIdDone
+		return taskIDDone
 	}
 	if largestSpan.size() == 1 {
 		t.lockedRemoveSpan(largest)
@@ -124,14 +124,14 @@ func (t *TaskSet) claimFirstLocked() TaskId {
 }
 
 // ClaimNext should be called when a worker has completed its current task. It
-// returns the next abstract TaskId to process. The caller decides what this
-// TaskId represents. Returns a TaskId where .IsDone() is true if no tasks are
+// returns the next abstract TaskID to process. The caller decides what this
+// TaskID represents. Returns a TaskID where .IsDone() is true if no tasks are
 // available.
 //
 // ClaimNext optimizes for locality by attempting to claim lastTask+1 first. If
 // that task is unavailable, it falls back to ClaimFirst behavior (splitting the
 // largest remaining span).
-func (t *TaskSet) ClaimNext(lastTask TaskId) TaskId {
+func (t *TaskSet) ClaimNext(lastTask TaskID) TaskID {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
