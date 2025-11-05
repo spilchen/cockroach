@@ -11,7 +11,7 @@
 //
 // Example usage:
 //
-//	tasks := taskset.MakeTaskSet(100)  // Create 100 abstract work items (0-99)
+//	tasks := taskset.MakeTaskSet(100, 4)  // 100 work items, 4 workers
 //
 //	// Worker goroutine
 //	for taskID := tasks.ClaimFirst(); !taskID.IsDone(); taskID = tasks.ClaimNext(taskID) {
@@ -38,19 +38,54 @@ func (t TaskID) IsDone() bool {
 }
 
 // MakeTaskSet creates a new TaskSet with taskCount work items numbered 0
-// through taskCount-1. These are abstract identifiers that have no inherent
-// meaning - the caller decides what each TaskID represents.
+// through taskCount-1, pre-split for the expected number of workers.
 //
-// For example, if you have 100 files to process, create MakeTaskSet(100) and
-// map TaskID N to files[N]. Or for key range processing, map TaskID N to the
-// range between splits[N-1] and splits[N].
-func MakeTaskSet(taskCount int64) TaskSet {
-	// TODO(jeffswenson): Should this be initialized with a set of initial
-	// workers? Right now it doesn't start with a perfect span split, so if tasks
-	// sizes are evenly distributed, we might split spans more than necessary.
-	return TaskSet{
-		unassigned: []taskSpan{{start: 0, end: TaskID(taskCount)}},
+// The TaskIDs are abstract identifiers with no inherent meaning - the caller
+// decides what each TaskID represents. For example:
+//   - File processing: MakeTaskSet(100, 4) with TaskID N → files[N]
+//   - Key ranges: MakeTaskSet(100, 4) with TaskID N → range [splits[N-1], splits[N])
+//   - Row batches: MakeTaskSet(100, 4) with TaskID N → rows [N*1000, (N+1)*1000)
+//
+// The numWorkers parameter enables better initial load balancing by dividing the
+// task range into numWorkers equal spans upfront. For example, with 100 tasks
+// and 4 workers:
+//   - Worker 1: starts with task 0 from range [0, 25)
+//   - Worker 2: starts with task 25 from range [25, 50)
+//   - Worker 3: starts with task 50 from range [50, 75)
+//   - Worker 4: starts with task 75 from range [75, 100)
+//
+// Each worker continues claiming sequential tasks from their region (maintaining
+// locality), and can steal from other regions if they finish early.
+//
+// If the number of workers is unknown, use numWorkers=1 for a single span.
+func MakeTaskSet(taskCount, numWorkers int64) TaskSet {
+	if numWorkers <= 0 {
+		numWorkers = 1
 	}
+	if taskCount <= 0 {
+		return TaskSet{unassigned: nil}
+	}
+
+	// Pre-split the task range into numWorkers equal spans
+	spans := make([]taskSpan, 0, numWorkers)
+	tasksPerWorker := taskCount / numWorkers
+	remainder := taskCount % numWorkers
+
+	start := TaskID(0)
+	for i := int64(0); i < numWorkers; i++ {
+		// Distribute remainder evenly by giving first 'remainder' workers one extra task
+		spanSize := tasksPerWorker
+		if i < remainder {
+			spanSize++
+		}
+		if spanSize > 0 {
+			end := start + TaskID(spanSize)
+			spans = append(spans, taskSpan{start: start, end: end})
+			start = end
+		}
+	}
+
+	return TaskSet{unassigned: spans}
 }
 
 // TaskSet is a generic work distribution coordinator that manages a collection
@@ -94,30 +129,24 @@ func (t *TaskSet) claimFirstLocked() TaskID {
 		return taskIDDone
 	}
 
-	// Find the largest span
-	largest := 0
-	for i := range t.unassigned {
-		if t.unassigned[largest].size() < t.unassigned[i].size() {
-			largest = i
-		}
-	}
-
-	largestSpan := t.unassigned[largest]
-	if largestSpan.size() == 0 {
+	// Take the first task from the first span, then rotate that span to the end.
+	// This provides round-robin distribution when used with MakeTaskSetForWorkers,
+	// ensuring each worker gets tasks from different regions initially for better
+	// load balancing.
+	span := t.unassigned[0]
+	if span.size() == 0 {
 		return taskIDDone
 	}
-	if largestSpan.size() == 1 {
-		t.lockedRemoveSpan(largest)
-		return largestSpan.start
-	}
 
-	left, right := largestSpan.split()
-	t.unassigned[largest] = left
+	task := span.start
+	span.start += 1
 
-	task := right.start
-	right.start += 1
-	if right.size() != 0 {
-		t.insertSpan(right, largest+1)
+	if span.size() == 0 {
+		// Span is exhausted, remove it
+		t.lockedRemoveSpan(0)
+	} else {
+		// Move the span to the end for round-robin distribution
+		t.unassigned = append(t.unassigned[1:], span)
 	}
 
 	return task
