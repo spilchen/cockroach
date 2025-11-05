@@ -22,7 +22,7 @@
 //	}
 package taskset
 
-import "sync"
+import "github.com/cockroachdb/cockroach/pkg/util/syncutil"
 
 // TaskID is an abstract integer identifier for a unit of work. The TaskID
 // itself has no inherent meaning - callers decide what each TaskID represents
@@ -69,7 +69,7 @@ func MakeTaskSet(taskCount int64) TaskSet {
 //
 // TaskSet is safe for concurrent use by multiple goroutines.
 type TaskSet struct {
-	mu         sync.Mutex
+	mu         syncutil.Mutex
 	unassigned []taskSpan
 }
 
