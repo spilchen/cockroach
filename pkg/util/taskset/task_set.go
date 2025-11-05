@@ -3,8 +3,30 @@
 // Use of this software is governed by the CockroachDB Software License
 // included in the /LICENSE file.
 
+// Package taskset provides a generic work distribution mechanism for
+// coordinating parallel workers. TaskSet hands out integer identifiers
+// (TaskIds) that workers can claim and process. The TaskIds themselves have no
+// inherent meaning - it's up to the caller to map each TaskId to actual work
+// (e.g., file indices, key ranges, batch numbers, etc.).
+//
+// Example usage:
+//
+//	tasks := taskset.MakeTaskSet(100)  // Create 100 abstract work items (0-99)
+//
+//	// Worker goroutine
+//	for taskID := tasks.ClaimFirst(); !taskID.IsDone(); taskID = tasks.ClaimNext(taskID) {
+//	    // Map taskID to actual work
+//	    processFile(files[taskID])
+//	    // or: processKeyRange(splits[taskID], splits[taskID+1])
+//	    // or: processBatch(taskID*batchSize, (taskID+1)*batchSize)
+//	}
 package taskset
 
+import "sync"
+
+// TaskId is an abstract integer identifier for a unit of work. The TaskId
+// itself has no inherent meaning - callers decide what each TaskId represents
+// (e.g., which file to process, which key range to handle, etc.).
 type TaskId int64
 
 // taskIdDone is an internal sentinel value indicating no more tasks are available.
@@ -15,6 +37,13 @@ func (t TaskId) IsDone() bool {
 	return t == taskIdDone
 }
 
+// MakeTaskSet creates a new TaskSet with taskCount work items numbered 0
+// through taskCount-1. These are abstract identifiers that have no inherent
+// meaning - the caller decides what each TaskId represents.
+//
+// For example, if you have 100 files to process, create MakeTaskSet(100) and
+// map TaskId N to files[N]. Or for key range processing, map TaskId N to the
+// range between splits[N-1] and splits[N].
 func MakeTaskSet(taskCount int64) TaskSet {
 	// TODO(jeffswenson): Should this be initialized with a set of initial
 	// workers? Right now it doesn't start with a perfect span split, so if tasks
@@ -24,24 +53,43 @@ func MakeTaskSet(taskCount int64) TaskSet {
 	}
 }
 
-// TaskSet manages a collection of tasks that can be claimed by workers. It
-// implements an algorithm similar to work stealing. When a worker marks task n
-// as completed, it will claim task n+1 if it is available. If its not
-// available, it will split the largest span of available tasks and claim task
-// from the right side of the split.
+// TaskSet is a generic work distribution coordinator that manages a collection
+// of abstract task identifiers (TaskIds) that can be claimed by workers.
 //
-// This algorithm is designed to allow maximize task locality.
+// TaskSet implements a work-stealing algorithm optimized for task locality:
+// - When a worker completes task N, it tries to claim task N+1 (sequential locality)
+// - If task N+1 is unavailable, it splits the largest remaining span of unclaimed tasks
+// - This balances load across workers while maintaining locality within each worker
+//
+// The TaskIds themselves are just integers (0 through taskCount-1) with no
+// inherent meaning. Callers map these identifiers to actual work units such as:
+// - File indices (TaskId 5 → process files[5])
+// - Key ranges (TaskId 5 → process range [splits[4], splits[5]))
+// - Batch numbers (TaskId 5 → process rows [5000, 6000))
+//
+// TaskSet is safe for concurrent use by multiple goroutines.
 type TaskSet struct {
+	mu         sync.Mutex
 	unassigned []taskSpan
 }
 
 // ClaimFirst should be called when a worker claims its first task. It returns
-// the taskId to process, or TaskIdDone if no tasks are available.
+// an abstract TaskId to process. The caller decides what this TaskId represents
+// (e.g., which file to process, which key range to handle). Returns a TaskId
+// where .IsDone() is true if no tasks are available.
 //
 // ClaimFirst is distinct from ClaimNext because ClaimFirst will always split
 // the largest span in the unassigned set, whereas ClaimNext will assign from
 // the same span until it is exhausted.
 func (t *TaskSet) ClaimFirst() TaskId {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.claimFirstLocked()
+}
+
+// claimFirstLocked is the internal implementation of ClaimFirst.
+// The caller must hold t.mu.
+func (t *TaskSet) claimFirstLocked() TaskId {
 	if len(t.unassigned) == 0 {
 		return taskIdDone
 	}
@@ -76,8 +124,17 @@ func (t *TaskSet) ClaimFirst() TaskId {
 }
 
 // ClaimNext should be called when a worker has completed its current task. It
-// returns the next taskId to process, or TaskIdDone if no tasks are available.
+// returns the next abstract TaskId to process. The caller decides what this
+// TaskId represents. Returns a TaskId where .IsDone() is true if no tasks are
+// available.
+//
+// ClaimNext optimizes for locality by attempting to claim lastTask+1 first. If
+// that task is unavailable, it falls back to ClaimFirst behavior (splitting the
+// largest remaining span).
 func (t *TaskSet) ClaimNext(lastTask TaskId) TaskId {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	next := lastTask + 1
 
 	for i, span := range t.unassigned {
@@ -98,7 +155,8 @@ func (t *TaskSet) ClaimNext(lastTask TaskId) TaskId {
 
 	// If we didn't find the next task in the unassigned set, then we've
 	// exhausted the span and need to claim from a different span.
-	return t.ClaimFirst()
+	// We already hold the lock, so call the internal implementation.
+	return t.claimFirstLocked()
 }
 
 func (t *TaskSet) insertSpan(span taskSpan, index int) {
