@@ -22,8 +22,6 @@
 //	}
 package taskset
 
-import "github.com/cockroachdb/cockroach/pkg/util/syncutil"
-
 // TaskID is an abstract integer identifier for a unit of work. The TaskID
 // itself has no inherent meaning - callers decide what each TaskID represents
 // (e.g., which file to process, which key range to handle, etc.).
@@ -102,9 +100,9 @@ func MakeTaskSet(taskCount, numWorkers int64) TaskSet {
 // - Key ranges (TaskID 5 → process range [splits[4], splits[5]))
 // - Batch numbers (TaskID 5 → process rows [5000, 6000))
 //
-// TaskSet is safe for concurrent use by multiple goroutines.
+// TaskSet is NOT safe for concurrent use. Callers must ensure external
+// synchronization if the TaskSet is accessed from multiple goroutines.
 type TaskSet struct {
-	mu         syncutil.Mutex
 	unassigned []taskSpan
 }
 
@@ -113,18 +111,10 @@ type TaskSet struct {
 // (e.g., which file to process, which key range to handle). Returns a TaskID
 // where .IsDone() is true if no tasks are available.
 //
-// ClaimFirst is distinct from ClaimNext because ClaimFirst will always split
-// the largest span in the unassigned set, whereas ClaimNext will assign from
-// the same span until it is exhausted.
+// ClaimFirst is distinct from ClaimNext because ClaimFirst will always take
+// from the first span and rotate it to the end (round-robin), whereas ClaimNext
+// tries to claim the next sequential task for locality.
 func (t *TaskSet) ClaimFirst() TaskID {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.claimFirstLocked()
-}
-
-// claimFirstLocked is the internal implementation of ClaimFirst.
-// The caller must hold t.mu.
-func (t *TaskSet) claimFirstLocked() TaskID {
 	if len(t.unassigned) == 0 {
 		return taskIDDone
 	}
@@ -143,7 +133,7 @@ func (t *TaskSet) claimFirstLocked() TaskID {
 
 	if span.size() == 0 {
 		// Span is exhausted, remove it
-		t.lockedRemoveSpan(0)
+		t.removeSpan(0)
 	} else {
 		// Move the span to the end for round-robin distribution
 		t.unassigned = append(t.unassigned[1:], span)
@@ -158,12 +148,9 @@ func (t *TaskSet) claimFirstLocked() TaskID {
 // available.
 //
 // ClaimNext optimizes for locality by attempting to claim lastTask+1 first. If
-// that task is unavailable, it falls back to ClaimFirst behavior (splitting the
-// largest remaining span).
+// that task is unavailable, it falls back to ClaimFirst behavior (round-robin
+// from the first span).
 func (t *TaskSet) ClaimNext(lastTask TaskID) TaskID {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
 	next := lastTask + 1
 
 	for i, span := range t.unassigned {
@@ -174,7 +161,7 @@ func (t *TaskSet) ClaimNext(lastTask TaskID) TaskID {
 		span.start += 1
 
 		if span.size() == 0 {
-			t.lockedRemoveSpan(i)
+			t.removeSpan(i)
 			return next
 		}
 
@@ -184,8 +171,7 @@ func (t *TaskSet) ClaimNext(lastTask TaskID) TaskID {
 
 	// If we didn't find the next task in the unassigned set, then we've
 	// exhausted the span and need to claim from a different span.
-	// We already hold the lock, so call the internal implementation.
-	return t.claimFirstLocked()
+	return t.ClaimFirst()
 }
 
 func (t *TaskSet) insertSpan(span taskSpan, index int) {
@@ -194,6 +180,6 @@ func (t *TaskSet) insertSpan(span taskSpan, index int) {
 	t.unassigned[index] = span
 }
 
-func (t *TaskSet) lockedRemoveSpan(index int) {
+func (t *TaskSet) removeSpan(index int) {
 	t.unassigned = append(t.unassigned[:index], t.unassigned[index+1:]...)
 }
