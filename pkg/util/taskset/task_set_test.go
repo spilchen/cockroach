@@ -27,7 +27,7 @@ func TestTaskSetSingleWorker(t *testing.T) {
 		found = append(found, next)
 	}
 
-	// With the new FIFO approach, tasks are claimed sequentially
+	// Verify that tasks are claimed sequentially.
 	require.Equal(t, []TaskID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, found)
 }
 
@@ -46,7 +46,7 @@ func TestTaskSetParallel(t *testing.T) {
 	}
 
 	for {
-		// pick a random worker to claim the next task
+		// Pick a random worker to claim the next task.
 		workerIndex := rand.Intn(len(workers))
 		prevTask := workers[workerIndex]
 		next := tasks.ClaimNext(prevTask)
@@ -57,7 +57,7 @@ func TestTaskSetParallel(t *testing.T) {
 		found = append(found, next)
 	}
 
-	// build a map of the found tasks to ensure they are unique
+	// Build a map of the found tasks to ensure they are unique.
 	taskMap := make(map[TaskID]struct{})
 	for _, task := range found {
 		taskMap[task] = struct{}{}
@@ -69,7 +69,7 @@ func TestMakeTaskSet(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	// Test with evenly divisible tasks - simulate 4 workers each calling ClaimFirst once
+	// Test with evenly divisible tasks - simulate 4 workers each calling ClaimFirst once.
 	tasks := MakeTaskSet(100, 4)
 	var claimed []TaskID
 	for i := 0; i < 4; i++ {
@@ -77,10 +77,10 @@ func TestMakeTaskSet(t *testing.T) {
 		require.False(t, task.IsDone())
 		claimed = append(claimed, task)
 	}
-	// Each worker should get the first task from their region (round-robin)
+	// Each worker should get the first task from their region (round-robin).
 	require.Equal(t, []TaskID{0, 25, 50, 75}, claimed)
 
-	// Test with tasks that don't divide evenly - simulate 3 workers
+	// Test with tasks that don't divide evenly - simulate 3 workers.
 	tasks = MakeTaskSet(100, 3)
 	claimed = nil
 	for i := 0; i < 3; i++ {
@@ -88,10 +88,10 @@ func TestMakeTaskSet(t *testing.T) {
 		require.False(t, task.IsDone())
 		claimed = append(claimed, task)
 	}
-	// First span gets 34 tasks [0,34), second gets 33 [34,67), third gets 33 [67,100)
+	// First span gets 34 tasks [0,34), second gets 33 [34,67), third gets 33 [67,100).
 	require.Equal(t, []TaskID{0, 34, 67}, claimed)
 
-	// Test with more workers than tasks - simulate 5 workers (only 5 tasks available)
+	// Test with more workers than tasks - simulate 5 workers (only 5 tasks available).
 	tasks = MakeTaskSet(5, 10)
 	claimed = nil
 	for i := 0; i < 5; i++ {
@@ -100,10 +100,10 @@ func TestMakeTaskSet(t *testing.T) {
 		claimed = append(claimed, task)
 	}
 	require.Equal(t, []TaskID{0, 1, 2, 3, 4}, claimed)
-	// 6th worker should get nothing
+	// 6th worker should get nothing.
 	require.True(t, tasks.ClaimFirst().IsDone())
 
-	// Test edge cases
+	// Test edge cases.
 	tasks = MakeTaskSet(0, 4)
 	require.True(t, tasks.ClaimFirst().IsDone())
 
@@ -118,7 +118,7 @@ func TestTaskSetLoadBalancing(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	// Simulate 4 workers processing 100 tasks
+	// Simulate 4 workers processing 100 tasks.
 	tasks := MakeTaskSet(100, 4)
 
 	type worker struct {
@@ -127,7 +127,7 @@ func TestTaskSetLoadBalancing(t *testing.T) {
 	}
 	workers := make([]worker, 4)
 
-	// Each worker claims their first task
+	// Each worker claims their first task.
 	for i := range workers {
 		workers[i].id = i
 		task := tasks.ClaimFirst()
@@ -142,7 +142,7 @@ func TestTaskSetLoadBalancing(t *testing.T) {
 	require.Equal(t, TaskID(75), workers[3].tasks[0]) // Region [75, 100)
 
 	// Simulate concurrent-like processing: round-robin through workers
-	// This prevents one worker from stealing all the work
+	// This prevents one worker from stealing all the work.
 	for {
 		claimed := false
 		for i := range workers {
@@ -158,7 +158,7 @@ func TestTaskSetLoadBalancing(t *testing.T) {
 		}
 	}
 
-	// Verify all tasks were claimed exactly once
+	// Verify all tasks were claimed exactly once.
 	allTasks := make(map[TaskID]bool)
 	for _, w := range workers {
 		for _, task := range w.tasks {
@@ -168,7 +168,7 @@ func TestTaskSetLoadBalancing(t *testing.T) {
 	}
 	require.Len(t, allTasks, 100)
 
-	// With round-robin processing, each worker should get approximately equal work
+	// With round-robin processing, each worker should get approximately equal work.
 	for i, w := range workers {
 		require.InDelta(t, 25, len(w.tasks), 2, "worker %d got %d tasks", i, len(w.tasks))
 	}
@@ -178,7 +178,7 @@ func TestTaskSetMoreWorkersThanTasks(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	// Simulate scenario with more workers than tasks: 10 tasks, 64 workers
+	// Simulate scenario with more workers than tasks: 10 tasks, 64 workers.
 	tasks := MakeTaskSet(10, 64)
 
 	type worker struct {
@@ -201,11 +201,11 @@ func TestTaskSetMoreWorkersThanTasks(t *testing.T) {
 		}
 	}
 
-	// Only 10 workers should get tasks (one per task)
+	// Only 10 workers should get tasks (one per task).
 	require.Equal(t, 10, workersWithTasks, "expected 10 workers to get tasks")
 	require.Equal(t, 54, workersWithoutTasks, "expected 54 workers to get no tasks")
 
-	// Verify the workers that got tasks received unique tasks
+	// Verify the workers that got tasks received unique tasks.
 	seenTasks := make(map[TaskID]bool)
 	for _, w := range workers {
 		if len(w.tasks) > 0 {
@@ -217,7 +217,7 @@ func TestTaskSetMoreWorkersThanTasks(t *testing.T) {
 	}
 	require.Len(t, seenTasks, 10, "all 10 tasks should be assigned")
 
-	// Verify the tasks are distributed round-robin (0-9)
+	// Verify the tasks are distributed round-robin (0-9).
 	expectedTasks := []TaskID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 	actualTasks := make([]TaskID, 0, 10)
 	for _, w := range workers {
@@ -227,7 +227,7 @@ func TestTaskSetMoreWorkersThanTasks(t *testing.T) {
 	}
 	require.Equal(t, expectedTasks, actualTasks, "tasks should be assigned round-robin")
 
-	// Simulate workers trying to claim more tasks (all should fail)
+	// Simulate workers trying to claim more tasks (all should fail).
 	for i := range workers {
 		if len(workers[i].tasks) > 0 {
 			next := tasks.ClaimNext(workers[i].tasks[0])

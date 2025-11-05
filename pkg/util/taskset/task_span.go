@@ -10,11 +10,6 @@ type taskSpan struct {
 	end   TaskID
 }
 
-func (t *taskSpan) size() int {
-	return int(t.end) - int(t.start)
-}
-
-func (t taskSpan) split() (taskSpan, taskSpan) {
-	mid := (t.start + t.end) / 2
-	return taskSpan{start: t.start, end: mid}, taskSpan{start: mid, end: t.end}
+func (t *taskSpan) size() int64 {
+	return int64(t.end) - int64(t.start)
 }

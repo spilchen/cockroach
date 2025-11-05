@@ -91,7 +91,7 @@ func MakeTaskSet(taskCount, numWorkers int64) TaskSet {
 //
 // TaskSet implements a work-stealing algorithm optimized for task locality:
 // - When a worker completes task N, it tries to claim task N+1 (sequential locality)
-// - If task N+1 is unavailable, it splits the largest remaining span of unclaimed tasks
+// - If task N+1 is unavailable, it falls back to round-robin claiming from the first span
 // - This balances load across workers while maintaining locality within each worker
 //
 // The TaskIDs themselves are just integers (0 through taskCount-1) with no
@@ -120,9 +120,8 @@ func (t *TaskSet) ClaimFirst() TaskID {
 	}
 
 	// Take the first task from the first span, then rotate that span to the end.
-	// This provides round-robin distribution when used with MakeTaskSet,
-	// ensuring each worker gets tasks from different regions initially for better
-	// load balancing.
+	// This provides round-robin distribution, ensuring each worker gets tasks
+	// from different regions initially for better load balancing.
 	span := t.unassigned[0]
 	if span.size() == 0 {
 		return taskIDDone
@@ -172,12 +171,6 @@ func (t *TaskSet) ClaimNext(lastTask TaskID) TaskID {
 	// If we didn't find the next task in the unassigned set, then we've
 	// exhausted the span and need to claim from a different span.
 	return t.ClaimFirst()
-}
-
-func (t *TaskSet) insertSpan(span taskSpan, index int) {
-	t.unassigned = append(t.unassigned, taskSpan{})
-	copy(t.unassigned[index+1:], t.unassigned[index:])
-	t.unassigned[index] = span
 }
 
 func (t *TaskSet) removeSpan(index int) {

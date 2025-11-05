@@ -12,7 +12,7 @@ go_library(
 
 go_test(
     name = "taskset_test",
-    srcs = ["task_span_test.go"],
+    srcs = ["task_set_test.go"],
     embed = [":taskset"],
     deps = [
         "//pkg/util/leaktest",
