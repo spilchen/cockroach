@@ -1325,6 +1325,23 @@ message RowLevelTTLDetails {
     (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb.DescriptorVersion"
   ];
 
+  // HybridCleanerMode, when true, indicates this TTL job is running in
+  // "delete-only" mode for partition TTL hybrid cleanup. In this mode:
+  // - No expiration filtering or select phase is performed.
+  // - Deletes are targeted at all non-aligned secondary indexes within partition bounds.
+  // - The job determines which indexes need cleanup at runtime by inspecting the table descriptor.
+  // - Used to clean up orphaned secondary index entries after partition drops.
+  bool hybrid_cleaner_mode = 4;
+
+  // PartitionStart is the lower bound (inclusive) of the partition being cleaned
+  // in hybrid cleaner mode. Only used when hybrid_cleaner_mode is true.
+  google.protobuf.Timestamp partition_start = 5 [(gogoproto.stdtime) = true];
+
+  // PartitionEnd is the upper bound (exclusive) of the partition being cleaned
+  // in hybrid cleaner mode. Only used when hybrid_cleaner_mode is true.
+  google.protobuf.Timestamp partition_end = 6 [(gogoproto.stdtime) = true];
+
+  // NEXT ID: 7
 }
 
 message RowLevelTTLProgress {
@@ -1766,7 +1783,8 @@ enum Type {
   SQL_ACTIVITY_FLUSH = 31 [(gogoproto.enumvalue_customname) = "TypeSQLActivityFlush"];
   HOT_RANGES_LOGGER = 32 [(gogoproto.enumvalue_customname) = "TypeHotRangesLogger"];
   INSPECT = 33 [(gogoproto.enumvalue_customname) = "TypeInspect"];
-  PARTITION_TTL_MAINTENANCE = 34 [(gogoproto.enumvalue_customname) = "TypePartitionTTLMaintenance"];
+  PARTITION_TTL_SCHEDULER = 34 [(gogoproto.enumvalue_customname) = "TypePartitionTTLScheduler"];
+  PARTITION_TTL_CLEANUP = 35 [(gogoproto.enumvalue_customname) = "TypePartitionTTLCleanup"];
 }
 
 message Job {

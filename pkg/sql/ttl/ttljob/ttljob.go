@@ -514,11 +514,13 @@ func detectNodeAvailabilityChanges(before, after *sql.PhysicalPlan) (int, float6
 }
 
 func init() {
-	jobs.RegisterConstructor(jobspb.TypeRowLevelTTL, func(job *jobs.Job, settings *cluster.Settings) jobs.Resumer {
+	constructor := func(job *jobs.Job, settings *cluster.Settings) jobs.Resumer {
 		return &rowLevelTTLResumer{
 			job:                        job,
 			st:                         settings,
 			consecutiveReplanDecisions: &atomic.Int64{},
 		}
-	}, jobs.UsesTenantCostControl)
+	}
+	jobs.RegisterConstructor(jobspb.TypeRowLevelTTL, constructor, jobs.UsesTenantCostControl)
+	jobs.RegisterConstructor(jobspb.TypePartitionTTLCleanup, constructor, jobs.UsesTenantCostControl)
 }
