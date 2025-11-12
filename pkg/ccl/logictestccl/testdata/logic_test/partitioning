@@ -92,6 +92,12 @@ CREATE TABLE t_range (a INT PRIMARY KEY) PARTITION BY RANGE (a) (
 statement ok
 ALTER TABLE t_range ADD PARTITION p2 VALUES FROM (100) TO (200)
 
+query T
+SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_range] ORDER BY partition_name
+----
+p1
+p2
+
 statement ok
 ALTER TABLE t_range ADD PARTITION p3 VALUES FROM (200) TO (300), ADD PARTITION p4 VALUES FROM (300) TO (400)
 
@@ -99,6 +105,9 @@ query T
 SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_range] ORDER BY partition_name
 ----
 p1
+p2
+p3
+p4
 
 statement ok
 DROP TABLE t_range

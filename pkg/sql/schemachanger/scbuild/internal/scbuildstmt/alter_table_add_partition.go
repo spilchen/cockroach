@@ -7,6 +7,7 @@ package scbuildstmt
 
 import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/tabledesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
@@ -168,8 +169,24 @@ func alterTableAddPartition(
 		}
 	}
 
-	// No-op for now: Future implementation will handle actually adding the partition.
-	// This validation ensures the new partition would be valid if we were to add it.
+	// Create the partition entry to add.
+	partitionEntry := &scpb.IndexPartitionEntry{
+		TableID:            tbl.TableID,
+		IndexID:            primaryIndexID,
+		PartitionPath:      []string{newPartitionName},
+		NumColumns:         uint32(partition.NumColumns()),
+		NumImplicitColumns: uint32(partition.NumImplicitColumns()),
+		Partition: &scpb.IndexPartitionEntry_RangePartition{
+			RangePartition: &catpb.PartitioningDescriptor_Range{
+				Name:          newPartitionName,
+				FromInclusive: newFromEncoded,
+				ToExclusive:   newToEncoded,
+			},
+		},
+	}
+
+	// Add the partition entry element to the builder.
+	b.Add(partitionEntry)
 }
 
 // partitionInterval implements interval.Interface for partition range checking.

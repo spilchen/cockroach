@@ -339,10 +339,21 @@ func (i *immediateVisitor) AddIndexPartitionEntry(
 	if err != nil {
 		return err
 	}
-	// TODO: Implement actual partition addition logic.
-	// This requires navigating the partition tree using PartitionPath
-	// and adding the new partition at the correct location.
-	_ = index
+
+	// Get the index descriptor to modify.
+	idx := index.IndexDesc()
+
+	// Navigate to the partition level and add the new partition using PartitionPath.
+	partitionPath := op.PartitionEntry.PartitionPath
+	if len(partitionPath) == 0 {
+		return errors.AssertionFailedf("partition path cannot be empty")
+	}
+
+	// Add the partition to the tree.
+	if err := addPartitionToDescriptor(&idx.Partitioning, &op.PartitionEntry, partitionPath, 0); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -377,6 +388,59 @@ func (i *immediateVisitor) RemoveIndexPartitionEntry(
 	}
 
 	return nil
+}
+
+// addPartitionToDescriptor recursively navigates the partition tree and adds
+// the partition at the specified path.
+func addPartitionToDescriptor(
+	partitioning *catpb.PartitioningDescriptor, entry *scpb.IndexPartitionEntry, partitionPath []string, depth int,
+) error {
+	if depth >= len(partitionPath) {
+		return errors.AssertionFailedf("depth exceeds partition path length")
+	}
+
+	isLastLevel := depth == len(partitionPath)-1
+
+	if isLastLevel {
+		// This is the level where we need to add the partition.
+		// Check if it's a LIST or RANGE partition.
+		if listPart := entry.GetListPartition(); listPart != nil {
+			// Add a LIST partition.
+			partitioning.List = append(partitioning.List, *listPart)
+			// Update NumColumns if this is the first partition at this level.
+			if partitioning.NumColumns == 0 {
+				partitioning.NumColumns = entry.NumColumns
+			}
+			if partitioning.NumImplicitColumns == 0 {
+				partitioning.NumImplicitColumns = entry.NumImplicitColumns
+			}
+			return nil
+		} else if rangePart := entry.GetRangePartition(); rangePart != nil {
+			// Add a RANGE partition.
+			partitioning.Range = append(partitioning.Range, *rangePart)
+			// Update NumColumns if this is the first partition at this level.
+			if partitioning.NumColumns == 0 {
+				partitioning.NumColumns = entry.NumColumns
+			}
+			if partitioning.NumImplicitColumns == 0 {
+				partitioning.NumImplicitColumns = entry.NumImplicitColumns
+			}
+			return nil
+		} else {
+			return errors.AssertionFailedf("partition entry must have either list_partition or range_partition")
+		}
+	}
+
+	// Need to navigate deeper into subpartitions.
+	// For LIST partitions.
+	for idx := range partitioning.List {
+		if partitioning.List[idx].Name == partitionPath[depth] {
+			return addPartitionToDescriptor(&partitioning.List[idx].Subpartitioning, entry, partitionPath, depth+1)
+		}
+	}
+
+	// Range partitions don't support subpartitioning in the same way.
+	return errors.Newf("parent partition %q not found at path depth %d", partitionPath[depth], depth)
 }
 
 // removePartitionFromDescriptor recursively navigates the partition tree and removes
