@@ -414,6 +414,17 @@ func alterTableAddForeignKey(
 					referencedTableNamespaceElem.Name))
 		}
 	}
+
+	// 12a. Block foreign keys that reference tables with partition TTL.
+	// Partition TTL relies on dropping entire partitions, which would violate FK constraints.
+	if b.QueryByID(referencedTableID).FilterPartitionTTL() != nil {
+		panic(pgerror.Newf(
+			pgcode.InvalidTableDefinition,
+			"cannot add foreign key constraint to table %s because it has partition TTL enabled",
+			referencedTableNamespaceElem.Name,
+		))
+	}
+
 	// 13. (Finally!) Add a ForeignKey_Constraint, ConstraintName element to
 	// builder state.
 	constraintID := b.NextTableConstraintID(tbl.TableID)

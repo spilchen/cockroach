@@ -1112,6 +1112,16 @@ func ResolveFK(
 		}
 	}
 
+	// Block foreign keys that reference tables with partition TTL.
+	// Partition TTL relies on dropping entire partitions, which would violate FK constraints.
+	if target.GetPartitionTTL() != nil {
+		return pgerror.Newf(
+			pgcode.InvalidTableDefinition,
+			"cannot add foreign key constraint to table %s because it has partition TTL enabled",
+			target.GetName(),
+		)
+	}
+
 	ref := descpb.ForeignKeyConstraint{
 		OriginTableID:       tbl.ID,
 		OriginColumnIDs:     originColumnIDs,

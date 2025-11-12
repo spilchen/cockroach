@@ -319,11 +319,29 @@ subtest end
 
 subtest partition_ttl_with_inbound_fk
 
-# Test that partition TTL is blocked when table has inbound FKs
-# This test is currently disabled because ALTER TABLE SET for partition TTL
-# is not yet implemented. Will be enabled when ALTER TABLE support is added.
+# Test that partition TTL blocks creation of new inbound FKs
+statement ok
+CREATE TABLE ttl_parent (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '30d'
+)
 
-# TODO: Re-enable this test after ALTER TABLE SET support for partition TTL is implemented
+# Try to create a child table with FK to the partition TTL table
+statement error cannot add foreign key constraint to table ttl_parent because it has partition TTL enabled
+CREATE TABLE ttl_child (
+  child_id INT PRIMARY KEY,
+  parent_ts TIMESTAMPTZ NOT NULL,
+  parent_id INT,
+  FOREIGN KEY (parent_ts, parent_id) REFERENCES ttl_parent(ts, id)
+)
+
+statement ok
+DROP TABLE ttl_parent
 
 subtest end
 

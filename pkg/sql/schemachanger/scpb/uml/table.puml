@@ -303,6 +303,11 @@ object Owner
 Owner :  DescriptorID
 Owner :  Owner
 
+object PartitionTTL
+
+PartitionTTL :  TableID
+PartitionTTL :  PartitionTTLConfig
+
 object PartitionZoneConfig
 
 PartitionZoneConfig :  TableID
@@ -644,6 +649,7 @@ Database <|-- Owner
 Schema <|-- Owner
 AliasType <|-- Owner
 EnumType <|-- Owner
+Table <|-- PartitionTTL
 TablePartitioning <|-- PartitionZoneConfig
 Table <|-- Policy
 Policy <|-- PolicyDeps

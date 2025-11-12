@@ -1712,6 +1712,43 @@ func (c *ElementCollection[E]) FilterOwner() *ElementCollection[*Owner] {
 	return (*ElementCollection[*Owner])(ret)
 }
 
+func (e PartitionTTL) element() {}
+
+// Element implements ElementGetter.
+func (e * ElementProto_PartitionTTL) Element() Element {
+	return e.PartitionTTL
+}
+
+// ForEachPartitionTTL iterates over elements of type PartitionTTL.
+// Deprecated
+func ForEachPartitionTTL(
+	c *ElementCollection[Element], fn func(current Status, target TargetStatus, e *PartitionTTL),
+) {
+  c.FilterPartitionTTL().ForEach(fn)
+}
+
+// FindPartitionTTL finds the first element of type PartitionTTL.
+// Deprecated
+func FindPartitionTTL(
+	c *ElementCollection[Element],
+) (current Status, target TargetStatus, element *PartitionTTL) {
+	if tc := c.FilterPartitionTTL(); !tc.IsEmpty() {
+		var e Element
+		current, target, e = tc.Get(0)
+		element = e.(*PartitionTTL)
+	}
+	return current, target, element
+}
+
+// PartitionTTLElements filters elements of type PartitionTTL.
+func (c *ElementCollection[E]) FilterPartitionTTL() *ElementCollection[*PartitionTTL] {
+	ret := c.genericFilter(func(_ Status, _ TargetStatus, e Element) bool {
+		_, ok := e.(*PartitionTTL)
+		return ok
+	})
+	return (*ElementCollection[*PartitionTTL])(ret)
+}
+
 func (e PartitionZoneConfig) element() {}
 
 // Element implements ElementGetter.
@@ -3474,6 +3511,8 @@ func (e* ElementProto) SetElement(element Element) {
 			e.ElementOneOf = &ElementProto_Namespace{ Namespace: t}
 		case *Owner:
 			e.ElementOneOf = &ElementProto_Owner{ Owner: t}
+		case *PartitionTTL:
+			e.ElementOneOf = &ElementProto_PartitionTTL{ PartitionTTL: t}
 		case *PartitionZoneConfig:
 			e.ElementOneOf = &ElementProto_PartitionZoneConfig{ PartitionZoneConfig: t}
 		case *Policy:
@@ -3616,6 +3655,7 @@ func GetElementOneOfProtos() []interface{} {
 	((*ElementProto_NamedRangeZoneConfig)(nil)),
 	((*ElementProto_Namespace)(nil)),
 	((*ElementProto_Owner)(nil)),
+	((*ElementProto_PartitionTTL)(nil)),
 	((*ElementProto_PartitionZoneConfig)(nil)),
 	((*ElementProto_Policy)(nil)),
 	((*ElementProto_PolicyDeps)(nil)),
@@ -3714,6 +3754,7 @@ func GetElementTypes() []interface{} {
 	((*NamedRangeZoneConfig)(nil)),
 	((*Namespace)(nil)),
 	((*Owner)(nil)),
+	((*PartitionTTL)(nil)),
 	((*PartitionZoneConfig)(nil)),
 	((*Policy)(nil)),
 	((*PolicyDeps)(nil)),

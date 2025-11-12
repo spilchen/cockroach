@@ -402,6 +402,12 @@ func (w *walkCtx) walkRelation(tbl catalog.TableDescriptor) {
 				TTLExpr:     ttlExpr,
 			})
 		}
+		if partitionTTL := tbl.GetPartitionTTL(); partitionTTL != nil {
+			w.ev(scpb.Status_PUBLIC, &scpb.PartitionTTL{
+				TableID:              tbl.GetID(),
+				PartitionTTLConfig:   *partitionTTL,
+			})
+		}
 	}
 	for _, c := range tbl.UniqueConstraintsWithoutIndex() {
 		w.walkUniqueWithoutIndexConstraint(tbl, c)

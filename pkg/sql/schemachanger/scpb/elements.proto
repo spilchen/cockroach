@@ -92,6 +92,7 @@ message ElementProto {
     Policy policy = 137 [(gogoproto.moretags) = "parent:\"Table\""];
     RowLevelSecurityEnabled row_level_security_enabled = 138 [(gogoproto.moretags) = "parent:\"Table\""];
     RowLevelSecurityForced row_level_security_forced = 139 [(gogoproto.moretags) = "parent:\"Table\""];
+    PartitionTTL partition_ttl = 145 [(gogoproto.customname) = "PartitionTTL", (gogoproto.moretags) = "parent:\"Table\""];
 
     // Multi-region elements.
     TableLocalityGlobal table_locality_global = 110 [(gogoproto.moretags) = "parent:\"Table\""];
@@ -767,6 +768,11 @@ message RowLevelTTL {
   // ExpirationExpr is not set. This expression is used to establish column
   // dependencies.
   Expression ttl_expr = 3 [(gogoproto.customname) = "TTLExpr"];
+}
+
+message PartitionTTL {
+  uint32 table_id = 1 [(gogoproto.customname) = "TableID", (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.DescID"];
+  cockroach.sql.catalog.catpb.PartitionTTLConfig partition_ttl = 2 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
 }
 
 message ColumnName {
