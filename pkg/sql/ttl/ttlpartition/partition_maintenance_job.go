@@ -65,7 +65,7 @@ func (r *partitionTTLMaintenanceResumer) CollectProfile(_ context.Context, _ int
 }
 
 func init() {
-	jobs.RegisterConstructor(jobspb.TypePartitionTTLMaintenance, func(job *jobs.Job, settings *cluster.Settings) jobs.Resumer {
+	jobs.RegisterConstructor(jobspb.TypePartitionTTLScheduler, func(job *jobs.Job, settings *cluster.Settings) jobs.Resumer {
 		return &partitionTTLMaintenanceResumer{
 			job: job,
 			st:  settings,
