@@ -106,6 +106,13 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 
 	details := t.job.Details().(jobspb.RowLevelTTLDetails)
 
+	// TODO(SPILLY): Hybrid cleaner mode check
+	// if details.HybridCleanerMode {
+	//   - Determine which secondary indexes need cleanup by inspecting table descriptor
+	//   - Check if each secondary index has TTL column as leftmost key and matching partitioning
+	//   - Build list of non-aligned indexes that need cleanup
+	// }
+
 	aostDuration := ttlbase.DefaultAOSTDuration
 	if knobs.AOSTDuration != nil {
 		aostDuration = *knobs.AOSTDuration
@@ -147,7 +154,14 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 		}
 		relationName = tn.FQString()
 
+		// TODO(SPILLY): Hybrid cleaner mode span determination
+		// if details.HybridCleanerMode {
+		//   - Instead of PK span, compute spans for non-aligned secondary indexes
+		//   - Filter spans to partition bounds [PartitionStart, PartitionEnd)
+		//   - Create one span per secondary index that needs cleanup
+		// } else {
 		entirePKSpan = desc.PrimaryIndexSpan(execCfg.Codec)
+		// }
 		return nil
 	}); err != nil {
 		return err

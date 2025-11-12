@@ -240,6 +240,14 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 	cutoff := details.Cutoff
 	ttlExpr := ttlSpec.TTLExpr
 
+	// TODO(SPILLY): Hybrid cleaner mode processor setup
+	// if details.HybridCleanerMode {
+	//   - Skip standard TTL processing
+	//   - Use partition bounds from details.PartitionStart and details.PartitionEnd
+	//   - Iterate over assigned secondary index spans (not PK spans)
+	//   - Call different deletion logic (no SELECT phase)
+	// }
+
 	// Note: the ttl-restart test depends on this message to know what nodes are
 	// involved in a TTL job.
 	log.Dev.Infof(ctx, "TTL processor started processorID=%d tableID=%d", t.ProcessorID, tableID)
@@ -401,6 +409,15 @@ func (t *ttlProcessor) runTTLOnQueryBounds(
 
 	ttlSpec := t.ttlSpec
 	details := ttlSpec.RowLevelTTLDetails
+
+	// TODO(SPILLY): Hybrid cleaner mode deletion
+	// if details.HybridCleanerMode {
+	//   - Skip SELECT phase entirely (no expiration check needed)
+	//   - Directly delete all rows in the secondary index span within partition bounds
+	//   - Use deleteBuilder.Run() with all keys in the span, not selected PKs
+	//   - Return early after deletion completes
+	// }
+
 	flowCtx := t.FlowCtx
 	serverCfg := flowCtx.Cfg
 	ie := serverCfg.DB.Executor()
