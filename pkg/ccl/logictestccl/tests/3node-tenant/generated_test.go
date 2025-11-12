@@ -1436,6 +1436,13 @@ func TestTenantLogic_partial_txn_commit(
 	runLogicTest(t, "partial_txn_commit")
 }
 
+func TestTenantLogic_partition_ttl(
+	t *testing.T,
+) {
+	defer leaktest.AfterTest(t)()
+	runLogicTest(t, "partition_ttl")
+}
+
 func TestTenantLogic_pg_builtins(
 	t *testing.T,
 ) {

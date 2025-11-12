@@ -1,0 +1,114 @@
+# LogicTest: !local-prepared
+
+subtest partition_ttl_basic_syntax
+
+# Test basic partition TTL syntax
+statement ok
+CREATE TABLE events_partition_ttl (
+  ts TIMESTAMPTZ NOT NULL,
+  user_id UUID NOT NULL,
+  payload STRING,
+  PRIMARY KEY (ts, user_id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '30d',
+  ttl_granularity = '1d',
+  ttl_lookahead = '2d'
+)
+
+statement ok
+DROP TABLE events_partition_ttl
+
+subtest end
+
+subtest partition_ttl_mode_validation
+
+# Test that ttl_mode only accepts 'partition' or 'row'
+statement error value of "ttl_mode" must be either 'partition' or 'row'
+CREATE TABLE tbl_invalid_mode (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'invalid',
+  ttl_column = 'ts',
+  ttl_retention = '30d',
+  ttl_granularity = '1d'
+)
+
+subtest end
+
+subtest partition_ttl_retention_validation
+
+# Test that ttl_retention must be a valid interval
+statement error value of "ttl_retention" must be an interval
+CREATE TABLE tbl_invalid_retention (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = 'invalid interval',
+  ttl_granularity = '1d'
+)
+
+subtest end
+
+subtest partition_ttl_granularity_validation
+
+# Test that ttl_granularity must be a valid interval
+statement error value of "ttl_granularity" must be an interval
+CREATE TABLE tbl_invalid_granularity (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '30d',
+  ttl_granularity = 'not an interval'
+)
+
+subtest end
+
+subtest partition_ttl_lookahead_validation
+
+# Test that ttl_lookahead must be a valid interval
+statement error value of "ttl_lookahead" must be an interval
+CREATE TABLE tbl_invalid_lookahead (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '30d',
+  ttl_granularity = '1d',
+  ttl_lookahead = 'bad interval'
+)
+
+subtest end
+
+subtest partition_ttl_all_fields
+
+# Test setting all partition TTL fields
+statement ok
+CREATE TABLE events_all_fields (
+  ts TIMESTAMPTZ NOT NULL,
+  user_id UUID NOT NULL,
+  event_type STRING,
+  PRIMARY KEY (ts, user_id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '7d',
+  ttl_granularity = '1h',
+  ttl_lookahead = '6h'
+)
+
+statement ok
+DROP TABLE events_all_fields
+
+subtest end

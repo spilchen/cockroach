@@ -1417,6 +1417,13 @@ func TestLogic_partial_txn_commit(
 	runLogicTest(t, "partial_txn_commit")
 }
 
+func TestLogic_partition_ttl(
+	t *testing.T,
+) {
+	defer leaktest.AfterTest(t)()
+	runLogicTest(t, "partition_ttl")
+}
+
 func TestLogic_partitioning(
 	t *testing.T,
 ) {

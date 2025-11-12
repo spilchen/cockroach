@@ -39,6 +39,10 @@ type Setter struct {
 	// in case changes need to be made in schema changer.
 	UpdatedRowLevelTTL *catpb.RowLevelTTL
 
+	// UpdatedPartitionTTL is kept separate from the PartitionTTL in TableDesc
+	// in case changes need to be made in schema changer.
+	UpdatedPartitionTTL *catpb.PartitionTTLConfig
+
 	// NewObject bool tracks if this is a newly created object.
 	NewObject bool
 }
@@ -51,10 +55,15 @@ func NewSetter(tableDesc *tabledesc.Mutable, isNewObject bool) *Setter {
 	if tableDesc.HasRowLevelTTL() {
 		updatedRowLevelTTL = protoutil.Clone(tableDesc.GetRowLevelTTL()).(*catpb.RowLevelTTL)
 	}
+	var updatedPartitionTTL *catpb.PartitionTTLConfig
+	if tableDesc.GetPartitionTTL() != nil {
+		updatedPartitionTTL = protoutil.Clone(tableDesc.GetPartitionTTL()).(*catpb.PartitionTTLConfig)
+	}
 	return &Setter{
-		TableDesc:          tableDesc,
-		NewObject:          isNewObject,
-		UpdatedRowLevelTTL: updatedRowLevelTTL,
+		TableDesc:           tableDesc,
+		NewObject:           isNewObject,
+		UpdatedRowLevelTTL:  updatedRowLevelTTL,
+		UpdatedPartitionTTL: updatedPartitionTTL,
 	}
 }
 
@@ -127,6 +136,19 @@ func (po *Setter) getOrCreateRowLevelTTL() *catpb.RowLevelTTL {
 		po.UpdatedRowLevelTTL = rowLevelTTL
 	}
 	return rowLevelTTL
+}
+
+func (po *Setter) hasPartitionTTL() bool {
+	return po.UpdatedPartitionTTL != nil
+}
+
+func (po *Setter) getOrCreatePartitionTTL() *catpb.PartitionTTLConfig {
+	partitionTTL := po.UpdatedPartitionTTL
+	if partitionTTL == nil {
+		partitionTTL = &catpb.PartitionTTLConfig{}
+		po.UpdatedPartitionTTL = partitionTTL
+	}
+	return partitionTTL
 }
 
 type tableParam struct {
@@ -458,6 +480,131 @@ var tableParams = map[string]tableParam{
 		onReset: func(ctx context.Context, po *Setter, evalCtx *eval.Context, key string) error {
 			if po.hasRowLevelTTL() {
 				po.UpdatedRowLevelTTL.DisableChangefeedReplication = false
+			}
+			return nil
+		},
+	},
+	`ttl_mode`: {
+		onSet: func(ctx context.Context, po *Setter, semaCtx *tree.SemaContext, evalCtx *eval.Context, key string, datum tree.Datum) error {
+			str, err := paramparse.DatumAsString(ctx, evalCtx, key, datum)
+			if err != nil {
+				return err
+			}
+			if str != "partition" && str != "row" {
+				return pgerror.Newf(
+					pgcode.InvalidParameterValue,
+					`value of %q must be either 'partition' or 'row'`,
+					key,
+				)
+			}
+			if str == "partition" {
+				// Initialize partition TTL config.
+				po.getOrCreatePartitionTTL()
+			}
+			// Note: The actual mode is implicitly determined by which config is set.
+			// If UpdatedPartitionTTL is set, mode is 'partition'.
+			// If UpdatedRowLevelTTL is set, mode is 'row'.
+			return nil
+		},
+		onReset: func(_ context.Context, po *Setter, evalCtx *eval.Context, key string) error {
+			po.UpdatedPartitionTTL = nil
+			return nil
+		},
+	},
+	`ttl_column`: {
+		onSet: func(ctx context.Context, po *Setter, semaCtx *tree.SemaContext, evalCtx *eval.Context, key string, datum tree.Datum) error {
+			str, err := paramparse.DatumAsString(ctx, evalCtx, key, datum)
+			if err != nil {
+				return err
+			}
+			partitionTTL := po.getOrCreatePartitionTTL()
+			partitionTTL.ColumnName = str
+			return nil
+		},
+		onReset: func(_ context.Context, po *Setter, evalCtx *eval.Context, key string) error {
+			if po.hasPartitionTTL() {
+				po.UpdatedPartitionTTL.ColumnName = ""
+			}
+			return nil
+		},
+	},
+	`ttl_retention`: {
+		onSet: func(ctx context.Context, po *Setter, semaCtx *tree.SemaContext, evalCtx *eval.Context, key string, datum tree.Datum) error {
+			str, err := paramparse.DatumAsString(ctx, evalCtx, key, datum)
+			if err != nil {
+				return err
+			}
+			// Validate it's a valid interval by attempting to parse it.
+			_, err = tree.ParseDInterval(evalCtx.SessionData().GetIntervalStyle(), str)
+			if err != nil {
+				return pgerror.Wrapf(
+					err,
+					pgcode.InvalidParameterValue,
+					`value of %q must be an interval`,
+					key,
+				)
+			}
+			partitionTTL := po.getOrCreatePartitionTTL()
+			partitionTTL.Retention = str
+			return nil
+		},
+		onReset: func(_ context.Context, po *Setter, evalCtx *eval.Context, key string) error {
+			if po.hasPartitionTTL() {
+				po.UpdatedPartitionTTL.Retention = ""
+			}
+			return nil
+		},
+	},
+	`ttl_granularity`: {
+		onSet: func(ctx context.Context, po *Setter, semaCtx *tree.SemaContext, evalCtx *eval.Context, key string, datum tree.Datum) error {
+			str, err := paramparse.DatumAsString(ctx, evalCtx, key, datum)
+			if err != nil {
+				return err
+			}
+			// Validate it's a valid interval by attempting to parse it.
+			_, err = tree.ParseDInterval(evalCtx.SessionData().GetIntervalStyle(), str)
+			if err != nil {
+				return pgerror.Wrapf(
+					err,
+					pgcode.InvalidParameterValue,
+					`value of %q must be an interval`,
+					key,
+				)
+			}
+			partitionTTL := po.getOrCreatePartitionTTL()
+			partitionTTL.Granularity = str
+			return nil
+		},
+		onReset: func(_ context.Context, po *Setter, evalCtx *eval.Context, key string) error {
+			if po.hasPartitionTTL() {
+				po.UpdatedPartitionTTL.Granularity = ""
+			}
+			return nil
+		},
+	},
+	`ttl_lookahead`: {
+		onSet: func(ctx context.Context, po *Setter, semaCtx *tree.SemaContext, evalCtx *eval.Context, key string, datum tree.Datum) error {
+			str, err := paramparse.DatumAsString(ctx, evalCtx, key, datum)
+			if err != nil {
+				return err
+			}
+			// Validate it's a valid interval by attempting to parse it.
+			_, err = tree.ParseDInterval(evalCtx.SessionData().GetIntervalStyle(), str)
+			if err != nil {
+				return pgerror.Wrapf(
+					err,
+					pgcode.InvalidParameterValue,
+					`value of %q must be an interval`,
+					key,
+				)
+			}
+			partitionTTL := po.getOrCreatePartitionTTL()
+			partitionTTL.Lookahead = str
+			return nil
+		},
+		onReset: func(_ context.Context, po *Setter, evalCtx *eval.Context, key string) error {
+			if po.hasPartitionTTL() {
+				po.UpdatedPartitionTTL.Lookahead = ""
 			}
 			return nil
 		},

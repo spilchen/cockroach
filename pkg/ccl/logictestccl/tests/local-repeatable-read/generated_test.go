@@ -1407,6 +1407,13 @@ func TestRepeatableReadLogic_partial_txn_commit(
 	runLogicTest(t, "partial_txn_commit")
 }
 
+func TestRepeatableReadLogic_partition_ttl(
+	t *testing.T,
+) {
+	defer leaktest.AfterTest(t)()
+	runLogicTest(t, "partition_ttl")
+}
+
 func TestRepeatableReadLogic_pg_builtins(
 	t *testing.T,
 ) {

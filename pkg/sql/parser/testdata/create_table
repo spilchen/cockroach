@@ -2703,3 +2703,59 @@ at or near "locality": syntax error
 DETAIL: source SQL:
 CREATE TABLE tbl AS (SELECT * FROM t) ON COMMIT PRESERVE ROWS LOCALITY REGIONAL BY TABLE IN PRIMARY REGION
                                                               ^
+
+parse
+CREATE TABLE events (ts TIMESTAMPTZ, user_id UUID, PRIMARY KEY (ts, user_id)) WITH (ttl_mode = 'partition', ttl_column = 'ts', ttl_retention = '30d', ttl_granularity = '1d', ttl_lookahead = '2d')
+----
+CREATE TABLE events (ts TIMESTAMPTZ, user_id UUID, PRIMARY KEY (ts, user_id)) WITH ('ttl_mode' = 'partition', 'ttl_column' = 'ts', 'ttl_retention' = '30d', 'ttl_granularity' = '1d', 'ttl_lookahead' = '2d') -- normalized!
+CREATE TABLE events (ts TIMESTAMPTZ, user_id UUID, PRIMARY KEY (ts, user_id)) WITH ('ttl_mode' = ('partition'), 'ttl_column' = ('ts'), 'ttl_retention' = ('30d'), 'ttl_granularity' = ('1d'), 'ttl_lookahead' = ('2d')) -- fully parenthesized
+CREATE TABLE events (ts TIMESTAMPTZ, user_id UUID, PRIMARY KEY (ts, user_id)) WITH ('ttl_mode' = '_', 'ttl_column' = '_', 'ttl_retention' = '_', 'ttl_granularity' = '_', 'ttl_lookahead' = '_') -- literals removed
+CREATE TABLE _ (_ TIMESTAMPTZ, _ UUID, PRIMARY KEY (_, _)) WITH ('ttl_mode' = 'partition', 'ttl_column' = 'ts', 'ttl_retention' = '30d', 'ttl_granularity' = '1d', 'ttl_lookahead' = '2d') -- identifiers removed
+
+parse
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH (ttl_mode = 'partition')
+----
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_mode' = 'partition') -- normalized!
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_mode' = ('partition')) -- fully parenthesized
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_mode' = '_') -- literals removed
+CREATE TABLE _ (_ TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_mode' = 'partition') -- identifiers removed
+
+parse
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH (ttl_column = 'ts')
+----
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_column' = 'ts') -- normalized!
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_column' = ('ts')) -- fully parenthesized
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_column' = '_') -- literals removed
+CREATE TABLE _ (_ TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_column' = 'ts') -- identifiers removed
+
+parse
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH (ttl_retention = '7 days')
+----
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_retention' = '7 days') -- normalized!
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_retention' = ('7 days')) -- fully parenthesized
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_retention' = '_') -- literals removed
+CREATE TABLE _ (_ TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_retention' = '7 days') -- identifiers removed
+
+parse
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH (ttl_granularity = '1 hour')
+----
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_granularity' = '1 hour') -- normalized!
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_granularity' = ('1 hour')) -- fully parenthesized
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_granularity' = '_') -- literals removed
+CREATE TABLE _ (_ TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_granularity' = '1 hour') -- identifiers removed
+
+parse
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH (ttl_lookahead = '2 days')
+----
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_lookahead' = '2 days') -- normalized!
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_lookahead' = ('2 days')) -- fully parenthesized
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_lookahead' = '_') -- literals removed
+CREATE TABLE _ (_ TIMESTAMPTZ PRIMARY KEY) WITH ('ttl_lookahead' = '2 days') -- identifiers removed
+
+parse
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH (ttl_mode = 'partition', ttl_column = 'ts', ttl_retention = '90 days', ttl_granularity = '1 day', ttl_lookahead = '7 days')
+----
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH ('ttl_mode' = 'partition', 'ttl_column' = 'ts', 'ttl_retention' = '90 days', 'ttl_granularity' = '1 day', 'ttl_lookahead' = '7 days') -- normalized!
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH ('ttl_mode' = ('partition'), 'ttl_column' = ('ts'), 'ttl_retention' = ('90 days'), 'ttl_granularity' = ('1 day'), 'ttl_lookahead' = ('7 days')) -- fully parenthesized
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH ('ttl_mode' = '_', 'ttl_column' = '_', 'ttl_retention' = '_', 'ttl_granularity' = '_', 'ttl_lookahead' = '_') -- literals removed
+CREATE TABLE _ (_ TIMESTAMPTZ PRIMARY KEY, _ STRING) WITH ('ttl_mode' = 'partition', 'ttl_column' = 'ts', 'ttl_retention' = '90 days', 'ttl_granularity' = '1 day', 'ttl_lookahead' = '7 days') -- identifiers removed
