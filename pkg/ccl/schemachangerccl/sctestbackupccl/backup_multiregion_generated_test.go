@@ -85,6 +85,13 @@ func TestBackupRollbacks_multiregion_alter_table_alter_primary_key_rbr(t *testin
 	sctest.BackupRollbacks(t, path, MultiRegionTestClusterFactory{})
 }
 
+func TestBackupRollbacks_multiregion_alter_table_drop_partition(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	const path = "pkg/ccl/schemachangerccl/testdata/end_to_end/alter_table_drop_partition"
+	sctest.BackupRollbacks(t, path, MultiRegionTestClusterFactory{})
+}
+
 func TestBackupRollbacks_multiregion_create_index(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -215,6 +222,13 @@ func TestBackupRollbacksMixedVersion_multiregion_alter_table_alter_primary_key_r
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 	const path = "pkg/ccl/schemachangerccl/testdata/end_to_end/alter_table_alter_primary_key_rbr"
+	sctest.BackupRollbacksMixedVersion(t, path, MultiRegionTestClusterFactory{})
+}
+
+func TestBackupRollbacksMixedVersion_multiregion_alter_table_drop_partition(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	const path = "pkg/ccl/schemachangerccl/testdata/end_to_end/alter_table_drop_partition"
 	sctest.BackupRollbacksMixedVersion(t, path, MultiRegionTestClusterFactory{})
 }
 
@@ -351,6 +365,13 @@ func TestBackupSuccess_multiregion_alter_table_alter_primary_key_rbr(t *testing.
 	sctest.BackupSuccess(t, path, MultiRegionTestClusterFactory{})
 }
 
+func TestBackupSuccess_multiregion_alter_table_drop_partition(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	const path = "pkg/ccl/schemachangerccl/testdata/end_to_end/alter_table_drop_partition"
+	sctest.BackupSuccess(t, path, MultiRegionTestClusterFactory{})
+}
+
 func TestBackupSuccess_multiregion_create_index(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -481,6 +502,13 @@ func TestBackupSuccessMixedVersion_multiregion_alter_table_alter_primary_key_rbr
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 	const path = "pkg/ccl/schemachangerccl/testdata/end_to_end/alter_table_alter_primary_key_rbr"
+	sctest.BackupSuccessMixedVersion(t, path, MultiRegionTestClusterFactory{})
+}
+
+func TestBackupSuccessMixedVersion_multiregion_alter_table_drop_partition(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	const path = "pkg/ccl/schemachangerccl/testdata/end_to_end/alter_table_drop_partition"
 	sctest.BackupSuccessMixedVersion(t, path, MultiRegionTestClusterFactory{})
 }
 
