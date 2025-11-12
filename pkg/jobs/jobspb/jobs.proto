@@ -1383,6 +1383,22 @@ message RowLevelTTLProcessorProgress {
   // NEXT ID: 7
 }
 
+message PartitionTTLMaintenanceDetails {
+  // TableID is the ID of the table with partition TTL.
+  uint32 table_id = 1 [
+    (gogoproto.customname) = "TableID",
+    (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb.ID"
+  ];
+}
+
+message PartitionTTLMaintenanceProgress {
+  // PartitionsCreated is the number of partitions created in the last run.
+  int64 partitions_created = 1;
+
+  // PartitionsDropped is the number of partitions dropped in the last run.
+  int64 partitions_dropped = 2;
+}
+
 message SchemaTelemetryDetails {
 }
 
@@ -1617,6 +1633,7 @@ message Payload {
     SqlActivityFlushDetails sql_activity_flush_details = 51;
     HotRangesLoggerDetails hot_ranges_logger_details = 52;
     InspectDetails inspect_details = 53;
+    PartitionTTLMaintenanceDetails partition_ttl_maintenance = 54 [(gogoproto.customname)="PartitionTTLMaintenance"];
   }
   reserved 26;
   // PauseReason is used to describe the reason that the job is currently paused
@@ -1641,7 +1658,7 @@ message Payload {
   // specifies how old such record could get before this job is canceled.
   int64 maximum_pts_age = 40 [(gogoproto.casttype) = "time.Duration",  (gogoproto.customname) = "MaximumPTSAge"];
 
-  // NEXT ID: 54
+  // NEXT ID: 55
 }
 
 message Progress {
@@ -1701,11 +1718,12 @@ message Progress {
     SqlActivityFlushProgress sql_activity_flush = 39;
     HotRangesLoggerProgress hot_ranges_logger = 40;
     InspectProgress inspect = 41;
+    PartitionTTLMaintenanceProgress partition_ttl_maintenance = 42 [(gogoproto.customname)="PartitionTTLMaintenance"];
   }
 
   uint64 trace_id = 21 [(gogoproto.nullable) = false, (gogoproto.customname) = "TraceID", (gogoproto.customtype) = "github.com/cockroachdb/cockroach/pkg/util/tracing/tracingpb.TraceID"];
 
-  // NEXT ID: 42
+  // NEXT ID: 43
 }
 
 enum Type {
@@ -1748,6 +1766,7 @@ enum Type {
   SQL_ACTIVITY_FLUSH = 31 [(gogoproto.enumvalue_customname) = "TypeSQLActivityFlush"];
   HOT_RANGES_LOGGER = 32 [(gogoproto.enumvalue_customname) = "TypeHotRangesLogger"];
   INSPECT = 33 [(gogoproto.enumvalue_customname) = "TypeInspect"];
+  PARTITION_TTL_MAINTENANCE = 34 [(gogoproto.enumvalue_customname) = "TypePartitionTTLMaintenance"];
 }
 
 message Job {

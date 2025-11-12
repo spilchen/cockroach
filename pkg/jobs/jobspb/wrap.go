@@ -253,6 +253,8 @@ func DetailsType(d isPayload_Details) (Type, error) {
 		return TypeHotRangesLogger, nil
 	case *Payload_InspectDetails:
 		return TypeInspect, nil
+	case *Payload_PartitionTTLMaintenance:
+		return TypePartitionTTLMaintenance, nil
 	default:
 		return TypeUnspecified, errors.Newf("Payload.Type called on a payload with an unknown details type: %T", d)
 	}
@@ -309,6 +311,7 @@ var JobDetailsForEveryJobType = map[Type]Details{
 	TypeSQLActivityFlush:             SqlActivityFlushDetails{},
 	TypeHotRangesLogger:              HotRangesLoggerDetails{},
 	TypeInspect:                      InspectDetails{},
+	TypePartitionTTLMaintenance:      PartitionTTLMaintenanceDetails{},
 }
 
 // WrapProgressDetails wraps a ProgressDetails object in the protobuf wrapper
@@ -619,6 +622,8 @@ func WrapPayloadDetails(details Details) interface {
 		return &Payload_HotRangesLoggerDetails{HotRangesLoggerDetails: &d}
 	case InspectDetails:
 		return &Payload_InspectDetails{InspectDetails: &d}
+	case PartitionTTLMaintenanceDetails:
+		return &Payload_PartitionTTLMaintenance{PartitionTTLMaintenance: &d}
 	default:
 		panic(errors.AssertionFailedf("jobs.WrapPayloadDetails: unknown details type %T", d))
 	}
@@ -654,7 +659,7 @@ const (
 func (Type) SafeValue() {}
 
 // NumJobTypes is the number of jobs types.
-const NumJobTypes = 34
+const NumJobTypes = 35
 
 // ChangefeedDetailsMarshaler allows for dependency injection of
 // cloud.SanitizeExternalStorageURI to avoid the dependency from this
