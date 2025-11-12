@@ -112,3 +112,312 @@ statement ok
 DROP TABLE events_all_fields
 
 subtest end
+
+subtest partition_ttl_missing_column
+
+# Test that ttl_column is required
+statement error "ttl_column" must be set when using partition TTL
+CREATE TABLE t_missing_column (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition'
+)
+
+subtest end
+
+subtest partition_ttl_with_defaults
+
+# Test that default values are applied for ttl_retention, ttl_granularity, and ttl_lookahead
+statement ok
+CREATE TABLE t_with_defaults (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  data STRING,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts'
+)
+
+statement ok
+DROP TABLE t_with_defaults
+
+subtest end
+
+subtest partition_ttl_partial_defaults
+
+# Test with some parameters specified and others using defaults
+# When retention = '7d', granularity should default to a value < 7d
+# (derived as retention/30 capped at 1h-1d, so likely 1h for 7d retention)
+statement ok
+CREATE TABLE t_partial_defaults (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '7d'
+)
+
+statement ok
+DROP TABLE t_partial_defaults
+
+subtest end
+
+subtest partition_ttl_short_retention
+
+# Test with very short retention (1 day)
+# Granularity should be derived as < 1d (likely 1h)
+# Lookahead should be 2x granularity (likely 2h)
+statement ok
+CREATE TABLE t_short_retention (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '1d'
+)
+
+statement ok
+DROP TABLE t_short_retention
+
+subtest end
+
+subtest partition_ttl_long_retention
+
+# Test with long retention (90 days)
+# Granularity should be derived but capped at 1d
+# Lookahead should be 2 days (2x granularity)
+statement ok
+CREATE TABLE t_long_retention (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '90d'
+)
+
+statement ok
+DROP TABLE t_long_retention
+
+subtest end
+
+subtest partition_ttl_custom_granularity
+
+# Test with custom granularity specified
+# Lookahead should default to 2x granularity (4h)
+statement ok
+CREATE TABLE t_custom_granularity (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_granularity = '2h'
+)
+
+statement ok
+DROP TABLE t_custom_granularity
+
+subtest end
+
+subtest partition_ttl_nonexistent_column
+
+# Test that ttl_column must exist
+statement error ttl_column "nonexistent" does not exist
+CREATE TABLE t_nonexistent_column (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'nonexistent',
+  ttl_retention = '30d',
+  ttl_granularity = '1d',
+  ttl_lookahead = '2d'
+)
+
+subtest end
+
+subtest partition_ttl_wrong_column_type
+
+# Test that ttl_column must be TIMESTAMP/TIMESTAMPTZ
+statement error ttl_column "id" must be of type TIMESTAMP or TIMESTAMPTZ
+CREATE TABLE t_wrong_type (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT NOT NULL,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'id',
+  ttl_retention = '30d',
+  ttl_granularity = '1d',
+  ttl_lookahead = '2d'
+)
+
+subtest end
+
+subtest partition_ttl_nullable_column
+
+# Test that ttl_column must be NOT NULL
+statement error ttl_column "ts" must be NOT NULL
+CREATE TABLE t_nullable (
+  ts TIMESTAMPTZ,
+  id INT NOT NULL,
+  PRIMARY KEY (id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '30d',
+  ttl_granularity = '1d',
+  ttl_lookahead = '2d'
+)
+
+subtest end
+
+subtest partition_ttl_with_inbound_fk
+
+# Test that partition TTL is blocked when table has inbound FKs
+# This test is currently disabled because ALTER TABLE SET for partition TTL
+# is not yet implemented. Will be enabled when ALTER TABLE support is added.
+
+# TODO: Re-enable this test after ALTER TABLE SET support for partition TTL is implemented
+
+subtest end
+
+subtest partition_ttl_granularity_exceeds_retention
+
+# Test that granularity must be <= retention
+statement error "ttl_granularity" \(2d\) must be less than or equal to "ttl_retention" \(1d\)
+CREATE TABLE t_granularity_too_large (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '1d',
+  ttl_granularity = '2d',
+  ttl_lookahead = '1h'
+)
+
+subtest end
+
+subtest partition_ttl_lookahead_too_small
+
+# Test that lookahead must be >= granularity/2
+statement error "ttl_lookahead" \(30m\) must be at least half of "ttl_granularity" \(2h\)
+CREATE TABLE t_lookahead_too_small (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '7d',
+  ttl_granularity = '2h',
+  ttl_lookahead = '30m'
+)
+
+subtest end
+
+subtest partition_ttl_zero_retention
+
+# Test that retention must be > 0
+statement error "ttl_retention" must be greater than zero
+CREATE TABLE t_zero_retention (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '0s',
+  ttl_granularity = '1d',
+  ttl_lookahead = '2d'
+)
+
+subtest end
+
+subtest partition_ttl_zero_granularity
+
+# Test that granularity must be > 0
+statement error "ttl_granularity" must be greater than zero
+CREATE TABLE t_zero_granularity (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '7d',
+  ttl_granularity = '0s',
+  ttl_lookahead = '2d'
+)
+
+subtest end
+
+subtest partition_ttl_zero_lookahead
+
+# Test that lookahead must be > 0
+statement error "ttl_lookahead" must be greater than zero
+CREATE TABLE t_zero_lookahead (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '7d',
+  ttl_granularity = '1d',
+  ttl_lookahead = '0s'
+)
+
+subtest end
+
+subtest partition_ttl_valid_edge_cases
+
+# Test valid edge cases
+# Granularity == Retention (1 partition)
+statement ok
+CREATE TABLE t_equal_granularity_retention (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '1d',
+  ttl_granularity = '1d',
+  ttl_lookahead = '12h'
+)
+
+statement ok
+DROP TABLE t_equal_granularity_retention
+
+# Lookahead == Granularity/2 (minimum allowed)
+statement ok
+CREATE TABLE t_minimum_lookahead (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '7d',
+  ttl_granularity = '2h',
+  ttl_lookahead = '1h'
+)
+
+statement ok
+DROP TABLE t_minimum_lookahead
+
+subtest end

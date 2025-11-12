@@ -802,9 +802,13 @@ type TableDescriptor interface {
 	GetRowLevelTTL() *catpb.RowLevelTTL
 	// HasRowLevelTTL returns where there is a row-level TTL config for the table.
 	HasRowLevelTTL() bool
+	// GetPartitionTTL returns the partition TTL config for the table.
+	GetPartitionTTL() *catpb.PartitionTTLConfig
 	// GetExcludeDataFromBackup returns true if the table's row data is configured
 	// to be excluded during backup.
 	GetExcludeDataFromBackup() bool
+	// GetInboundFKs returns inbound foreign key constraints on the table.
+	GetInboundFKs() []descpb.ForeignKeyConstraint
 	// GetStorageParams returns a list of storage parameters for the table.
 	GetStorageParams(spaceBetweenEqual bool) ([]string, error)
 	// NoAutoStatsSettingsOverrides is true if no auto stats related settings are

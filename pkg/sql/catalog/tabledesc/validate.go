@@ -1096,6 +1096,14 @@ func (desc *wrapper) ValidateSelf(vea catalog.ValidationErrorAccumulator) {
 	vea.Report(ValidateTTLExpirationExpr(desc))
 	vea.Report(ValidateTTLExpirationColumn(desc))
 
+	// Validate partition TTL configuration.
+	// ValidatePartitionTTL validates basic parameter values and is also used
+	// before the table descriptor is fully initialized.
+	// ValidatePartitionTTLColumn and ValidatePartitionTTLNoInboundFKs are only
+	// called here because they require the full table descriptor.
+	vea.Report(ValidatePartitionTTLColumn(desc))
+	vea.Report(ValidatePartitionTTLNoInboundFKs(desc))
+
 	// Validate that there are no column with both a foreign key ON UPDATE and an
 	// ON UPDATE expression. This check is made to ensure that we know which ON
 	// UPDATE action to perform when a FK UPDATE happens.

@@ -2499,9 +2499,19 @@ func (desc *wrapper) HasRowLevelTTL() bool {
 	return desc.RowLevelTTL != nil
 }
 
+// GetPartitionTTL implements the TableDescriptor interface.
+func (desc *wrapper) GetPartitionTTL() *catpb.PartitionTTLConfig {
+	return desc.PartitionTTL
+}
+
 // GetExcludeDataFromBackup implements the TableDescriptor interface.
 func (desc *wrapper) GetExcludeDataFromBackup() bool {
 	return desc.ExcludeDataFromBackup
+}
+
+// GetInboundFKs implements the TableDescriptor interface.
+func (desc *wrapper) GetInboundFKs() []descpb.ForeignKeyConstraint {
+	return desc.InboundFKs
 }
 
 // GetStorageParams implements the TableDescriptor interface.

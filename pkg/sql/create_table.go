@@ -1439,6 +1439,7 @@ func NewTableDesc(
 	}
 
 	setter.TableDesc.RowLevelTTL = setter.UpdatedRowLevelTTL
+	setter.TableDesc.PartitionTTL = setter.UpdatedPartitionTTL
 
 	indexEncodingVersion := descpb.StrictIndexColumnIDGuaranteesVersion
 	isRegionalByRow := n.Locality != nil && n.Locality.LocalityLevel == tree.LocalityLevelRow

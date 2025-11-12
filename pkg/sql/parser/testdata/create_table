@@ -2759,3 +2759,11 @@ CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH ('ttl_mode' = 'par
 CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH ('ttl_mode' = ('partition'), 'ttl_column' = ('ts'), 'ttl_retention' = ('90 days'), 'ttl_granularity' = ('1 day'), 'ttl_lookahead' = ('7 days')) -- fully parenthesized
 CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH ('ttl_mode' = '_', 'ttl_column' = '_', 'ttl_retention' = '_', 'ttl_granularity' = '_', 'ttl_lookahead' = '_') -- literals removed
 CREATE TABLE _ (_ TIMESTAMPTZ PRIMARY KEY, _ STRING) WITH ('ttl_mode' = 'partition', 'ttl_column' = 'ts', 'ttl_retention' = '90 days', 'ttl_granularity' = '1 day', 'ttl_lookahead' = '7 days') -- identifiers removed
+
+parse
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH (ttl_mode = 'partition', ttl_column = 'ts')
+----
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH ('ttl_mode' = 'partition', 'ttl_column' = 'ts') -- normalized!
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH ('ttl_mode' = ('partition'), 'ttl_column' = ('ts')) -- fully parenthesized
+CREATE TABLE t (ts TIMESTAMPTZ PRIMARY KEY, data STRING) WITH ('ttl_mode' = '_', 'ttl_column' = '_') -- literals removed
+CREATE TABLE _ (_ TIMESTAMPTZ PRIMARY KEY, _ STRING) WITH ('ttl_mode' = 'partition', 'ttl_column' = 'ts') -- identifiers removed

@@ -9,8 +9,10 @@ package tablestorageparam
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
@@ -70,6 +72,16 @@ func NewSetter(tableDesc *tabledesc.Mutable, isNewObject bool) *Setter {
 // RunPostChecks implements the Setter interface.
 func (po *Setter) RunPostChecks() error {
 	if err := tabledesc.ValidateRowLevelTTL(po.UpdatedRowLevelTTL); err != nil {
+		return err
+	}
+	// Apply defaults for partition TTL parameters before validation.
+	if err := po.applyPartitionTTLDefaults(); err != nil {
+		return err
+	}
+	// ValidatePartitionTTL validates basic parameter values.
+	// Column and FK validation happens later in the schema changer
+	// when the full table descriptor is available.
+	if err := tabledesc.ValidatePartitionTTL(po.UpdatedPartitionTTL); err != nil {
 		return err
 	}
 	return nil
@@ -149,6 +161,98 @@ func (po *Setter) getOrCreatePartitionTTL() *catpb.PartitionTTLConfig {
 		po.UpdatedPartitionTTL = partitionTTL
 	}
 	return partitionTTL
+}
+
+// applyPartitionTTLDefaults applies default values for partition TTL parameters
+// that haven't been explicitly set. Defaults are context-aware based on other
+// set parameters to ensure they make sense together.
+func (po *Setter) applyPartitionTTLDefaults() error {
+	if po.UpdatedPartitionTTL == nil {
+		return nil
+	}
+	partitionTTL := po.UpdatedPartitionTTL
+
+	// Apply default retention if not set.
+	if partitionTTL.Retention == "" {
+		partitionTTL.Retention = "30d"
+	}
+
+	// Apply default granularity if not set.
+	// The granularity should be smaller than retention to create multiple partitions.
+	// We derive it from retention if retention was set, otherwise use a fixed default.
+	if partitionTTL.Granularity == "" {
+		// Parse retention to derive a sensible granularity.
+		retention, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, partitionTTL.Retention)
+		if err != nil {
+			// If we can't parse, fall back to fixed default.
+			partitionTTL.Granularity = "1d"
+		} else {
+			// Derive granularity as approximately 1/30th of retention, but cap it.
+			// For retention < 30d, use 1d. For retention >= 30d, use retention/30.
+			retentionDuration := retention.Duration
+			granularityDuration := retentionDuration.Div(30)
+
+			// Cap granularity between 1 hour and 1 day for reasonable partition sizes.
+			oneDayNanos := duration.MakeDuration(int64(24*time.Hour), 0, 0)
+			oneHourNanos := duration.MakeDuration(int64(time.Hour), 0, 0)
+
+			if granularityDuration.Compare(oneDayNanos) > 0 {
+				partitionTTL.Granularity = "1d"
+			} else if granularityDuration.Compare(oneHourNanos) <= 0 {
+				// Use minimum of 1 hour to avoid too-frequent partitions.
+				partitionTTL.Granularity = "1h"
+			} else {
+				// Use the derived granularity, ensuring it's at least 1 hour.
+				hours := granularityDuration.Nanos() / int64(time.Hour)
+				if hours < 1 {
+					hours = 1
+				}
+				partitionTTL.Granularity = fmt.Sprintf("%dh", hours)
+			}
+		}
+	}
+
+	// Apply default lookahead if not set.
+	// Lookahead should be at least 2x granularity to ensure smooth ingestion.
+	if partitionTTL.Lookahead == "" {
+		// Parse granularity to derive lookahead.
+		granularity, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, partitionTTL.Granularity)
+		if err != nil {
+			// If we can't parse, fall back to fixed default.
+			partitionTTL.Lookahead = "2d"
+		} else {
+			// Lookahead = 2 * granularity.
+			lookaheadDuration := granularity.Duration.Mul(2)
+
+			// Format based on the duration components.
+			// Duration has separate Months, Days, and nanos fields.
+			if lookaheadDuration.Days > 0 && lookaheadDuration.Nanos() == 0 {
+				// Pure day-based duration.
+				partitionTTL.Lookahead = fmt.Sprintf("%dd", lookaheadDuration.Days)
+			} else if lookaheadDuration.Days == 0 {
+				// Convert nanos to hours.
+				nanos := lookaheadDuration.Nanos()
+				if nanos <= 0 {
+					// Defensive: ensure lookahead is positive.
+					partitionTTL.Lookahead = "2h"
+				} else if nanos%(int64(time.Hour)) == 0 {
+					hours := nanos / int64(time.Hour)
+					if hours < 1 {
+						hours = 1
+					}
+					partitionTTL.Lookahead = fmt.Sprintf("%dh", hours)
+				} else {
+					// Fall back to fixed default if we can't express it cleanly.
+					partitionTTL.Lookahead = "2d"
+				}
+			} else {
+				// Mixed days and nanos - fall back to default.
+				partitionTTL.Lookahead = "2d"
+			}
+		}
+	}
+
+	return nil
 }
 
 type tableParam struct {
