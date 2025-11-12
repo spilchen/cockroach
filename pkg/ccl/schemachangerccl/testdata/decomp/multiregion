@@ -1316,6 +1316,57 @@ ElementState:
     name: table_regional_by_row_pkey
     tableId: 108
   Status: PUBLIC
+- IndexPartitionEntry:
+    indexId: 1
+    listPartition:
+      name: us-east1
+      subpartitioning:
+        list: []
+        numColumns: 0
+        numImplicitColumns: 0
+        range: []
+      values:
+      - BgFA
+    numColumns: 1
+    numImplicitColumns: 1
+    partitionPath:
+    - us-east1
+    tableId: 108
+  Status: PUBLIC
+- IndexPartitionEntry:
+    indexId: 1
+    listPartition:
+      name: us-east2
+      subpartitioning:
+        list: []
+        numColumns: 0
+        numImplicitColumns: 0
+        range: []
+      values:
+      - BgGA
+    numColumns: 1
+    numImplicitColumns: 1
+    partitionPath:
+    - us-east2
+    tableId: 108
+  Status: PUBLIC
+- IndexPartitionEntry:
+    indexId: 1
+    listPartition:
+      name: us-east3
+      subpartitioning:
+        list: []
+        numColumns: 0
+        numImplicitColumns: 0
+        range: []
+      values:
+      - BgHA
+    numColumns: 1
+    numImplicitColumns: 1
+    partitionPath:
+    - us-east3
+    tableId: 108
+  Status: PUBLIC
 - IndexPartitioning:
     indexId: 1
     partitioning:

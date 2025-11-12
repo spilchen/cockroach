@@ -441,6 +441,40 @@ ElementState:
     name: table_implicit_j_idx
     tableId: 104
   Status: PUBLIC
+- IndexPartitionEntry:
+    indexId: 1
+    listPartition:
+      name: pk_implicit
+      subpartitioning:
+        list: []
+        numColumns: 0
+        numImplicitColumns: 0
+        range: []
+      values:
+      - AwI=
+    numColumns: 1
+    numImplicitColumns: 1
+    partitionPath:
+    - pk_implicit
+    tableId: 104
+  Status: PUBLIC
+- IndexPartitionEntry:
+    indexId: 2
+    listPartition:
+      name: j_implicit
+      subpartitioning:
+        list: []
+        numColumns: 0
+        numImplicitColumns: 0
+        range: []
+      values:
+      - Awo=
+    numColumns: 1
+    numImplicitColumns: 1
+    partitionPath:
+    - j_implicit
+    tableId: 104
+  Status: PUBLIC
 - IndexPartitioning:
     indexId: 1
     partitioning:
@@ -890,6 +924,23 @@ ElementState:
 - IndexName:
     indexId: 2
     name: table_partitioned_index_b_key
+    tableId: 105
+  Status: PUBLIC
+- IndexPartitionEntry:
+    indexId: 2
+    listPartition:
+      name: p1
+      subpartitioning:
+        list: []
+        numColumns: 0
+        numImplicitColumns: 0
+        range: []
+      values:
+      - AwI=
+    numColumns: 1
+    numImplicitColumns: 0
+    partitionPath:
+    - p1
     tableId: 105
   Status: PUBLIC
 - IndexPartitioning:
