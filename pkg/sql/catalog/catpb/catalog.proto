@@ -197,6 +197,23 @@ message RowLevelTTL {
   optional bool disable_changefeed_replication = 13 [(gogoproto.nullable) = false];
 }
 
+// PartitionTTLConfig contains configuration for partition-based TTL.
+// Partition-based TTL provides a fast, predictable way to enforce data retention
+// using time partitions instead of per-row deletes.
+message PartitionTTLConfig {
+  option (gogoproto.equal) = true;
+
+  // ColumnName is the name of the timestamp column used for partitioning and TTL.
+  optional string column_name = 1 [(gogoproto.nullable) = false];
+  // Retention is the duration for which data is retained (e.g., "30d").
+  optional string retention = 2 [(gogoproto.nullable) = false];
+  // Granularity is the partition interval (e.g., "1d" for daily partitions).
+  optional string granularity = 3 [(gogoproto.nullable) = false];
+  // Lookahead is the duration for which to create future partitions (e.g., "2d").
+  // This ensures partitions exist for slightly future timestamps during ingestion.
+  optional string lookahead = 4 [(gogoproto.nullable) = false];
+}
+
 // AutoStatsSettings represents settings related to automatic statistics
 // collection specified at the table level, as indicated in the `WITH` clause
 // output of `SHOW CREATE TABLE`.

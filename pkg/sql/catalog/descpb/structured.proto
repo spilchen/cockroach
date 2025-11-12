@@ -1378,7 +1378,11 @@ message TableDescriptor {
   optional uint32 rbr_using_constraint = 70 [(gogoproto.nullable) = false,
     (gogoproto.customname) = "RBRUsingConstraint", (gogoproto.casttype) = "ConstraintID"];
 
-  // Next ID: 71
+  // PartitionTTL is set if partition-based TTL is enabled on the table.
+  // Partition-based TTL removes expired data via partition drops instead of row-level deletes.
+  optional cockroach.sql.catalog.catpb.PartitionTTLConfig partition_ttl = 71 [(gogoproto.customname)="PartitionTTL"];
+
+  // Next ID: 72
 }
 
 // ExternalRowData indicates that the row data for this object is stored outside
