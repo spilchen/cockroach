@@ -418,6 +418,10 @@ func addPartitionToDescriptor(
 		} else if rangePart := entry.GetRangePartition(); rangePart != nil {
 			// Add a RANGE partition.
 			partitioning.Range = append(partitioning.Range, *rangePart)
+			// Sort range partitions by fromInclusive to maintain order.
+			sort.Slice(partitioning.Range, func(i, j int) bool {
+				return string(partitioning.Range[i].FromInclusive) < string(partitioning.Range[j].FromInclusive)
+			})
 			// Update NumColumns if this is the first partition at this level.
 			if partitioning.NumColumns == 0 {
 				partitioning.NumColumns = entry.NumColumns

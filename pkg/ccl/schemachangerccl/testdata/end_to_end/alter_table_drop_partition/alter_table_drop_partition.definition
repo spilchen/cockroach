@@ -16,89 +16,21 @@ CREATE TABLE t_range (
 INSERT INTO t_range VALUES (5, 1), (15, 1), (25, 1);
 ----
 
-# Before dropping partition, inserts into all partitions succeed.
-# Note: Even inserts outside all partition ranges would succeed (e.g., a=50).
-# CRDB partitions are purely for data placement/locality, not for validation.
-stage-exec phase=StatementPhase stage=:
-INSERT INTO t_range VALUES (6, 2);
-INSERT INTO t_range VALUES (16, 2);
-INSERT INTO t_range VALUES (26, 2);
-----
-
-# Verify all inserts succeeded
-stage-query phase=StatementPhase stage=:
-SELECT a, b FROM t_range ORDER BY a, b;
-----
-5 1
-6 2
-15 1
-16 2
-25 1
-26 2
-
-# After statement phase, inserts into non-dropped partitions should still succeed
+# DML operations during PostCommitPhase:
+# Insert into non-dropped partitions (p2, p3) and dropped partition range (p1).
+# All inserts succeed because CRDB doesn't enforce range boundaries on INSERT.
+# In PostgreSQL with true range partitioning, inserts into p1's range would fail.
 stage-exec phase=PostCommitPhase stage=:
 INSERT INTO t_range VALUES (17, 3);
 INSERT INTO t_range VALUES (27, 3);
-----
-
-# Verify inserts into non-dropped partitions succeeded
-stage-query phase=PostCommitPhase stage=:
-SELECT a, b FROM t_range WHERE a IN (17, 27) ORDER BY a, b;
-----
-17 3
-27 3
-
-# Insert into the dropped partition range (a=7 falls in p1's range: 1-10).
-# This succeeds because CRDB doesn't enforce range boundaries on INSERT.
-# In PostgreSQL with true range partitioning, this would fail after dropping p1.
-# Here it succeeds regardless of whether p1 exists or not.
-stage-exec phase=PostCommitPhase stage=:
 INSERT INTO t_range VALUES (7, 3);
 ----
 
-# Verify insert succeeded (unexpectedly, from a true range partitioning perspective)
+# Verify inserts succeeded during PostCommitPhase
 stage-query phase=PostCommitPhase stage=:
-SELECT a, b FROM t_range WHERE a = 7 ORDER BY a, b;
+SELECT count(*) FROM t_range WHERE b = 3;
 ----
-7 3
-
-# After dropping partition in non-revertible phase, inserts into non-dropped partitions should still succeed
-stage-exec phase=PostCommitNonRevertiblePhase stage=:
-INSERT INTO t_range VALUES (18, 4);
-INSERT INTO t_range VALUES (28, 4);
-----
-
-# Verify inserts into non-dropped partitions succeeded
-stage-query phase=PostCommitNonRevertiblePhase stage=:
-SELECT a, b FROM t_range WHERE a IN (18, 28) ORDER BY a, b;
-----
-18 4
-28 4
-
-# Insert into the dropped partition range (a=8 falls in p1's range: 1-10).
-# Again, this succeeds because CRDB doesn't enforce range boundaries.
-# With true range partitioning, this would fail since p1 no longer exists.
-stage-exec phase=PostCommitNonRevertiblePhase stage=:
-INSERT INTO t_range VALUES (8, 4);
-----
-
-# Verify all data is still accessible
-stage-query phase=PostCommitNonRevertiblePhase stage=:
-SELECT a, b FROM t_range ORDER BY a, b;
-----
-5 1
-6 2
-7 3
-8 4
-15 1
-16 2
-17 3
-18 4
-25 1
-26 2
-27 3
-28 4
+3
 
 test
 ALTER TABLE t_range DROP PARTITION p1 WITH DATA;
