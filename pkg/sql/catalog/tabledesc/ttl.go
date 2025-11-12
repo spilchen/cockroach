@@ -346,6 +346,30 @@ func ValidatePartitionTTLColumn(desc catalog.TableDescriptor) error {
 		)
 	}
 
+	// Check if the column is a prefix of the primary key.
+	primaryIndex := desc.GetPrimaryIndex()
+	if primaryIndex.NumKeyColumns() == 0 {
+		return pgerror.Newf(
+			pgcode.InvalidTableDefinition,
+			"table has no primary key columns",
+		)
+	}
+
+	// The ttl_column must be the first column of the primary key.
+	firstPKColumnID := primaryIndex.GetKeyColumnID(0)
+	if col.GetID() != firstPKColumnID {
+		firstPKColumn, err := catalog.MustFindColumnByID(desc, firstPKColumnID)
+		if err != nil {
+			return err
+		}
+		return pgerror.Newf(
+			pgcode.InvalidTableDefinition,
+			"ttl_column %q must be the first column of the primary key (found %q instead)",
+			columnName,
+			firstPKColumn.GetName(),
+		)
+	}
+
 	return nil
 }
 

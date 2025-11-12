@@ -283,6 +283,40 @@ CREATE TABLE t_nullable (
 
 subtest end
 
+subtest partition_ttl_not_first_pk_column
+
+# Test that ttl_column must be the first column of the primary key
+statement error ttl_column "ts" must be the first column of the primary key \(found "id" instead\)
+CREATE TABLE t_not_first_pk (
+  id INT NOT NULL,
+  ts TIMESTAMPTZ NOT NULL,
+  data TEXT,
+  PRIMARY KEY (id, ts)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '30d'
+)
+
+subtest end
+
+subtest partition_ttl_not_in_pk
+
+# Test that ttl_column must be in the primary key
+statement error ttl_column "ts" must be the first column of the primary key \(found "id" instead\)
+CREATE TABLE t_not_in_pk (
+  id INT NOT NULL,
+  ts TIMESTAMPTZ NOT NULL,
+  data TEXT,
+  PRIMARY KEY (id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '30d'
+)
+
+subtest end
+
 subtest partition_ttl_with_inbound_fk
 
 # Test that partition TTL is blocked when table has inbound FKs
