@@ -113,6 +113,7 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 	}
 
 	var rowLevelTTL *catpb.RowLevelTTL
+	var partitionTTL *catpb.PartitionTTLConfig
 	var relationName string
 	var entirePKSpan roachpb.Span
 	var partitionSpans []roachpb.Span // For hybrid cleaner mode when scheduler provides spans
@@ -133,14 +134,21 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 			)
 		}
 
-		if !desc.HasRowLevelTTL() {
+		// Check for either row-level TTL or partition TTL.
+		hasRowLevelTTL := desc.HasRowLevelTTL()
+		hasPartitionTTL := desc.GetPartitionTTL() != nil
+		if !hasRowLevelTTL && !hasPartitionTTL {
 			return errors.Newf("unable to find TTL on table %s", desc.GetName())
 		}
 
-		rowLevelTTL = desc.GetRowLevelTTL()
-
-		if rowLevelTTL.Pause {
-			return pgerror.Newf(pgcode.OperatorIntervention, "ttl jobs on table %s are currently paused", tree.Name(desc.GetName()))
+		if hasRowLevelTTL {
+			rowLevelTTL = desc.GetRowLevelTTL()
+			if rowLevelTTL.Pause {
+				return pgerror.Newf(pgcode.OperatorIntervention, "ttl jobs on table %s are currently paused", tree.Name(desc.GetName()))
+			}
+		}
+		if hasPartitionTTL {
+			partitionTTL = desc.GetPartitionTTL()
 		}
 
 		tn, err := descs.GetObjectName(ctx, txn.KV(), txn.Descriptors(), desc)
@@ -155,11 +163,11 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 			// If TargetIndexIDs is not populated, determine them at runtime.
 			if len(details.HybridCleanerDetails.TargetIndexIDs) == 0 {
 				// Find the TTL column name from the partition TTL config.
-				partitionTTL := desc.GetPartitionTTL()
-				if partitionTTL == nil {
+				hybridPartitionTTL := desc.GetPartitionTTL()
+				if hybridPartitionTTL == nil {
 					return errors.Newf("partition TTL config not found on table %s", desc.GetName())
 				}
-				ttlColName := partitionTTL.ColumnName
+				ttlColName := hybridPartitionTTL.ColumnName
 				if ttlColName == "" {
 					return errors.Newf("TTL column not found in partition TTL config")
 				}
@@ -213,36 +221,41 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 		return err
 	}
 
-	ttlExpr := rowLevelTTL.GetTTLExpr()
-
-	labelMetrics := rowLevelTTL.LabelMetrics
+	// ttlExpr and stats polling are only used for row-level TTL.
+	var ttlExpr catpb.Expression
+	var labelMetrics bool
 	statsCtx, statsCancel := context.WithCancelCause(ctx)
 	defer statsCancel(nil)
 	statsGroup := ctxgroup.WithContext(statsCtx)
-	if rowLevelTTL.RowStatsPollInterval != 0 {
-		metrics := execCfg.JobRegistry.MetricsStruct().RowLevelTTL.(*RowLevelTTLAggMetrics).loadMetrics(
-			labelMetrics,
-			relationName,
-		)
+	if rowLevelTTL != nil {
+		ttlExpr = rowLevelTTL.GetTTLExpr()
+		labelMetrics = rowLevelTTL.LabelMetrics
 
-		statsGroup.GoCtx(func(ctx context.Context) error {
-			// Do once initially to ensure we have some base statistics.
-			if err := metrics.fetchStatistics(ctx, execCfg, relationName, details, aostDuration, ttlExpr); err != nil {
-				return err
-			}
-			// Wait until poll interval is reached, or early exit when we are done
-			// with the TTL job.
-			for {
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-time.After(rowLevelTTL.RowStatsPollInterval):
-					if err := metrics.fetchStatistics(ctx, execCfg, relationName, details, aostDuration, ttlExpr); err != nil {
-						return err
+		if rowLevelTTL.RowStatsPollInterval != 0 {
+			metrics := execCfg.JobRegistry.MetricsStruct().RowLevelTTL.(*RowLevelTTLAggMetrics).loadMetrics(
+				labelMetrics,
+				relationName,
+			)
+
+			statsGroup.GoCtx(func(ctx context.Context) error {
+				// Do once initially to ensure we have some base statistics.
+				if err := metrics.fetchStatistics(ctx, execCfg, relationName, details, aostDuration, ttlExpr); err != nil {
+					return err
+				}
+				// Wait until poll interval is reached, or early exit when we are done
+				// with the TTL job.
+				for {
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(rowLevelTTL.RowStatsPollInterval):
+						if err := metrics.fetchStatistics(ctx, execCfg, relationName, details, aostDuration, ttlExpr); err != nil {
+							return err
+						}
 					}
 				}
-			}
-		})
+			})
+		}
 	}
 
 	distSQLPlanner := jobExecCtx.DistSQLPlanner()
@@ -292,11 +305,23 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 		}
 
 		jobID := t.job.ID()
-		selectBatchSize := ttlbase.GetSelectBatchSize(settingsValues, rowLevelTTL)
-		deleteBatchSize := ttlbase.GetDeleteBatchSize(settingsValues, rowLevelTTL)
-		selectRateLimit := ttlbase.GetSelectRateLimit(settingsValues, rowLevelTTL)
-		deleteRateLimit := ttlbase.GetDeleteRateLimit(settingsValues, rowLevelTTL)
-		disableChangefeedReplication := ttlbase.GetChangefeedReplicationDisabled(settingsValues, rowLevelTTL)
+		var selectBatchSize, deleteBatchSize, selectRateLimit, deleteRateLimit int64
+		var disableChangefeedReplication bool
+
+		// Use partition TTL config if in hybrid cleaner mode, otherwise use row-level TTL.
+		if details.HybridCleanerDetails != nil && partitionTTL != nil {
+			// Hybrid cleaner mode doesn't use SELECT, so selectBatchSize and selectRateLimit are unused.
+			deleteBatchSize = ttlbase.GetPartitionDeleteBatchSize(settingsValues, partitionTTL)
+			deleteRateLimit = ttlbase.GetPartitionDeleteRateLimit(settingsValues, partitionTTL)
+			// Partition TTL doesn't have changefeed replication or label metrics settings.
+			disableChangefeedReplication = false
+		} else if rowLevelTTL != nil {
+			selectBatchSize = ttlbase.GetSelectBatchSize(settingsValues, rowLevelTTL)
+			deleteBatchSize = ttlbase.GetDeleteBatchSize(settingsValues, rowLevelTTL)
+			selectRateLimit = ttlbase.GetSelectRateLimit(settingsValues, rowLevelTTL)
+			deleteRateLimit = ttlbase.GetDeleteRateLimit(settingsValues, rowLevelTTL)
+			disableChangefeedReplication = ttlbase.GetChangefeedReplicationDisabled(settingsValues, rowLevelTTL)
+		}
 		newTTLSpec := func(spans []roachpb.Span) *execinfrapb.TTLSpec {
 			return &execinfrapb.TTLSpec{
 				JobID:                        jobID,
@@ -307,7 +332,7 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 				DeleteBatchSize:              deleteBatchSize,
 				SelectRateLimit:              selectRateLimit,
 				DeleteRateLimit:              deleteRateLimit,
-				LabelMetrics:                 rowLevelTTL.LabelMetrics,
+				LabelMetrics:                 labelMetrics,
 				PreDeleteChangeTableVersion:  knobs.PreDeleteChangeTableVersion,
 				PreSelectStatement:           knobs.PreSelectStatement,
 				AOSTDuration:                 aostDuration,
@@ -389,7 +414,7 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 	g := ctxgroup.WithContext(ctx)
 	g.GoCtx(func(ctx context.Context) error {
 		defer cancelReplanner()
-		if rowLevelTTL.RowStatsPollInterval != 0 {
+		if rowLevelTTL != nil && rowLevelTTL.RowStatsPollInterval != 0 {
 			defer statsCancel(errors.New("cancelling TTL stats query because TTL job completed"))
 		}
 		distSQLReceiver := sql.MakeDistSQLReceiver(

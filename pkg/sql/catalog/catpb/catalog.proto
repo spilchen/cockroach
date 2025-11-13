@@ -212,6 +212,10 @@ message PartitionTTLConfig {
   // Lookahead is the duration for which to create future partitions (e.g., "2d").
   // This ensures partitions exist for slightly future timestamps during ingestion.
   optional string lookahead = 4 [(gogoproto.nullable) = false];
+  // DeleteBatchSize is the amount of rows that should be deleted at a time.
+  optional int64 delete_batch_size = 5 [(gogoproto.nullable) = false];
+  // DeleteRateLimit is the maximum amount of rows to delete per second.
+  optional int64 delete_rate_limit = 6 [(gogoproto.nullable) = false];
 }
 
 // AutoStatsSettings represents settings related to automatic statistics

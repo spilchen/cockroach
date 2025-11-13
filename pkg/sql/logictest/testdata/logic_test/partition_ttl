@@ -473,3 +473,137 @@ statement ok
 DROP TABLE t_minimum_lookahead
 
 subtest end
+
+subtest partition_ttl_delete_params_create
+
+# Test CREATE TABLE with delete_batch_size and delete_rate_limit
+statement ok
+CREATE TABLE t_create_delete_params (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  data STRING,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '30d',
+  ttl_delete_batch_size = 300,
+  ttl_delete_rate_limit = 500
+)
+
+# Verify the values are persisted
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t_create_delete_params]
+----
+CREATE TABLE public.t_create_delete_params (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT8 NULL,
+  data STRING NULL,
+  CONSTRAINT t_create_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
+) WITH (ttl_column = 'ts', ttl_delete_batch_size = 300, ttl_delete_rate_limit = 500, ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+
+statement ok
+DROP TABLE t_create_delete_params
+
+subtest end
+
+subtest partition_ttl_alter_delete_params
+
+# Test ALTER TABLE to set delete_batch_size and delete_rate_limit
+statement ok
+CREATE TABLE t_alter_delete_params (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  data STRING,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '30d'
+)
+
+# Alter delete_batch_size
+statement ok
+ALTER TABLE t_alter_delete_params SET (ttl_delete_batch_size = 500)
+
+# Verify delete_batch_size was set
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t_alter_delete_params]
+----
+CREATE TABLE public.t_alter_delete_params (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT8 NULL,
+  data STRING NULL,
+  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
+) WITH (ttl_column = 'ts', ttl_delete_batch_size = 500, ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+
+# Alter delete_rate_limit
+statement ok
+ALTER TABLE t_alter_delete_params SET (ttl_delete_rate_limit = 1000)
+
+# Verify delete_rate_limit was set
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t_alter_delete_params]
+----
+CREATE TABLE public.t_alter_delete_params (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT8 NULL,
+  data STRING NULL,
+  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
+) WITH (ttl_column = 'ts', ttl_delete_batch_size = 500, ttl_delete_rate_limit = 1000, ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+
+# Alter both at once
+statement ok
+ALTER TABLE t_alter_delete_params SET (ttl_delete_batch_size = 200, ttl_delete_rate_limit = 2000)
+
+# Verify both values were updated
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t_alter_delete_params]
+----
+CREATE TABLE public.t_alter_delete_params (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT8 NULL,
+  data STRING NULL,
+  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
+) WITH (ttl_column = 'ts', ttl_delete_batch_size = 200, ttl_delete_rate_limit = 2000, ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+
+# Test negative values are rejected
+statement error "ttl_delete_batch_size" must be at least 0
+ALTER TABLE t_alter_delete_params SET (ttl_delete_batch_size = -1)
+
+statement error "ttl_delete_rate_limit" must be at least 0
+ALTER TABLE t_alter_delete_params SET (ttl_delete_rate_limit = -1)
+
+# Test zero values are accepted (will use cluster defaults)
+statement ok
+ALTER TABLE t_alter_delete_params SET (ttl_delete_batch_size = 0)
+
+# Verify delete_batch_size=0 removes it from WITH clause (uses cluster default)
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t_alter_delete_params]
+----
+CREATE TABLE public.t_alter_delete_params (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT8 NULL,
+  data STRING NULL,
+  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
+) WITH (ttl_column = 'ts', ttl_delete_rate_limit = 2000, ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+
+statement ok
+ALTER TABLE t_alter_delete_params SET (ttl_delete_rate_limit = 0)
+
+# Verify delete_rate_limit=0 removes it from WITH clause (uses cluster default)
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t_alter_delete_params]
+----
+CREATE TABLE public.t_alter_delete_params (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT8 NULL,
+  data STRING NULL,
+  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
+) WITH (ttl_column = 'ts', ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+
+statement ok
+DROP TABLE t_alter_delete_params
+
+subtest end

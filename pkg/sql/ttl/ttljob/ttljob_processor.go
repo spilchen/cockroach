@@ -686,19 +686,27 @@ func (t *ttlProcessor) runHybridCleanerOnSpan(
 		}
 
 		// Respect the delete rate limit setting changes.
+		var partitionTTL *catpb.PartitionTTLConfig
 		var rowLevelTTL *catpb.RowLevelTTL
 		if err := serverCfg.DB.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
 			desc, err := txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, details.TableID)
 			if err != nil {
 				return err
 			}
+			partitionTTL = desc.GetPartitionTTL()
 			rowLevelTTL = desc.GetRowLevelTTL()
 			return nil
 		}); err != nil {
 			return deletedRowCount, err
 		}
-		deleteRateLimit := ttlbase.GetDeleteRateLimit(settingsValues, rowLevelTTL)
-		deleteRateLimiter.UpdateLimit(quotapool.Limit(deleteRateLimit), deleteRateLimit)
+		// Check partition TTL first (hybrid cleaner mode), then fall back to row-level TTL.
+		if partitionTTL != nil {
+			deleteRateLimit := ttlbase.GetPartitionDeleteRateLimit(settingsValues, partitionTTL)
+			deleteRateLimiter.UpdateLimit(quotapool.Limit(deleteRateLimit), deleteRateLimit)
+		} else if rowLevelTTL != nil {
+			deleteRateLimit := ttlbase.GetDeleteRateLimit(settingsValues, rowLevelTTL)
+			deleteRateLimiter.UpdateLimit(quotapool.Limit(deleteRateLimit), deleteRateLimit)
+		}
 	}
 
 	return deletedRowCount, nil

@@ -135,6 +135,30 @@ func GetDeleteRateLimit(sv *settings.Values, ttl *catpb.RowLevelTTL) int64 {
 	return rl
 }
 
+// GetPartitionDeleteBatchSize returns the table storage param value if specified or
+// falls back to the cluster setting.
+func GetPartitionDeleteBatchSize(sv *settings.Values, ttl *catpb.PartitionTTLConfig) int64 {
+	bs := ttl.DeleteBatchSize
+	if bs == 0 {
+		bs = defaultDeleteBatchSize.Get(sv)
+	}
+	return bs
+}
+
+// GetPartitionDeleteRateLimit returns the table storage param value if specified or
+// falls back to the cluster setting.
+func GetPartitionDeleteRateLimit(sv *settings.Values, ttl *catpb.PartitionTTLConfig) int64 {
+	rl := ttl.DeleteRateLimit
+	if rl == 0 {
+		rl = defaultDeleteRateLimit.Get(sv)
+	}
+	// Put the maximum tokens possible if there is no rate limit.
+	if rl == 0 {
+		rl = math.MaxInt64
+	}
+	return rl
+}
+
 // CheckJobEnabled returns nil if the job is enabled or an error if the job is
 // disabled.
 func CheckJobEnabled(settingsValues *settings.Values) error {

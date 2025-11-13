@@ -436,13 +436,23 @@ var tableParams = map[string]tableParam{
 			if err := tabledesc.ValidateTTLBatchSize(key, val); err != nil {
 				return err
 			}
-			rowLevelTTL := po.getOrCreateRowLevelTTL()
-			rowLevelTTL.DeleteBatchSize = val
+			// Apply to both row-level and partition TTL if applicable.
+			if po.hasRowLevelTTL() {
+				rowLevelTTL := po.getOrCreateRowLevelTTL()
+				rowLevelTTL.DeleteBatchSize = val
+			}
+			if po.hasPartitionTTL() {
+				partitionTTL := po.getOrCreatePartitionTTL()
+				partitionTTL.DeleteBatchSize = val
+			}
 			return nil
 		},
 		onReset: func(_ context.Context, po *Setter, evalCtx *eval.Context, key string) error {
 			if po.hasRowLevelTTL() {
 				po.UpdatedRowLevelTTL.DeleteBatchSize = 0
+			}
+			if po.hasPartitionTTL() {
+				po.UpdatedPartitionTTL.DeleteBatchSize = 0
 			}
 			return nil
 		},
@@ -486,13 +496,23 @@ var tableParams = map[string]tableParam{
 			if err := tabledesc.ValidateTTLRateLimit(key, val); err != nil {
 				return err
 			}
-			rowLevelTTL := po.getOrCreateRowLevelTTL()
-			rowLevelTTL.DeleteRateLimit = val
+			// Apply to both row-level and partition TTL if applicable.
+			if po.hasRowLevelTTL() {
+				rowLevelTTL := po.getOrCreateRowLevelTTL()
+				rowLevelTTL.DeleteRateLimit = val
+			}
+			if po.hasPartitionTTL() {
+				partitionTTL := po.getOrCreatePartitionTTL()
+				partitionTTL.DeleteRateLimit = val
+			}
 			return nil
 		},
 		onReset: func(_ context.Context, po *Setter, evalCtx *eval.Context, key string) error {
 			if po.hasRowLevelTTL() {
 				po.UpdatedRowLevelTTL.DeleteRateLimit = 0
+			}
+			if po.hasPartitionTTL() {
+				po.UpdatedPartitionTTL.DeleteRateLimit = 0
 			}
 			return nil
 		},
