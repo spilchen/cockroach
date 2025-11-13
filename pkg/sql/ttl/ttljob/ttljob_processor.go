@@ -8,6 +8,7 @@ package ttljob
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"math/rand"
 	"runtime"
@@ -212,12 +213,21 @@ func getTableInfo(
 			pkColIDs.Set(id, i)
 		}
 
-		if !desc.HasRowLevelTTL() {
+		// Check for either row-level TTL or partition TTL.
+		hasRowLevelTTL := desc.HasRowLevelTTL()
+		hasPartitionTTL := desc.GetPartitionTTL() != nil
+
+		if !hasRowLevelTTL && !hasPartitionTTL {
 			return errors.Newf("unable to find TTL on table %s", desc.GetName())
 		}
 
-		rowLevelTTL := desc.GetRowLevelTTL()
-		labelMetrics = rowLevelTTL.LabelMetrics
+		// labelMetrics is only available in row-level TTL config.
+		// For partition TTL, we don't track per-row metrics since deletions
+		// happen at the partition level.
+		if hasRowLevelTTL {
+			rowLevelTTL := desc.GetRowLevelTTL()
+			labelMetrics = rowLevelTTL.LabelMetrics
+		}
 
 		tn, err := descs.GetObjectName(ctx, txn.KV(), txn.Descriptors(), desc)
 		if err != nil {
@@ -514,19 +524,131 @@ func (t *ttlProcessor) runHybridCleanerOnSpan(
 
 	ttlSpec := t.ttlSpec
 	details := ttlSpec.RowLevelTTLDetails
-	_ = details.HybridCleanerDetails // Will be used when implementing actual deletion logic.
+	hybridDetails := details.HybridCleanerDetails
 	flowCtx := t.FlowCtx
 	serverCfg := flowCtx.Cfg
-	_ = serverCfg.DB.Executor() // Will be used when implementing actual deletion logic.
-
-	// Build a DELETE query for the secondary index within partition bounds.
-	// The query is: DELETE FROM table@index WHERE ttl_col >= $start AND ttl_col < $end LIMIT $batch
-	// For now, we'll use a simplified approach and iterate with batched deletes.
-
+	ie := serverCfg.DB.Executor()
 	settingsValues := &serverCfg.Settings.SV
-	_ = ttlSpec.DeleteBatchSize // Will be used when implementing actual deletion logic.
-	_ = indexID                 // Will be used when implementing actual deletion logic.
-	_ = span                    // Will be used when implementing actual deletion logic.
+
+	// Get table metadata and convert span to query bounds.
+	relationName, pkColIDs, pkColNames, pkColTypes, pkColDirs, numFamilies, _, err := getTableInfo(
+		ctx, serverCfg.DB, details.TableID,
+	)
+	if err != nil {
+		return deletedRowCount, err
+	}
+
+	// Strip the primary index hint from relationName since we'll add our own for the secondary index.
+	// getTableInfo returns "schema.table@primaryIndex", but we need "schema.table" only.
+	if atPos := bytes.IndexByte([]byte(relationName), '@'); atPos != -1 {
+		relationName = relationName[:atPos]
+	}
+
+	// Get the TTL column name and index name.
+	var ttlColName string
+	var indexName string
+	if err := serverCfg.DB.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
+		desc, err := txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, details.TableID)
+		if err != nil {
+			return err
+		}
+		// Get the TTL column from partition TTL config.
+		partitionTTL := desc.GetPartitionTTL()
+		if partitionTTL == nil || partitionTTL.ColumnName == "" {
+			return errors.Newf("partition TTL config not found or missing column name on table %s", desc.GetName())
+		}
+		ttlColName = partitionTTL.ColumnName
+
+		// Get the index name.
+		idx, err := catalog.MustFindIndexByID(desc, indexID)
+		if err != nil {
+			return errors.Wrapf(err, "error finding index %d", indexID)
+		}
+		indexName = idx.GetName()
+		return nil
+	}); err != nil {
+		return deletedRowCount, err
+	}
+
+	// Convert the PK span to query bounds.
+	// For testing with placeholder spans, this may fail, so we handle errors gracefully.
+	kvDB := serverCfg.DB.KV()
+	codec := serverCfg.Codec
+	var alloc tree.DatumAlloc
+	var bounds spanutils.QueryBounds
+	var usePKBounds bool
+
+	queryBounds, hasRows, err := spanutils.SpanToQueryBounds(
+		ctx,
+		kvDB,
+		codec,
+		pkColIDs,
+		pkColTypes,
+		pkColDirs,
+		numFamilies,
+		span,
+		&alloc,
+		hlc.Timestamp{}, // Use current time bounds.
+	)
+	if err != nil {
+		return deletedRowCount, errors.Wrapf(err, "SpanToQueryBounds error for span=%s", span)
+	}
+	if !hasRows {
+		// Span is empty, nothing to delete.
+		return 0, nil
+	}
+	bounds = queryBounds
+	usePKBounds = true
+
+	// Build the DELETE query for the secondary index.
+	// The query targets the secondary index and filters by:
+	// 1. Partition time bounds: ttl_col >= $partitionStart AND ttl_col < $partitionEnd
+	// 2. PK bounds: pk_col1 >= $start1 AND pk_col1 <= $end1 AND ...
+	// The LIMIT ensures we process in batches.
+	deleteBatchSize := ttlSpec.DeleteBatchSize
+
+	// Build the WHERE clause with both time and PK bounds.
+	var whereClause bytes.Buffer
+	var queryArgs []interface{}
+
+	// Add partition time bounds.
+	whereClause.WriteString(lexbase.EscapeSQLIdent(ttlColName))
+	fmt.Fprintf(&whereClause, " >= $%d", len(queryArgs)+1)
+	queryArgs = append(queryArgs, hybridDetails.PartitionStart)
+
+	whereClause.WriteString(" AND ")
+	whereClause.WriteString(lexbase.EscapeSQLIdent(ttlColName))
+	fmt.Fprintf(&whereClause, " < $%d", len(queryArgs)+1)
+	queryArgs = append(queryArgs, hybridDetails.PartitionEnd)
+
+	// Add PK bounds from the span (if available).
+	if usePKBounds {
+		for i, colName := range pkColNames {
+			if bounds.Start != nil && i < len(bounds.Start) && bounds.Start[i] != tree.DNull {
+				whereClause.WriteString(" AND ")
+				whereClause.WriteString(colName)
+				fmt.Fprintf(&whereClause, " >= $%d", len(queryArgs)+1)
+				queryArgs = append(queryArgs, bounds.Start[i])
+			}
+			if bounds.End != nil && i < len(bounds.End) && bounds.End[i] != tree.DNull {
+				whereClause.WriteString(" AND ")
+				whereClause.WriteString(colName)
+				fmt.Fprintf(&whereClause, " <= $%d", len(queryArgs)+1)
+				queryArgs = append(queryArgs, bounds.End[i])
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("DELETE FROM ")
+	buf.WriteString(relationName)
+	buf.WriteString("@")
+	lexbase.EncodeRestrictedSQLIdent(&buf, indexName, lexbase.EncNoFlags)
+	buf.WriteString(" WHERE ")
+	buf.WriteString(whereClause.String())
+	buf.WriteString(" LIMIT ")
+	buf.WriteString(fmt.Sprintf("%d", deleteBatchSize))
+	deleteQuery := buf.String()
 
 	for {
 		// Check if we should stop.
@@ -536,11 +658,20 @@ func (t *ttlProcessor) runHybridCleanerOnSpan(
 		default:
 		}
 
-		// Build and execute the DELETE query.
-		// TODO(SPILLY): Implement actual query builder for hybrid cleaner mode.
-		// For now, return early to unblock testing.
-		deleted := int64(0)
+		// Execute the DELETE query.
+		rowsDeleted, err := ie.ExecEx(
+			ctx,
+			"hybrid-cleaner-delete",
+			nil, /* txn */
+			sessiondata.NodeUserSessionDataOverride,
+			deleteQuery,
+			queryArgs...,
+		)
+		if err != nil {
+			return deletedRowCount, errors.Wrapf(err, "error deleting from secondary index")
+		}
 
+		deleted := int64(rowsDeleted)
 		if deleted == 0 {
 			// No more rows to delete.
 			break
@@ -555,7 +686,6 @@ func (t *ttlProcessor) runHybridCleanerOnSpan(
 		}
 
 		// Respect the delete rate limit setting changes.
-		// Get the RowLevelTTL config for rate limit updates.
 		var rowLevelTTL *catpb.RowLevelTTL
 		if err := serverCfg.DB.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
 			desc, err := txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, details.TableID)

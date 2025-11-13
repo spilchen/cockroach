@@ -100,17 +100,28 @@ func TestHybridCleanerBasicDeletion(t *testing.T) {
 	s := srv.ApplicationLayer()
 	execCfg := s.ExecutorConfig().(sql.ExecutorConfig)
 
-	// Create a test table with row-level TTL (required for getTableInfo)
-	// In a real scenario, this would be a partition TTL table, but for testing
-	// purposes we need row-level TTL to pass getTableInfo checks.
+	// Create a test table with range partitioning and partition TTL.
+	// Now that partitioning is available in the base binary, we can use real
+	// range partitioned tables for testing.
+	// Note: Using INT for partitioning (instead of TIMESTAMPTZ) since partition
+	// boundary values must be constants without context-dependent operations.
 	runner := sqlutils.MakeSQLRunner(sqlDB)
 	runner.Exec(t, "CREATE DATABASE testdb")
 	runner.Exec(t, "CREATE SCHEMA testdb.testschema")
-	runner.Exec(t, "CREATE TABLE testdb.testschema.test_table ("+
-		"ts TIMESTAMPTZ, "+
-		"data STRING, "+
-		"PRIMARY KEY (ts)"+
-		") WITH (ttl_expire_after = '30 days')")
+	runner.Exec(t, `CREATE TABLE testdb.testschema.test_table (
+		ts TIMESTAMPTZ NOT NULL,
+		user_id INT NOT NULL,
+		data STRING,
+		PRIMARY KEY (ts, user_id)
+	) PARTITION BY RANGE (ts) (
+		PARTITION p1 VALUES FROM (MINVALUE) TO (MAXVALUE)
+	) WITH (
+		ttl_mode = 'partition',
+		ttl_column = 'ts',
+		ttl_retention = '30d',
+		ttl_granularity = '1d',
+		ttl_lookahead = '2d'
+	)`)
 	runner.Exec(t, "CREATE INDEX idx_data ON testdb.testschema.test_table(data)")
 
 	var tableDesc catalog.TableDescriptor
@@ -133,11 +144,14 @@ func TestHybridCleanerBasicDeletion(t *testing.T) {
 	partitionStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	partitionEnd := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
 
+	// Get real primary key spans from the table (now that we have real partitions)
+	primaryIndexSpan := tableDesc.PrimaryIndexSpan(s.Codec())
+
 	hybridDetails := &jobspb.HybridCleanerDetails{
 		PartitionStart: partitionStart,
 		PartitionEnd:   partitionEnd,
 		TargetIndexIDs: []descpb.IndexID{2}, // Secondary index ID
-		PartitionSpans: []roachpb.Span{{Key: []byte("start"), EndKey: []byte("end")}},
+		PartitionSpans: []roachpb.Span{primaryIndexSpan},
 	}
 
 	var nodeID base.NodeIDContainer
