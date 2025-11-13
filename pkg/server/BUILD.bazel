@@ -291,7 +291,6 @@ go_library(
         "//pkg/sql/tablemetadatacache",
         "//pkg/sql/tablemetadatacache/util",
         "//pkg/sql/ttl/ttljob",
-        "//pkg/sql/ttl/ttlpartition",
         "//pkg/sql/ttl/ttlschedule",
         "//pkg/sql/vecindex",
         "//pkg/storage",

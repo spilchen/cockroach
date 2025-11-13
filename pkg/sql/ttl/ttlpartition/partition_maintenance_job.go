@@ -13,10 +13,13 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
+	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/lexbase"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
@@ -121,8 +124,12 @@ func (r *partitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx int
 		return errors.Wrap(err, "failed to create new partitions")
 	}
 
-	// TODO: Steps 7-8 will be implemented in the next iteration:
-	// 7. Trigger hybrid cleanup for dropped partitions
+	// Step 7: Trigger hybrid cleanup for dropped partitions.
+	if err := r.triggerHybridCleanup(ctx, execCfg, tableDesc, partitionTTL, toDrop); err != nil {
+		return errors.Wrap(err, "failed to trigger hybrid cleanup")
+	}
+
+	// TODO: Step 8 will be implemented in the next iteration:
 	// 8. Update job progress
 
 	log.Dev.Infof(ctx, "partition TTL maintenance job completed for table %d", details.TableID)
@@ -438,6 +445,207 @@ func (r *partitionTTLMaintenanceResumer) executePartitionCreates(
 
 		return nil
 	})
+}
+
+// triggerHybridCleanup creates hybrid cleanup jobs for dropped partitions.
+// These jobs clean up orphaned secondary index entries that remain after partition drops.
+func (r *partitionTTLMaintenanceResumer) triggerHybridCleanup(
+	ctx context.Context,
+	execCfg *sql.ExecutorConfig,
+	tableDesc catalog.TableDescriptor,
+	config *catpb.PartitionTTLConfig,
+	droppedPartitions []partitionSpec,
+) error {
+	// If no partitions were dropped, nothing to clean up.
+	if len(droppedPartitions) == 0 {
+		return nil
+	}
+
+	// Determine which secondary indexes need cleanup.
+	// Non-aligned indexes (where the partition column is not the leftmost key) need hybrid cleanup.
+	targetIndexIDs, err := DetermineNonAlignedIndexes(tableDesc, config.ColumnName)
+	if err != nil {
+		return err
+	}
+
+	// If there are no non-aligned indexes, no hybrid cleanup is needed.
+	if len(targetIndexIDs) == 0 {
+		log.Dev.Infof(ctx, "no non-aligned secondary indexes found, skipping hybrid cleanup")
+		return nil
+	}
+
+	log.Dev.Infof(ctx, "triggering hybrid cleanup for %d dropped partitions targeting %d non-aligned indexes",
+		len(droppedPartitions), len(targetIndexIDs))
+
+	// Create a hybrid cleanup job for each dropped partition.
+	for _, partition := range droppedPartitions {
+		if err := r.createHybridCleanupJob(ctx, execCfg, tableDesc, partition, targetIndexIDs); err != nil {
+			return errors.Wrapf(err, "failed to create hybrid cleanup job for partition %s", partition.name)
+		}
+	}
+
+	return nil
+}
+
+// DetermineNonAlignedIndexes returns the list of secondary index IDs that are not aligned
+// with the partition column. An aligned index has the partition column as its leftmost key.
+// This function is exported for testing purposes.
+func DetermineNonAlignedIndexes(
+	tableDesc catalog.TableDescriptor, partitionColumnName string,
+) ([]descpb.IndexID, error) {
+	var nonAlignedIndexes []descpb.IndexID
+
+	// Iterate through all secondary indexes.
+	for _, idx := range tableDesc.NonPrimaryIndexes() {
+		// Check if the partition column is the leftmost key in this index.
+		if idx.NumKeyColumns() == 0 {
+			continue
+		}
+
+		firstColID := idx.GetKeyColumnID(0)
+		firstCol, err := catalog.MustFindColumnByID(tableDesc, firstColID)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to find column %d in index %d", firstColID, idx.GetID())
+		}
+
+		// If the leftmost column is NOT the partition column, this index needs cleanup.
+		if firstCol.GetName() != partitionColumnName {
+			nonAlignedIndexes = append(nonAlignedIndexes, idx.GetID())
+		}
+	}
+
+	return nonAlignedIndexes, nil
+}
+
+// createHybridCleanupJob creates a single hybrid cleanup job for a dropped partition.
+func (r *partitionTTLMaintenanceResumer) createHybridCleanupJob(
+	ctx context.Context,
+	execCfg *sql.ExecutorConfig,
+	tableDesc catalog.TableDescriptor,
+	partition partitionSpec,
+	targetIndexIDs []descpb.IndexID,
+) error {
+	// Compute the PK spans for this partition.
+	codec := execCfg.Codec
+	pkSpans, err := r.computePartitionPKSpans(codec, tableDesc, partition)
+	if err != nil {
+		return errors.Wrapf(err, "failed to compute PK spans for partition %s", partition.name)
+	}
+
+	// Submit the job within a transaction.
+	db := execCfg.InternalDB
+	jobRegistry := execCfg.JobRegistry
+	jobID := jobRegistry.MakeJobID()
+
+	return db.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
+		// Get database and schema descriptors to construct the fully qualified table name.
+		dbDesc, err := txn.Descriptors().ByIDWithoutLeased(txn.KV()).Get().Database(ctx, tableDesc.GetParentID())
+		if err != nil {
+			return err
+		}
+
+		schemaDesc, err := txn.Descriptors().ByIDWithoutLeased(txn.KV()).Get().Schema(ctx, tableDesc.GetParentSchemaID())
+		if err != nil {
+			return err
+		}
+
+		// Construct fully qualified table name.
+		tableName := tree.NewTableNameWithSchema(
+			tree.Name(dbDesc.GetName()),
+			tree.Name(schemaDesc.GetName()),
+			tree.Name(tableDesc.GetName()))
+
+		description := fmt.Sprintf("hybrid cleanup for partition %s on table %s", partition.name, tableName.FQString())
+
+		// Create the hybrid cleaner details.
+		hybridCleanerDetails := &jobspb.HybridCleanerDetails{
+			PartitionStart: partition.lowerBound,
+			PartitionEnd:   partition.upperBound,
+			TargetIndexIDs: targetIndexIDs,
+			PartitionSpans: pkSpans,
+		}
+
+		// Create the job record.
+		record := jobs.Record{
+			Description: description,
+			Username:    username.NodeUserName(),
+			Details: jobspb.RowLevelTTLDetails{
+				TableID:              tableDesc.GetID(),
+				Cutoff:               partition.upperBound, // Use partition end as cutoff
+				TableVersion:         tableDesc.GetVersion(),
+				HybridCleanerDetails: hybridCleanerDetails,
+			},
+			Progress: jobspb.RowLevelTTLProgress{},
+		}
+
+		// Submit the job using the transaction.
+		if _, err := jobRegistry.CreateAdoptableJobWithTxn(ctx, record, jobID, txn); err != nil {
+			return errors.Wrap(err, "failed to create hybrid cleanup job")
+		}
+
+		log.Dev.Infof(ctx, "created hybrid cleanup job %d for partition %s", jobID, partition.name)
+		return nil
+	})
+}
+
+// computePartitionPKSpans computes the primary key spans for a given partition.
+// Returns a span that covers exactly the partition's time range in the primary index.
+func (r *partitionTTLMaintenanceResumer) computePartitionPKSpans(
+	codec keys.SQLCodec, tableDesc catalog.TableDescriptor, partition partitionSpec,
+) ([]roachpb.Span, error) {
+	primaryIndex := tableDesc.GetPrimaryIndex()
+
+	// Create the index key prefix for the primary index.
+	keyPrefix := rowenc.MakeIndexKeyPrefix(codec, tableDesc.GetID(), primaryIndex.GetID())
+
+	// The partition column must be the first column in the primary index for partition TTL.
+	// We need to encode the partition bounds (timestamps) into PK keys.
+	if primaryIndex.NumKeyColumns() == 0 {
+		return nil, errors.New("primary index has no key columns")
+	}
+
+	// Get the first key column (partition column).
+	partitionColID := primaryIndex.GetKeyColumnID(0)
+
+	// Create datums for the lower and upper bounds.
+	lowerDatum := &tree.DTimestampTZ{Time: partition.lowerBound}
+	upperDatum := &tree.DTimestampTZ{Time: partition.upperBound}
+
+	// Build a column map for encoding.
+	var colMap catalog.TableColMap
+	colMap.Set(partitionColID, 0)
+
+	// Encode the lower bound key.
+	lowerKey, err := rowenc.EncodeColumns(
+		[]descpb.ColumnID{partitionColID},
+		primaryIndex.IndexDesc().KeyColumnDirections[:1],
+		colMap,
+		[]tree.Datum{lowerDatum},
+		keyPrefix,
+	)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to encode partition lower bound")
+	}
+
+	// Encode the upper bound key.
+	upperKey, err := rowenc.EncodeColumns(
+		[]descpb.ColumnID{partitionColID},
+		primaryIndex.IndexDesc().KeyColumnDirections[:1],
+		colMap,
+		[]tree.Datum{upperDatum},
+		keyPrefix,
+	)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to encode partition upper bound")
+	}
+
+	// Create the span from lower (inclusive) to upper (exclusive).
+	span := roachpb.Span{
+		Key:    lowerKey,
+		EndKey: upperKey,
+	}
+
+	return []roachpb.Span{span}, nil
 }
 
 func init() {
