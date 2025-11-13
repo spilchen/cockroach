@@ -323,6 +323,9 @@ func TestBuildAddPartitionStatement(t *testing.T) {
 
 // TestComputePartitionPKSpans tests the computePartitionPKSpans helper function.
 func TestComputePartitionPKSpans(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
 	// Note: This is a placeholder test structure.
 	// Full testing would require creating mock table descriptors with primary indexes,
 	// which is complex. In practice, this would be tested via integration tests.
