@@ -129,8 +129,10 @@ func (r *partitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx int
 		return errors.Wrap(err, "failed to trigger hybrid cleanup")
 	}
 
-	// TODO: Step 8 will be implemented in the next iteration:
-	// 8. Update job progress
+	// Step 8: Update job progress.
+	if err := r.job.NoTxn().FractionProgressed(ctx, jobs.FractionUpdater(1.0)); err != nil {
+		return errors.Wrap(err, "failed to update job progress")
+	}
 
 	log.Dev.Infof(ctx, "partition TTL maintenance job completed for table %d", details.TableID)
 	return nil
