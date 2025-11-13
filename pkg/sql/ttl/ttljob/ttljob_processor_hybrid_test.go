@@ -901,29 +901,3 @@ func TestHybridCleanerErrorHandling(t *testing.T) {
 			"expected rows to be deleted, got %d", deletedRowCount)
 	})
 }
-
-// TestHybridCleanerNoSelectPhase tests that the SELECT phase is completely
-// skipped in hybrid cleaner mode.
-func TestHybridCleanerNoSelectPhase(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
-	// TODO(SPILLY): Test that:
-	// 1. SelectQueryBuilder is never created in hybrid mode
-	// 2. No SELECT queries are executed
-	// 3. DELETE operations proceed directly without SELECT results
-	// 4. Performance is improved compared to row-level TTL
-}
-
-// TestHybridCleanerSpanDistribution tests that PK spans are correctly
-// distributed across nodes for parallelism.
-func TestHybridCleanerSpanDistribution(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	defer log.Scope(t).Close(t)
-
-	// TODO(SPILLY): Test that:
-	// 1. Multiple partition spans are processed in parallel
-	// 2. Each span is assigned to appropriate nodes
-	// 3. Progress is tracked per span
-	// 4. All spans complete successfully
-}
