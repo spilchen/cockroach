@@ -162,6 +162,86 @@ func TestExtractTimestamp(t *testing.T) {
 	}
 }
 
+// TestValidateGranularity tests the validateGranularity helper function.
+func TestValidateGranularity(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	testCases := []struct {
+		name          string
+		granularity   string
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name:        "valid: 10 seconds (minimum)",
+			granularity: "10 seconds",
+			expectError: false,
+		},
+		{
+			name:        "valid: 30 seconds",
+			granularity: "30 seconds",
+			expectError: false,
+		},
+		{
+			name:        "valid: 1 minute",
+			granularity: "1 minute",
+			expectError: false,
+		},
+		{
+			name:        "valid: 1 hour",
+			granularity: "1 hour",
+			expectError: false,
+		},
+		{
+			name:        "valid: 1 day",
+			granularity: "1 day",
+			expectError: false,
+		},
+		{
+			name:        "valid: 1 month",
+			granularity: "1 month",
+			expectError: false,
+		},
+		{
+			name:          "invalid: 5 seconds (too small)",
+			granularity:   "5 seconds",
+			expectError:   true,
+			errorContains: "too small; minimum granularity is 10 seconds",
+		},
+		{
+			name:          "invalid: 1 second (too small)",
+			granularity:   "1 second",
+			expectError:   true,
+			errorContains: "too small; minimum granularity is 10 seconds",
+		},
+		{
+			name:          "invalid: 9 seconds (just below minimum)",
+			granularity:   "9 seconds",
+			expectError:   true,
+			errorContains: "too small; minimum granularity is 10 seconds",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			granularityInterval, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, tc.granularity)
+			require.NoError(t, err)
+
+			err = validateGranularity(granularityInterval.Duration, tc.granularity)
+
+			if tc.expectError {
+				require.Error(t, err)
+				if tc.errorContains != "" {
+					require.Contains(t, err.Error(), tc.errorContains)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestTruncateToGranularity tests the truncateToGranularity helper function.
 func TestTruncateToGranularity(t *testing.T) {
 	defer leaktest.AfterTest(t)()
@@ -180,10 +260,58 @@ func TestTruncateToGranularity(t *testing.T) {
 			expected:    time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
 		},
 		{
-			name:        "7 day granularity",
+			name:        "7 day granularity (week) - aligns to epoch",
 			input:       time.Date(2025, 1, 15, 14, 30, 45, 0, time.UTC),
 			granularity: "7 days",
-			expected:    time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
+			expected:    time.Date(2025, 1, 9, 0, 0, 0, 0, time.UTC), // Thursday aligned to epoch
+		},
+		{
+			name:        "1 hour granularity",
+			input:       time.Date(2025, 1, 15, 14, 30, 45, 123, time.UTC),
+			granularity: "1 hour",
+			expected:    time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC),
+		},
+		{
+			name:        "6 hour granularity",
+			input:       time.Date(2025, 1, 15, 14, 30, 45, 0, time.UTC),
+			granularity: "6 hours",
+			expected:    time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC), // 12:00-18:00 period
+		},
+		{
+			name:        "6 hour granularity - different period",
+			input:       time.Date(2025, 1, 15, 7, 30, 45, 0, time.UTC),
+			granularity: "6 hours",
+			expected:    time.Date(2025, 1, 15, 6, 0, 0, 0, time.UTC), // 06:00-12:00 period
+		},
+		{
+			name:        "1 month granularity",
+			input:       time.Date(2025, 1, 15, 14, 30, 45, 0, time.UTC),
+			granularity: "1 month",
+			expected:    time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:        "1 month granularity - different month",
+			input:       time.Date(2025, 6, 28, 23, 59, 59, 0, time.UTC),
+			granularity: "1 month",
+			expected:    time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:        "10 second granularity (for testing)",
+			input:       time.Date(2025, 1, 15, 14, 30, 47, 500000000, time.UTC),
+			granularity: "10 seconds",
+			expected:    time.Date(2025, 1, 15, 14, 30, 40, 0, time.UTC),
+		},
+		{
+			name:        "30 second granularity",
+			input:       time.Date(2025, 1, 15, 14, 30, 47, 0, time.UTC),
+			granularity: "30 seconds",
+			expected:    time.Date(2025, 1, 15, 14, 30, 30, 0, time.UTC),
+		},
+		{
+			name:        "5 minute granularity",
+			input:       time.Date(2025, 1, 15, 14, 33, 45, 0, time.UTC),
+			granularity: "5 minutes",
+			expected:    time.Date(2025, 1, 15, 14, 30, 0, 0, time.UTC),
 		},
 	}
 
@@ -193,7 +321,9 @@ func TestTruncateToGranularity(t *testing.T) {
 			require.NoError(t, err)
 
 			result := truncateToGranularity(tc.input, granularityInterval.Duration)
-			require.Equal(t, tc.expected, result)
+			require.Equal(t, tc.expected, result,
+				"truncateToGranularity(%v, %s) = %v, want %v",
+				tc.input, tc.granularity, result, tc.expected)
 		})
 	}
 }

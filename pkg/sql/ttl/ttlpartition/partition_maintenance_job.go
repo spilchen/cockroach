@@ -189,6 +189,11 @@ func (r *partitionTTLMaintenanceResumer) computePartitionChanges(
 		return nil, nil, errors.Wrapf(err, "failed to parse granularity %q", config.Granularity)
 	}
 
+	// Validate granularity meets minimum requirements.
+	if err := validateGranularity(granularityInterval.Duration, config.Granularity); err != nil {
+		return nil, nil, err
+	}
+
 	// Get existing partitions from the primary index.
 	primaryIndex := tableDesc.GetPrimaryIndex()
 	partitioning := primaryIndex.GetPartitioning()
@@ -287,17 +292,93 @@ func extractTimestamp(d tree.Datum) (time.Time, error) {
 	}
 }
 
-// truncateToGranularity truncates a timestamp to the start of its granularity period.
-// For example, with 1-day granularity, it truncates to midnight UTC.
-func truncateToGranularity(t time.Time, granularity duration.Duration) time.Time {
-	// For now, we'll implement this for day-based granularities.
-	// TODO: Support hour/week/month granularities if needed.
-	if granularity.Days > 0 && granularity.Months == 0 {
-		// Truncate to the start of the day.
-		return t.Truncate(24 * time.Hour)
+// validateGranularity validates that the granularity meets minimum requirements.
+// The minimum granularity is 10 seconds to prevent creating too many partitions.
+func validateGranularity(granularity duration.Duration, granularityStr string) error {
+	const minGranularityNanos = int64(10 * time.Second)
+
+	// Month-based granularities are always valid (months are > 10 seconds).
+	if granularity.Months > 0 {
+		return nil
 	}
-	// For other granularities, just return the original time.
-	// This will need refinement based on actual use cases.
+
+	// Day-based granularities are always valid (days are > 10 seconds).
+	if granularity.Days > 0 {
+		return nil
+	}
+
+	// For sub-day granularities, check total duration in nanoseconds.
+	totalNanos := granularity.Nanos()
+	if totalNanos < minGranularityNanos {
+		return errors.Newf(
+			"partition granularity %q is too small; minimum granularity is 10 seconds",
+			granularityStr,
+		)
+	}
+
+	return nil
+}
+
+// truncateToGranularity truncates a timestamp to the start of its granularity period.
+// Supports month, day (including week), hour, minute, and second granularities.
+// Examples:
+//   - 1 month: truncates to start of month
+//   - 7 days: truncates to start of week (aligned to Unix epoch)
+//   - 1 day: truncates to midnight UTC
+//   - 6 hours: truncates to 6-hour period (00:00, 06:00, 12:00, 18:00)
+//   - 10 seconds: truncates to 10-second period (useful for testing)
+func truncateToGranularity(t time.Time, granularity duration.Duration) time.Time {
+	// Handle month-based granularities.
+	if granularity.Months > 0 {
+		// Truncate to the start of the month.
+		year, month, _ := t.Date()
+
+		// Calculate which month period we're in.
+		// Convert to months since year 0.
+		monthsSinceEpoch := year*12 + int(month) - 1
+		periodStartMonth := (monthsSinceEpoch / int(granularity.Months)) * int(granularity.Months)
+
+		periodYear := periodStartMonth / 12
+		periodMonth := time.Month((periodStartMonth % 12) + 1)
+
+		return time.Date(periodYear, periodMonth, 1, 0, 0, 0, 0, time.UTC)
+	}
+
+	// Handle day-based granularities (including weeks).
+	if granularity.Days > 0 {
+		// Truncate to midnight UTC first.
+		dayStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+
+		// For multi-day granularities (e.g., 7 days for weeks), align to Unix epoch.
+		if granularity.Days > 1 {
+			// Calculate days since Unix epoch (1970-01-01).
+			epochStart := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+			daysSinceEpoch := int(dayStart.Sub(epochStart).Hours() / 24)
+
+			// Find the start of the current period.
+			periodStartDays := (daysSinceEpoch / int(granularity.Days)) * int(granularity.Days)
+			return epochStart.AddDate(0, 0, periodStartDays)
+		}
+
+		return dayStart
+	}
+
+	// Handle sub-day granularities (hours, minutes, seconds).
+	// Convert duration.Duration to time.Duration using Nanos().
+	nanos := granularity.Nanos()
+	if nanos > 0 {
+		timeDuration := time.Duration(nanos)
+
+		// Calculate time since Unix epoch.
+		epochStart := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+		timeSinceEpoch := t.Sub(epochStart)
+
+		// Find the start of the current period.
+		periodStart := (timeSinceEpoch / timeDuration) * timeDuration
+		return epochStart.Add(periodStart)
+	}
+
+	// Fallback: return original time.
 	return t
 }
 

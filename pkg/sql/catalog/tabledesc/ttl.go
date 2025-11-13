@@ -232,6 +232,21 @@ func ValidatePartitionTTL(ttl *catpb.PartitionTTLConfig) error {
 			)
 		}
 
+		// Validate that granularity meets minimum requirements (10 seconds).
+		const minGranularityNanos = int64(10 * time.Second)
+		// Month-based and day-based granularities are always valid (> 10 seconds).
+		if granularity.Duration.Months == 0 && granularity.Duration.Days == 0 {
+			// For sub-day granularities, check total duration in nanoseconds.
+			totalNanos := granularity.Duration.Nanos()
+			if totalNanos < minGranularityNanos {
+				return pgerror.Newf(
+					pgcode.InvalidParameterValue,
+					`partition granularity %q is too small; minimum granularity is 10 seconds`,
+					ttl.Granularity,
+				)
+			}
+		}
+
 		// Validate that granularity <= retention.
 		if granularity.Duration.Compare(retention.Duration) > 0 {
 			return pgerror.Newf(
@@ -299,6 +314,32 @@ func ValidatePartitionTTL(ttl *catpb.PartitionTTLConfig) error {
 				pgcode.InvalidParameterValue,
 				`"ttl_retention" must be greater than zero`,
 			)
+		}
+	}
+
+	// Validate that granularity meets minimum requirements if set (even without retention).
+	if ttl.Granularity != "" {
+		granularity, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, ttl.Granularity)
+		if err != nil {
+			return pgerror.Wrapf(
+				err,
+				pgcode.InvalidParameterValue,
+				`"ttl_granularity" must be a valid interval`,
+			)
+		}
+
+		const minGranularityNanos = int64(10 * time.Second)
+		// Month-based and day-based granularities are always valid (> 10 seconds).
+		if granularity.Duration.Months == 0 && granularity.Duration.Days == 0 {
+			// For sub-day granularities, check total duration in nanoseconds.
+			totalNanos := granularity.Duration.Nanos()
+			if totalNanos < minGranularityNanos {
+				return pgerror.Newf(
+					pgcode.InvalidParameterValue,
+					`partition granularity %q is too small; minimum granularity is 10 seconds`,
+					ttl.Granularity,
+				)
+			}
 		}
 	}
 

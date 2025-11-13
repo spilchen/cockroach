@@ -435,6 +435,24 @@ CREATE TABLE t_zero_lookahead (
 
 subtest end
 
+subtest partition_ttl_granularity_too_small
+
+# Test that granularity must be at least 10 seconds
+statement error partition granularity "9s" is too small; minimum granularity is 10 seconds
+CREATE TABLE t_granularity_too_small (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '1d',
+  ttl_granularity = '9s',
+  ttl_lookahead = '1h'
+)
+
+subtest end
+
 subtest partition_ttl_valid_edge_cases
 
 # Test valid edge cases
@@ -471,6 +489,23 @@ CREATE TABLE t_minimum_lookahead (
 
 statement ok
 DROP TABLE t_minimum_lookahead
+
+# Minimum granularity (10 seconds) should be allowed
+statement ok
+CREATE TABLE t_minimum_granularity (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '1h',
+  ttl_granularity = '10s',
+  ttl_lookahead = '30s'
+)
+
+statement ok
+DROP TABLE t_minimum_granularity
 
 subtest end
 
