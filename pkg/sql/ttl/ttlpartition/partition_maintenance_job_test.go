@@ -180,19 +180,24 @@ func TestFormatPartitionName(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "2025-01-15",
+			name:     "midnight",
 			input:    time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
-			expected: "p20250115",
+			expected: "p1736899200000000000", // 2025-01-15 00:00:00 UTC
 		},
 		{
-			name:     "2024-12-31",
-			input:    time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC),
-			expected: "p20241231",
+			name:     "noon",
+			input:    time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC),
+			expected: "p1736942400000000000", // 2025-01-15 12:00:00 UTC
 		},
 		{
-			name:     "2025-02-01",
-			input:    time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC),
-			expected: "p20250201",
+			name:     "with milliseconds",
+			input:    time.Date(2025, 1, 15, 12, 30, 45, 123456789, time.UTC),
+			expected: "p1736944245123456789", // 2025-01-15 12:30:45.123456789 UTC
+		},
+		{
+			name:     "different day",
+			input:    time.Date(2025, 1, 16, 0, 0, 0, 0, time.UTC),
+			expected: "p1736985600000000000", // 2025-01-16 00:00:00 UTC
 		},
 	}
 
@@ -215,32 +220,70 @@ func TestBuildDropPartitionStatement(t *testing.T) {
 		{
 			name:          "simple table and partition",
 			tableName:     tree.NewTableNameWithSchema("mydb", "public", "events"),
-			partitionName: "p20250115",
-			expected:      `ALTER TABLE mydb.public.events DROP PARTITION IF EXISTS "p20250115" WITH DATA`,
+			partitionName: "p1736899200000000000",
+			expected:      `ALTER TABLE mydb.public.events DROP PARTITION IF EXISTS "p1736899200000000000" WITH DATA`,
 		},
 		{
-			name:          "partition name with special characters",
+			name:          "partition with different timestamp",
 			tableName:     tree.NewTableNameWithSchema("db", "schema", "tbl"),
-			partitionName: "p-2025-01",
-			expected:      `ALTER TABLE db.schema.tbl DROP PARTITION IF EXISTS "p-2025-01" WITH DATA`,
-		},
-		{
-			name:          "partition name requiring escaping",
-			tableName:     tree.NewTableNameWithSchema("testdb", "public", "metrics"),
-			partitionName: "partition with spaces",
-			expected:      `ALTER TABLE testdb.public.metrics DROP PARTITION IF EXISTS "partition with spaces" WITH DATA`,
+			partitionName: "p1736985600000000000",
+			expected:      `ALTER TABLE db.schema.tbl DROP PARTITION IF EXISTS "p1736985600000000000" WITH DATA`,
 		},
 		{
 			name:          "table name with reserved keywords",
 			tableName:     tree.NewTableNameWithSchema("select", "from", "where"),
-			partitionName: "p20241231",
-			expected:      `ALTER TABLE "select"."from"."where" DROP PARTITION IF EXISTS "p20241231" WITH DATA`,
+			partitionName: "p1736899200000000000",
+			expected:      `ALTER TABLE "select"."from"."where" DROP PARTITION IF EXISTS "p1736899200000000000" WITH DATA`,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			result := buildDropPartitionStatement(tc.tableName, tc.partitionName)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestBuildAddPartitionStatement tests the buildAddPartitionStatement helper function.
+func TestBuildAddPartitionStatement(t *testing.T) {
+	testCases := []struct {
+		name          string
+		tableName     *tree.TableName
+		partitionName string
+		fromBound     time.Time
+		toBound       time.Time
+		expected      string
+	}{
+		{
+			name:          "daily partition",
+			tableName:     tree.NewTableNameWithSchema("mydb", "public", "events"),
+			partitionName: "p1736899200000000000",
+			fromBound:     time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
+			toBound:       time.Date(2025, 1, 16, 0, 0, 0, 0, time.UTC),
+			expected:      `ALTER TABLE mydb.public.events ADD PARTITION "p1736899200000000000" VALUES FROM ('2025-01-15T00:00:00Z') TO ('2025-01-16T00:00:00Z')`,
+		},
+		{
+			name:          "hourly partition",
+			tableName:     tree.NewTableNameWithSchema("db", "schema", "tbl"),
+			partitionName: "p1736899200000000000",
+			fromBound:     time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
+			toBound:       time.Date(2025, 1, 15, 1, 0, 0, 0, time.UTC),
+			expected:      `ALTER TABLE db.schema.tbl ADD PARTITION "p1736899200000000000" VALUES FROM ('2025-01-15T00:00:00Z') TO ('2025-01-15T01:00:00Z')`,
+		},
+		{
+			name:          "table with reserved keywords",
+			tableName:     tree.NewTableNameWithSchema("select", "from", "where"),
+			partitionName: "p1735689600000000000",
+			fromBound:     time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+			toBound:       time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC),
+			expected:      `ALTER TABLE "select"."from"."where" ADD PARTITION "p1735689600000000000" VALUES FROM ('2025-01-01T00:00:00Z') TO ('2025-01-02T00:00:00Z')`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := buildAddPartitionStatement(tc.tableName, tc.partitionName, tc.fromBound, tc.toBound)
 			require.Equal(t, tc.expected, result)
 		})
 	}

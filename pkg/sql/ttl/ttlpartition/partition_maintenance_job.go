@@ -116,12 +116,14 @@ func (r *partitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx int
 		return errors.Wrap(err, "failed to drop expired partitions")
 	}
 
-	// TODO: Steps 6-8 will be implemented in the next iteration:
-	// 6. Execute partition creates
+	// Step 6: Execute partition creates.
+	if err := r.executePartitionCreates(ctx, db, details.TableID, toCreate); err != nil {
+		return errors.Wrap(err, "failed to create new partitions")
+	}
+
+	// TODO: Steps 7-8 will be implemented in the next iteration:
 	// 7. Trigger hybrid cleanup for dropped partitions
 	// 8. Update job progress
-
-	_ = toCreate
 
 	log.Dev.Infof(ctx, "partition TTL maintenance job completed for table %d", details.TableID)
 	return nil
@@ -290,10 +292,15 @@ func truncateToGranularity(t time.Time, granularity duration.Duration) time.Time
 	return t
 }
 
-// formatPartitionName generates a partition name from a timestamp.
-// Format: p20250113 for 2025-01-13.
+// formatPartitionName generates a unique partition name from a timestamp.
+// Uses Unix nanoseconds to guarantee uniqueness for any granularity.
+// The partition name is monotonically increasing and collision-free.
+// Examples:
+//   - p1736870400000000000 (2025-01-15 00:00:00 UTC)
+//   - p1736956800000000000 (2025-01-16 00:00:00 UTC)
+//   - p1736870400500000000 (2025-01-15 00:00:00.5 UTC for sub-second granularity)
 func formatPartitionName(t time.Time) string {
-	return fmt.Sprintf("p%04d%02d%02d", t.Year(), t.Month(), t.Day())
+	return fmt.Sprintf("p%d", t.UnixNano())
 }
 
 // buildDropPartitionStatement constructs an ALTER TABLE DROP PARTITION statement.
@@ -304,6 +311,25 @@ func buildDropPartitionStatement(tableName *tree.TableName, partitionName string
 		"ALTER TABLE %s DROP PARTITION IF EXISTS %s WITH DATA",
 		tableName.FQString(),
 		escapedPartitionName,
+	)
+}
+
+// buildAddPartitionStatement constructs an ALTER TABLE ADD PARTITION statement for a RANGE partition.
+// Returns the SQL statement as a string.
+func buildAddPartitionStatement(
+	tableName *tree.TableName, partitionName string, fromBound, toBound time.Time,
+) string {
+	escapedPartitionName := lexbase.EscapeSQLIdent(partitionName)
+	// Format timestamps as SQL string literals in RFC3339 format.
+	// The database will parse these according to the column type.
+	fromStr := fromBound.Format(time.RFC3339)
+	toStr := toBound.Format(time.RFC3339)
+	return fmt.Sprintf(
+		"ALTER TABLE %s ADD PARTITION %s VALUES FROM ('%s') TO ('%s')",
+		tableName.FQString(),
+		escapedPartitionName,
+		fromStr,
+		toStr,
 	)
 }
 
@@ -353,6 +379,61 @@ func (r *partitionTTLMaintenanceResumer) executePartitionDrops(
 			}
 
 			log.Dev.Infof(ctx, "successfully dropped partition %s", partition.name)
+		}
+
+		return nil
+	})
+}
+
+// executePartitionCreates executes ALTER TABLE ADD PARTITION statements for the specified partitions.
+func (r *partitionTTLMaintenanceResumer) executePartitionCreates(
+	ctx context.Context, db *sql.InternalDB, tableID catid.DescID, toCreate []partitionSpec,
+) error {
+	if len(toCreate) == 0 {
+		return nil
+	}
+
+	return db.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
+		// Get the table descriptor to construct the fully qualified table name.
+		tableDesc, err := txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, tableID)
+		if err != nil {
+			return err
+		}
+
+		// Get database descriptor.
+		dbDesc, err := txn.Descriptors().ByIDWithoutLeased(txn.KV()).Get().Database(ctx, tableDesc.GetParentID())
+		if err != nil {
+			return err
+		}
+
+		// Get schema descriptor.
+		schemaDesc, err := txn.Descriptors().ByIDWithoutLeased(txn.KV()).Get().Schema(ctx, tableDesc.GetParentSchemaID())
+		if err != nil {
+			return err
+		}
+
+		// Construct fully qualified table name.
+		tableName := tree.NewTableNameWithSchema(
+			tree.Name(dbDesc.GetName()),
+			tree.Name(schemaDesc.GetName()),
+			tree.Name(tableDesc.GetName()))
+
+		// Create each partition.
+		for _, partition := range toCreate {
+			alterStmt := buildAddPartitionStatement(
+				tableName, partition.name, partition.lowerBound, partition.upperBound)
+
+			log.Dev.Infof(ctx, "creating partition %s on table %s (from: %s, to: %s)",
+				partition.name, tableName.FQString(),
+				partition.lowerBound.Format(time.RFC3339),
+				partition.upperBound.Format(time.RFC3339))
+
+			// Execute the ADD PARTITION statement.
+			if _, err := txn.Exec(ctx, "add-partition-ttl", txn.KV(), alterStmt); err != nil {
+				return errors.Wrapf(err, "failed to create partition %q", partition.name)
+			}
+
+			log.Dev.Infof(ctx, "successfully created partition %s", partition.name)
 		}
 
 		return nil
