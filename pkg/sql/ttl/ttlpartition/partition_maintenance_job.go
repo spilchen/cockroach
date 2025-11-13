@@ -7,15 +7,18 @@ package ttlpartition
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
+	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
+	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/util/duration"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -97,7 +100,8 @@ func (r *partitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx int
 		window.lookaheadEnd.Format(time.RFC3339))
 
 	// Step 3-4: Identify partitions to drop and create.
-	toDrop, toCreate, err := r.computePartitionChanges(tableDesc, partitionTTL, window)
+	codec := execCfg.Codec
+	toDrop, toCreate, err := r.computePartitionChanges(codec, tableDesc, partitionTTL, window)
 	if err != nil {
 		return err
 	}
@@ -158,7 +162,10 @@ func (r *partitionTTLMaintenanceResumer) computePartitionWindow(
 // Partitions with upperBound < window.retentionStart should be dropped.
 // New partitions should be created to maintain coverage until window.lookaheadEnd.
 func (r *partitionTTLMaintenanceResumer) computePartitionChanges(
-	tableDesc catalog.TableDescriptor, config *catpb.PartitionTTLConfig, window partitionWindow,
+	codec keys.SQLCodec,
+	tableDesc catalog.TableDescriptor,
+	config *catpb.PartitionTTLConfig,
+	window partitionWindow,
 ) (toDrop []partitionSpec, toCreate []partitionSpec, err error) {
 	// Parse granularity to determine partition interval.
 	granularityInterval, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, config.Granularity)
@@ -173,31 +180,115 @@ func (r *partitionTTLMaintenanceResumer) computePartitionChanges(
 	// Track existing partition upper bounds to avoid creating duplicates.
 	existingUpperBounds := make(map[time.Time]bool)
 
-	// Iterate through existing RANGE partitions.
-	err = partitioning.ForEachRange(func(name string, from, to []byte) error {
-		// Parse the upper bound from the partition.
-		// TODO: This needs to decode the partition bound. For now, we'll stub this out.
-		// The actual implementation will need to decode the encoded bytes in 'to'.
-		_ = name
-		_ = from
-		_ = to
+	// Datum allocator for decoding partition bounds.
+	a := &tree.DatumAlloc{}
 
-		// For now, we'll skip the partition analysis since we need to properly decode
-		// the partition bounds. This will be implemented in the next iteration.
+	// Empty prefix datums (no parent partitioning for partition TTL).
+	var fakePrefixDatums tree.Datums
+
+	// Iterate through existing RANGE partitions and decode their bounds.
+	err = partitioning.ForEachRange(func(name string, from, to []byte) error {
+		// Decode the FromInclusive bound.
+		fromTuple, _, err := rowenc.DecodePartitionTuple(
+			a, codec, tableDesc, primaryIndex, partitioning, from, fakePrefixDatums)
+		if err != nil {
+			return errors.Wrapf(err, "failed to decode FROM bound for partition %q", name)
+		}
+
+		// Decode the ToExclusive bound.
+		toTuple, _, err := rowenc.DecodePartitionTuple(
+			a, codec, tableDesc, primaryIndex, partitioning, to, fakePrefixDatums)
+		if err != nil {
+			return errors.Wrapf(err, "failed to decode TO bound for partition %q", name)
+		}
+
+		// Extract timestamps from the decoded bounds.
+		if len(fromTuple.Datums) == 0 || len(toTuple.Datums) == 0 {
+			return errors.Newf("partition %q has invalid bounds", name)
+		}
+
+		// Get the lower and upper bound timestamps.
+		var lowerBound, upperBound time.Time
+		lowerBound, err = extractTimestamp(fromTuple.Datums[0])
+		if err != nil {
+			return errors.Wrapf(err, "failed to extract lower bound timestamp for partition %q", name)
+		}
+
+		upperBound, err = extractTimestamp(toTuple.Datums[0])
+		if err != nil {
+			return errors.Wrapf(err, "failed to extract upper bound timestamp for partition %q", name)
+		}
+
+		// Track existing upper bounds.
+		existingUpperBounds[upperBound] = true
+
+		// Check if this partition should be dropped (upper bound is before retention start).
+		if upperBound.Before(window.retentionStart) {
+			toDrop = append(toDrop, partitionSpec{
+				name:       name,
+				lowerBound: lowerBound,
+				upperBound: upperBound,
+			})
+		}
+
 		return nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// TODO: Implement partition bound decoding and analysis.
-	// This requires decoding the encoded bytes from PartitioningDescriptor.Range.ToExclusive
-	// and comparing them against the partition window.
+	// Generate partitions to create for coverage until lookaheadEnd.
+	// Start from the retention start and create partitions at granularity intervals.
+	current := truncateToGranularity(window.retentionStart, granularityInterval.Duration)
+	for current.Before(window.lookaheadEnd) {
+		next := duration.Add(current, granularityInterval.Duration)
 
-	_ = existingUpperBounds
-	_ = granularityInterval
+		// Only create if this upper bound doesn't already exist.
+		if !existingUpperBounds[next] {
+			partName := formatPartitionName(current)
+			toCreate = append(toCreate, partitionSpec{
+				name:       partName,
+				lowerBound: current,
+				upperBound: next,
+			})
+		}
+
+		current = next
+	}
 
 	return toDrop, toCreate, nil
+}
+
+// extractTimestamp extracts a time.Time value from a datum.
+func extractTimestamp(d tree.Datum) (time.Time, error) {
+	switch t := d.(type) {
+	case *tree.DTimestamp:
+		return t.Time, nil
+	case *tree.DTimestampTZ:
+		return t.Time, nil
+	default:
+		return time.Time{}, errors.Newf("expected TIMESTAMP or TIMESTAMPTZ, got %T", d)
+	}
+}
+
+// truncateToGranularity truncates a timestamp to the start of its granularity period.
+// For example, with 1-day granularity, it truncates to midnight UTC.
+func truncateToGranularity(t time.Time, granularity duration.Duration) time.Time {
+	// For now, we'll implement this for day-based granularities.
+	// TODO: Support hour/week/month granularities if needed.
+	if granularity.Days > 0 && granularity.Months == 0 {
+		// Truncate to the start of the day.
+		return t.Truncate(24 * time.Hour)
+	}
+	// For other granularities, just return the original time.
+	// This will need refinement based on actual use cases.
+	return t
+}
+
+// formatPartitionName generates a partition name from a timestamp.
+// Format: p20250113 for 2025-01-13.
+func formatPartitionName(t time.Time) string {
+	return fmt.Sprintf("p%04d%02d%02d", t.Year(), t.Month(), t.Day())
 }
 
 func init() {

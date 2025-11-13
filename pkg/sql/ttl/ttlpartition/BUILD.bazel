@@ -8,11 +8,13 @@ go_library(
     deps = [
         "//pkg/jobs",
         "//pkg/jobs/jobspb",
+        "//pkg/keys",
         "//pkg/settings/cluster",
         "//pkg/sql",
         "//pkg/sql/catalog",
         "//pkg/sql/catalog/catpb",
         "//pkg/sql/catalog/descs",
+        "//pkg/sql/rowenc",
         "//pkg/sql/sem/tree",
         "//pkg/util/duration",
         "//pkg/util/log",
@@ -27,6 +29,8 @@ go_test(
     embed = [":ttlpartition"],
     deps = [
         "//pkg/sql/catalog/catpb",
+        "//pkg/sql/sem/tree",
+        "//pkg/util/duration",
         "@com_github_stretchr_testify//require",
     ],
 )

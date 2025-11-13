@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/util/duration"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,15 +93,113 @@ func TestComputePartitionWindow(t *testing.T) {
 	}
 }
 
-// TestComputePartitionChanges tests the computePartitionChanges function.
-// Note: This is currently a stub test since the partition bound decoding
-// is not yet implemented.
-func TestComputePartitionChanges(t *testing.T) {
-	t.Skip("Partition bound decoding not yet implemented")
+// TestExtractTimestamp tests the extractTimestamp helper function.
+func TestExtractTimestamp(t *testing.T) {
+	testCases := []struct {
+		name          string
+		datum         tree.Datum
+		expected      time.Time
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name:        "DTimestamp",
+			datum:       &tree.DTimestamp{Time: time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)},
+			expected:    time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC),
+			expectError: false,
+		},
+		{
+			name:        "DTimestampTZ",
+			datum:       &tree.DTimestampTZ{Time: time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)},
+			expected:    time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC),
+			expectError: false,
+		},
+		{
+			name:          "Invalid type - DString",
+			datum:         tree.NewDString("not a timestamp"),
+			expectError:   true,
+			errorContains: "expected TIMESTAMP or TIMESTAMPTZ",
+		},
+	}
 
-	// TODO: Add test cases once partition bound decoding is implemented.
-	// Test cases should cover:
-	// - Dropping expired partitions
-	// - Creating new partitions for coverage
-	// - Handling edge cases (no partitions, all partitions expired, etc.)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := extractTimestamp(tc.datum)
+
+			if tc.expectError {
+				require.Error(t, err)
+				if tc.errorContains != "" {
+					require.Contains(t, err.Error(), tc.errorContains)
+				}
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.expected, result)
+			}
+		})
+	}
+}
+
+// TestTruncateToGranularity tests the truncateToGranularity helper function.
+func TestTruncateToGranularity(t *testing.T) {
+	testCases := []struct {
+		name        string
+		input       time.Time
+		granularity string
+		expected    time.Time
+	}{
+		{
+			name:        "1 day granularity",
+			input:       time.Date(2025, 1, 15, 14, 30, 45, 0, time.UTC),
+			granularity: "1 day",
+			expected:    time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:        "7 day granularity",
+			input:       time.Date(2025, 1, 15, 14, 30, 45, 0, time.UTC),
+			granularity: "7 days",
+			expected:    time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			granularityInterval, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, tc.granularity)
+			require.NoError(t, err)
+
+			result := truncateToGranularity(tc.input, granularityInterval.Duration)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+// TestFormatPartitionName tests the formatPartitionName helper function.
+func TestFormatPartitionName(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    time.Time
+		expected string
+	}{
+		{
+			name:     "2025-01-15",
+			input:    time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
+			expected: "p20250115",
+		},
+		{
+			name:     "2024-12-31",
+			input:    time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC),
+			expected: "p20241231",
+		},
+		{
+			name:     "2025-02-01",
+			input:    time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC),
+			expected: "p20250201",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := formatPartitionName(tc.input)
+			require.Equal(t, tc.expected, result)
+		})
+	}
 }
