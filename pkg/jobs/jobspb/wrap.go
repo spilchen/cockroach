@@ -220,7 +220,7 @@ func DetailsType(d isPayload_Details) (Type, error) {
 	case *Payload_StreamReplication:
 		return TypeReplicationStreamProducer, nil
 	case *Payload_RowLevelTTL:
-		if d.RowLevelTTL.HybridCleanerMode {
+		if d.RowLevelTTL.HybridCleanerDetails != nil {
 			return TypePartitionTTLCleanup, nil
 		}
 		return TypeRowLevelTTL, nil
@@ -316,7 +316,7 @@ var JobDetailsForEveryJobType = map[Type]Details{
 	TypeInspect:                      InspectDetails{},
 	TypePartitionTTLScheduler:        PartitionTTLMaintenanceDetails{},
 	TypePartitionTTLCleanup: RowLevelTTLDetails{
-		HybridCleanerMode: true,
+		HybridCleanerDetails: &HybridCleanerDetails{},
 	},
 }
 

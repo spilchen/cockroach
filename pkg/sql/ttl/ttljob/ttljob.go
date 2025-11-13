@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
@@ -106,13 +107,6 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 
 	details := t.job.Details().(jobspb.RowLevelTTLDetails)
 
-	// TODO(SPILLY): Hybrid cleaner mode check
-	// if details.HybridCleanerMode {
-	//   - Determine which secondary indexes need cleanup by inspecting table descriptor
-	//   - Check if each secondary index has TTL column as leftmost key and matching partitioning
-	//   - Build list of non-aligned indexes that need cleanup
-	// }
-
 	aostDuration := ttlbase.DefaultAOSTDuration
 	if knobs.AOSTDuration != nil {
 		aostDuration = *knobs.AOSTDuration
@@ -121,6 +115,7 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 	var rowLevelTTL *catpb.RowLevelTTL
 	var relationName string
 	var entirePKSpan roachpb.Span
+	var partitionSpans []roachpb.Span // For hybrid cleaner mode when scheduler provides spans
 	if err := db.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
 		desc, err := txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, details.TableID)
 		if err != nil {
@@ -154,14 +149,65 @@ func (t *rowLevelTTLResumer) Resume(ctx context.Context, execCtx interface{}) (r
 		}
 		relationName = tn.FQString()
 
-		// TODO(SPILLY): Hybrid cleaner mode span determination
-		// if details.HybridCleanerMode {
-		//   - Instead of PK span, compute spans for non-aligned secondary indexes
-		//   - Filter spans to partition bounds [PartitionStart, PartitionEnd)
-		//   - Create one span per secondary index that needs cleanup
-		// } else {
-		entirePKSpan = desc.PrimaryIndexSpan(execCfg.Codec)
-		// }
+		// In hybrid cleaner mode, determine which secondary indexes need cleanup
+		// and use the PK span for the expired partition.
+		if details.HybridCleanerDetails != nil {
+			// If TargetIndexIDs is not populated, determine them at runtime.
+			if len(details.HybridCleanerDetails.TargetIndexIDs) == 0 {
+				// Find the TTL column name from the partition TTL config.
+				partitionTTL := desc.GetPartitionTTL()
+				if partitionTTL == nil {
+					return errors.Newf("partition TTL config not found on table %s", desc.GetName())
+				}
+				ttlColName := partitionTTL.ColumnName
+				if ttlColName == "" {
+					return errors.Newf("TTL column not found in partition TTL config")
+				}
+
+				// Iterate through all secondary indexes to find non-aligned ones.
+				for _, idx := range desc.NonPrimaryIndexes() {
+					// Check if the TTL column is the leftmost key in this index.
+					if idx.NumKeyColumns() == 0 {
+						continue
+					}
+					firstColID := idx.GetKeyColumnID(0)
+					firstCol, err := catalog.MustFindColumnByID(desc, firstColID)
+					if err != nil {
+						return errors.Wrapf(err, "error finding column %d", firstColID)
+					}
+
+					// If the TTL column is not the leftmost key, this index needs cleanup.
+					if firstCol.GetName() != ttlColName {
+						details.HybridCleanerDetails.TargetIndexIDs = append(
+							details.HybridCleanerDetails.TargetIndexIDs,
+							idx.GetID(),
+						)
+					}
+				}
+			}
+
+			// Use the PK spans for the expired partition provided by the partition scheduler.
+			// The scheduler is responsible for computing the correct PK spans for the dropped partition.
+			if len(details.HybridCleanerDetails.PartitionSpans) == 0 {
+				return errors.Newf("hybrid cleaner mode requires partition spans to be provided")
+			}
+
+			// Store partition spans for use as work spans.
+			partitionSpans = details.HybridCleanerDetails.PartitionSpans
+
+			// For progress tracking, use the encompassing span.
+			var g roachpb.SpanGroup
+			g.Add(partitionSpans...)
+			merged := g.Slice()
+			if len(merged) > 0 {
+				entirePKSpan = merged[0]
+			} else {
+				return errors.Newf("failed to merge partition spans for progress tracking")
+			}
+		} else {
+			// Regular row-level TTL mode: use primary index span.
+			entirePKSpan = desc.PrimaryIndexSpan(execCfg.Codec)
+		}
 		return nil
 	}); err != nil {
 		return err

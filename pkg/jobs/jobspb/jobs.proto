@@ -1306,6 +1306,34 @@ message AutoSQLStatsCompactionDetails {
 message AutoSQLStatsCompactionProgress {
 }
 
+message HybridCleanerDetails {
+  // PartitionStart is the lower bound (inclusive) of the partition being cleaned.
+  google.protobuf.Timestamp partition_start = 1 [
+    (gogoproto.nullable) = false,
+    (gogoproto.stdtime) = true
+  ];
+
+  // PartitionEnd is the upper bound (exclusive) of the partition being cleaned.
+  google.protobuf.Timestamp partition_end = 2 [
+    (gogoproto.nullable) = false,
+    (gogoproto.stdtime) = true
+  ];
+
+  // TargetIndexIDs lists the secondary index IDs to clean.
+  // The job will iterate through these indexes and delete entries within
+  // the partition bounds.
+  repeated uint32 target_index_ids = 3 [
+    (gogoproto.customname) = "TargetIndexIDs",
+    (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb.IndexID"
+  ];
+
+  // PartitionSpans contains the PK spans that correspond to the expired partition.
+  // These spans enable parallelism by allowing the work to be distributed across nodes.
+  // When not specified, the job will use the entire PK span and rely on partition
+  // bounds for filtering.
+  repeated cockroach.roachpb.Span partition_spans = 4 [(gogoproto.nullable) = false];
+}
+
 message RowLevelTTLDetails {
 
   // TableID is the ID of the table that the TTL job removes records from.
@@ -1325,23 +1353,14 @@ message RowLevelTTLDetails {
     (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb.DescriptorVersion"
   ];
 
-  // HybridCleanerMode, when true, indicates this TTL job is running in
+  // HybridCleanerDetails, when non-nil, indicates this TTL job is running in
   // "delete-only" mode for partition TTL hybrid cleanup. In this mode:
   // - No expiration filtering or select phase is performed.
-  // - Deletes are targeted at all non-aligned secondary indexes within partition bounds.
-  // - The job determines which indexes need cleanup at runtime by inspecting the table descriptor.
+  // - Deletes are targeted at specified secondary indexes within partition bounds.
   // - Used to clean up orphaned secondary index entries after partition drops.
-  bool hybrid_cleaner_mode = 4;
+  HybridCleanerDetails hybrid_cleaner_details = 4;
 
-  // PartitionStart is the lower bound (inclusive) of the partition being cleaned
-  // in hybrid cleaner mode. Only used when hybrid_cleaner_mode is true.
-  google.protobuf.Timestamp partition_start = 5 [(gogoproto.stdtime) = true];
-
-  // PartitionEnd is the upper bound (exclusive) of the partition being cleaned
-  // in hybrid cleaner mode. Only used when hybrid_cleaner_mode is true.
-  google.protobuf.Timestamp partition_end = 6 [(gogoproto.stdtime) = true];
-
-  // NEXT ID: 7
+  // NEXT ID: 5
 }
 
 message RowLevelTTLProgress {
