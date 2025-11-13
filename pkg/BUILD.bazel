@@ -2443,6 +2443,7 @@ GO_TARGETS = [
     "//pkg/sql/ttl/ttlbase:ttlbase_test",
     "//pkg/sql/ttl/ttljob:ttljob",
     "//pkg/sql/ttl/ttljob:ttljob_test",
+    "//pkg/sql/ttl/ttlpartition:ttlpartition",
     "//pkg/sql/ttl/ttlschedule:ttlschedule",
     "//pkg/sql/types:types",
     "//pkg/sql/types:types_test",

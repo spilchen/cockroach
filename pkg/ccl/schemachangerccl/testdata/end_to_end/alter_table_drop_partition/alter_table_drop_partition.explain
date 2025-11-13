@@ -17,32 +17,37 @@ Schema change plan for ALTER TABLE ‹defaultdb›.‹public›.‹t_range› DR
  ├── StatementPhase
  │    └── Stage 1 of 1 in StatementPhase
  │         ├── 1 element transitioning toward TRANSIENT_PUBLIC
- │         │    └── PUBLIC → ABSENT TableSchemaLocked:{DescID: 104 (t_range)}
+ │         │    └── PUBLIC → ABSENT  TableSchemaLocked:{DescID: 104 (t_range)}
  │         ├── 1 element transitioning toward ABSENT
- │         │    └── PUBLIC → ABSENT IndexPartitionEntry:{DescID: 104 (t_range), IndexID: 1 (t_range_pkey), PartitionPath: [p1]}
+ │         │    └── PUBLIC → DROPPED IndexPartitionEntry:{DescID: 104 (t_range), IndexID: 1 (t_range_pkey), PartitionPath: [p1]}
  │         └── 2 Mutation operations
  │              ├── SetTableSchemaLocked {"TableID":104}
  │              └── RemoveIndexPartitionEntry {"PartitionEntry":{"IndexID":1,"NumColumns":1,"TableID":104}}
  ├── PreCommitPhase
  │    ├── Stage 1 of 2 in PreCommitPhase
  │    │    ├── 1 element transitioning toward TRANSIENT_PUBLIC
- │    │    │    └── ABSENT → PUBLIC TableSchemaLocked:{DescID: 104 (t_range)}
+ │    │    │    └── ABSENT  → PUBLIC TableSchemaLocked:{DescID: 104 (t_range)}
  │    │    ├── 1 element transitioning toward ABSENT
- │    │    │    └── ABSENT → PUBLIC IndexPartitionEntry:{DescID: 104 (t_range), IndexID: 1 (t_range_pkey), PartitionPath: [p1]}
+ │    │    │    └── DROPPED → PUBLIC IndexPartitionEntry:{DescID: 104 (t_range), IndexID: 1 (t_range_pkey), PartitionPath: [p1]}
  │    │    └── 1 Mutation operation
  │    │         └── UndoAllInTxnImmediateMutationOpSideEffects
  │    └── Stage 2 of 2 in PreCommitPhase
  │         ├── 1 element transitioning toward TRANSIENT_PUBLIC
- │         │    └── PUBLIC → ABSENT TableSchemaLocked:{DescID: 104 (t_range)}
+ │         │    └── PUBLIC → ABSENT  TableSchemaLocked:{DescID: 104 (t_range)}
  │         ├── 1 element transitioning toward ABSENT
- │         │    └── PUBLIC → ABSENT IndexPartitionEntry:{DescID: 104 (t_range), IndexID: 1 (t_range_pkey), PartitionPath: [p1]}
+ │         │    └── PUBLIC → DROPPED IndexPartitionEntry:{DescID: 104 (t_range), IndexID: 1 (t_range_pkey), PartitionPath: [p1]}
  │         └── 4 Mutation operations
  │              ├── SetTableSchemaLocked {"TableID":104}
  │              ├── RemoveIndexPartitionEntry {"PartitionEntry":{"IndexID":1,"NumColumns":1,"TableID":104}}
  │              ├── SetJobStateOnDescriptor {"DescriptorID":104,"Initialize":true}
- │              └── CreateSchemaChangerJob {"RunningStatus":"Pending: Updatin..."}
- └── PostCommitPhase
-      └── Stage 1 of 1 in PostCommitPhase
+ │              └── CreateSchemaChangerJob {"NonCancelable":true,"RunningStatus":"Pending: Deletin..."}
+ └── PostCommitNonRevertiblePhase
+      ├── Stage 1 of 2 in PostCommitNonRevertiblePhase
+      │    ├── 1 element transitioning toward ABSENT
+      │    │    └── DROPPED → ABSENT IndexPartitionEntry:{DescID: 104 (t_range), IndexID: 1 (t_range_pkey), PartitionPath: [p1]}
+      │    └── 1 Backfill operation
+      │         └── DeletePartitionData {"IndexID":1,"NumColumns":1,"PartitionName":"p1","TableID":104}
+      └── Stage 2 of 2 in PostCommitNonRevertiblePhase
            ├── 1 element transitioning toward TRANSIENT_PUBLIC
            │    └── ABSENT → TRANSIENT_PUBLIC TableSchemaLocked:{DescID: 104 (t_range)}
            └── 3 Mutation operations

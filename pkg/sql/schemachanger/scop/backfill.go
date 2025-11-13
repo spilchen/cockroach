@@ -6,6 +6,7 @@
 package scop
 
 import (
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/redact"
 )
@@ -40,6 +41,27 @@ type MergeIndex struct {
 
 func (MergeIndex) Description() redact.RedactableString {
 	return "Merging index"
+}
+
+// DeletePartitionData specifies a partition data deletion operation.
+// This operation deletes all data in a partition's key range using MVCC delete range.
+// This is a non-revertible operation that runs in the PostCommitNonRevertiblePhase.
+type DeletePartitionData struct {
+	backfillOp
+	TableID           descpb.ID
+	IndexID           descpb.IndexID
+	PartitionName     string
+	NumColumns        uint32 // Number of columns used in partitioning at this level
+	NumImplicitColumns uint32 // Number of columns that implicitly prefix the index
+	// PartitionPath represents the hierarchical path to this partition.
+	PartitionPath []string
+	// Exactly one of ListPartition or RangePartition must be set.
+	ListPartition  *catpb.PartitioningDescriptor_List
+	RangePartition *catpb.PartitioningDescriptor_Range
+}
+
+func (DeletePartitionData) Description() redact.RedactableString {
+	return "Deleting partition data"
 }
 
 // Make sure baseOp is used for linter.

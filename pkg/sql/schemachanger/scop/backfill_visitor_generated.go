@@ -19,6 +19,7 @@ type BackfillOp interface {
 type BackfillVisitor interface {
 	BackfillIndex(context.Context, BackfillIndex) error
 	MergeIndex(context.Context, MergeIndex) error
+	DeletePartitionData(context.Context, DeletePartitionData) error
 }
 
 // Visit is part of the BackfillOp interface.
@@ -29,4 +30,9 @@ func (op BackfillIndex) Visit(ctx context.Context, v BackfillVisitor) error {
 // Visit is part of the BackfillOp interface.
 func (op MergeIndex) Visit(ctx context.Context, v BackfillVisitor) error {
 	return v.MergeIndex(ctx, op)
+}
+
+// Visit is part of the BackfillOp interface.
+func (op DeletePartitionData) Visit(ctx context.Context, v BackfillVisitor) error {
+	return v.DeletePartitionData(ctx, op)
 }

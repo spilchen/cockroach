@@ -18,21 +18,47 @@ func init() {
 	opRegistry.register((*scpb.IndexPartitionEntry)(nil),
 		toPublic(
 			scpb.Status_ABSENT,
-			to(scpb.Status_PUBLIC,
+			to(scpb.Status_DROPPED,
 				emit(func(this *scpb.IndexPartitionEntry) *scop.AddIndexPartitionEntry {
 					return &scop.AddIndexPartitionEntry{
 						PartitionEntry: *protoutil.Clone(this).(*scpb.IndexPartitionEntry),
 					}
 				}),
 			),
+			to(scpb.Status_PUBLIC),
 		),
-		toTransientAbsentLikePublic(),
 		toAbsent(
 			scpb.Status_PUBLIC,
-			to(scpb.Status_ABSENT,
+			to(scpb.Status_DROPPED,
 				emit(func(this *scpb.IndexPartitionEntry) *scop.RemoveIndexPartitionEntry {
 					return &scop.RemoveIndexPartitionEntry{
 						PartitionEntry: *protoutil.Clone(this).(*scpb.IndexPartitionEntry),
+					}
+				}),
+			),
+			to(scpb.Status_ABSENT,
+				revertible(false),
+				// Emit DeletePartitionData to delete the partition's data in the non-revertible phase.
+				// This operation uses MVCC delete range to efficiently delete all data.
+				// The partition metadata is passed to the operation, and the actual key spans
+				// will be computed during execution when we have access to the table descriptor
+				// and codec.
+				emit(func(this *scpb.IndexPartitionEntry) *scop.DeletePartitionData {
+					partitionName := ""
+					if lp := this.GetListPartition(); lp != nil {
+						partitionName = lp.Name
+					} else if rp := this.GetRangePartition(); rp != nil {
+						partitionName = rp.Name
+					}
+					return &scop.DeletePartitionData{
+						TableID:            this.TableID,
+						IndexID:            this.IndexID,
+						PartitionName:      partitionName,
+						NumColumns:         this.NumColumns,
+						NumImplicitColumns: this.NumImplicitColumns,
+						PartitionPath:      this.PartitionPath,
+						ListPartition:      this.GetListPartition(),
+						RangePartition:     this.GetRangePartition(),
 					}
 				}),
 			),

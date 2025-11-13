@@ -14,4 +14,5 @@ INSERT INTO t_range VALUES (5, 1), (15, 1), (25, 1);
 EXPLAIN (DDL, SHAPE) ALTER TABLE t_range DROP PARTITION p1 WITH DATA;
 ----
 Schema change plan for ALTER TABLE ‹defaultdb›.‹public›.‹t_range› DROP PARTITION ‹p1› WITH DATA;
- └── execute 2 system table mutations transactions
+ ├── execute 1 system table mutations transaction
+ └── execute 1 system table mutations transaction

@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/funcdesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/multiregion"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/nstree"
+	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/schemadesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/typedesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/zone"
@@ -78,6 +79,12 @@ func (s *TestState) ClusterID() uuid.UUID {
 // Codec implements the scbuild.Dependencies interface.
 func (s *TestState) Codec() keys.SQLCodec {
 	return keys.SystemSQLCodec
+}
+
+// Txn implements the scexec.Dependencies interface.
+// For test mocks, this returns nil since TestState doesn't maintain a real transaction.
+func (s *TestState) Txn() isql.Txn {
+	return nil
 }
 
 // SessionData implements the scbuild.Dependencies interface.

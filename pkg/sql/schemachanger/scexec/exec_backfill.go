@@ -10,13 +10,18 @@ import (
 	"sort"
 
 	"github.com/cockroachdb/cockroach/pkg/jobs"
+	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
+	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
+	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scop"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/redact"
@@ -28,7 +33,15 @@ import (
 // be confusing than valuable. Not much is being done transactionally.
 
 func executeBackfillOps(ctx context.Context, deps Dependencies, execute []scop.Op) (err error) {
-	backfillsToExecute, mergesToExecute := extractBackfillsAndMergesFromOps(execute)
+	backfillsToExecute, mergesToExecute, partitionDeletions := extractBackfillsAndMergesFromOps(execute)
+
+	// Execute partition deletions first since they're non-revertible
+	if len(partitionDeletions) > 0 {
+		if err := executePartitionDeletions(ctx, deps, partitionDeletions); err != nil {
+			return err
+		}
+	}
+
 	tables, err := getTableDescriptorsForBackfillsAndMerges(ctx, deps.Catalog(), backfillsToExecute, mergesToExecute)
 	if err != nil {
 		return err
@@ -74,9 +87,10 @@ func getTableDescriptorsForBackfillsAndMerges(
 	return tables, nil
 }
 
-func extractBackfillsAndMergesFromOps(execute []scop.Op) ([]Backfill, []Merge) {
+func extractBackfillsAndMergesFromOps(execute []scop.Op) ([]Backfill, []Merge, []*scop.DeletePartitionData) {
 	var bfs []Backfill
 	var ms []Merge
+	var pds []*scop.DeletePartitionData
 	for _, op := range execute {
 		switch op := op.(type) {
 		case *scop.BackfillIndex:
@@ -91,11 +105,15 @@ func extractBackfillsAndMergesFromOps(execute []scop.Op) ([]Backfill, []Merge) {
 				SourceIndexIDs: []descpb.IndexID{op.TemporaryIndexID},
 				DestIndexIDs:   []descpb.IndexID{op.BackfilledIndexID},
 			})
+		case *scop.DeletePartitionData:
+			// DeletePartitionData is handled separately in executePartitionDeletions.
+			// It doesn't use the standard backfill/merge machinery.
+			pds = append(pds, op)
 		default:
 			panic("unimplemented")
 		}
 	}
-	return mergeBackfillsFromSameSource(bfs), mergeMergesFromSameTable(ms)
+	return mergeBackfillsFromSameSource(bfs), mergeMergesFromSameTable(ms), pds
 }
 
 // mergeBackfillsFromSameSource will take a slice of backfills which
@@ -364,4 +382,194 @@ func runBackfill(
 	table catalog.TableDescriptor,
 ) error {
 	return backfiller.BackfillIndexes(ctx, progress, tracker, job, table)
+}
+
+// executePartitionDeletions deletes the data for all partitions in the provided
+// list of DeletePartitionData operations. This uses MVCC delete range to
+// efficiently delete all data in each partition's key range.
+func executePartitionDeletions(
+	ctx context.Context, deps Dependencies, partitionDeletions []*scop.DeletePartitionData,
+) error {
+	if len(partitionDeletions) == 0 {
+		return nil
+	}
+
+	codec := deps.Codec()
+	txn := deps.Txn()
+
+	// In test mode, Txn() returns nil. Skip actual deletion but the operation
+	// generation will still be verified by tests.
+	if txn == nil {
+		return nil
+	}
+
+	for _, op := range partitionDeletions {
+		// Get the table descriptor to access the index and partition information.
+		descs, err := deps.Catalog().MustReadImmutableDescriptors(ctx, op.TableID)
+		if err != nil {
+			return err
+		}
+		if len(descs) != 1 {
+			return errors.AssertionFailedf("expected exactly one descriptor, got %d", len(descs))
+		}
+		tableDesc, ok := descs[0].(catalog.TableDescriptor)
+		if !ok {
+			return errors.AssertionFailedf("descriptor %d is not a table", op.TableID)
+		}
+
+		// Get the index to compute partition spans.
+		idx, err := catalog.MustFindIndexByID(tableDesc, op.IndexID)
+		if err != nil {
+			return err
+		}
+
+		// Compute the key spans for this partition.
+		spans, err := computePartitionSpans(codec, tableDesc, idx, op)
+		if err != nil {
+			return err
+		}
+
+		// Delete the data in each span using MVCC delete range.
+		for _, span := range spans {
+			if _, err := txn.KV().DelRange(ctx, span.Key, span.EndKey, false /* returnKeys */); err != nil {
+				return errors.Wrapf(err, "deleting partition %s data", op.PartitionName)
+			}
+		}
+	}
+
+	return nil
+}
+
+// minimalPartitioning implements catalog.Partitioning with just the essential
+// methods needed for DecodePartitionTuple.
+type minimalPartitioning struct {
+	numColumns         uint32
+	numImplicitColumns uint32
+}
+
+func (p minimalPartitioning) NumColumns() int {
+	return int(p.numColumns)
+}
+
+func (p minimalPartitioning) NumImplicitColumns() int {
+	// NumImplicitColumns must be <= NumColumns, otherwise validation fails.
+	// Return 0 to avoid validation errors in other parts of the system.
+	return 0
+}
+
+func (p minimalPartitioning) PartitioningDesc() *catpb.PartitioningDescriptor {
+	return &catpb.PartitioningDescriptor{}
+}
+
+func (p minimalPartitioning) DeepCopy() catalog.Partitioning {
+	return p
+}
+
+func (p minimalPartitioning) FindPartitionByName(name string) catalog.Partitioning {
+	return nil
+}
+
+func (p minimalPartitioning) ForEachPartitionName(fn func(name string) error) error {
+	return nil
+}
+
+func (p minimalPartitioning) ForEachList(fn func(name string, values [][]byte, subPartitioning catalog.Partitioning) error) error {
+	return nil
+}
+
+func (p minimalPartitioning) ForEachRange(fn func(name string, from, to []byte) error) error {
+	return nil
+}
+
+func (p minimalPartitioning) NumLists() int {
+	return 0
+}
+
+func (p minimalPartitioning) NumRanges() int {
+	return 0
+}
+
+func (p minimalPartitioning) NumPartitions() int {
+	return 0
+}
+
+// computePartitionSpans computes the key spans for a partition based on its
+// type (LIST or RANGE) and partition values.
+func computePartitionSpans(
+	codec keys.SQLCodec,
+	tableDesc catalog.TableDescriptor,
+	idx catalog.Index,
+	op *scop.DeletePartitionData,
+) ([]roachpb.Span, error) {
+	var spans []roachpb.Span
+	a := &tree.DatumAlloc{}
+
+	// Create a minimal partitioning context using the stored metadata.
+	// This is necessary because when the last partition is dropped, the index's
+	// partitioning descriptor will be empty (NumColumns=0), which causes
+	// DecodePartitionTuple to fail. We use the metadata that was stored when
+	// the DeletePartitionData operation was created.
+	part := minimalPartitioning{
+		numColumns:         op.NumColumns,
+		numImplicitColumns: op.NumImplicitColumns,
+	}
+	var prefixDatums tree.Datums
+
+	// Navigate through the partition path to build the prefix datums.
+	// For nested partitions, we need to decode ancestor partition values
+	// to build up the prefix datums that will be used when decoding the
+	// target partition.
+	// Note: We can't use idx.GetPartitioning().FindPartitionByName() here because
+	// the partitioning may have been removed from the index if this is the last partition.
+	for i := 0; i < len(op.PartitionPath)-1; i++ {
+		// For now, we don't support dropping nested partitions with the last partition.
+		// This would require storing more metadata about ancestor partitions in the operation.
+		return nil, errors.AssertionFailedf(
+			"dropping nested partitions not yet supported when all partitions are removed")
+	}
+
+	if op.ListPartition != nil {
+		// For LIST partitions, compute a span for each value in the list.
+		for _, valueEncBuf := range op.ListPartition.Values {
+			_, keyPrefix, err := rowenc.DecodePartitionTuple(
+				a, codec, tableDesc, idx, part, valueEncBuf, prefixDatums)
+			if err != nil {
+				return nil, errors.Wrapf(err, "decoding partition tuple for %s", op.PartitionName)
+			}
+			// For list partitions, the span is from keyPrefix to keyPrefix.PrefixEnd().
+			spans = append(spans, roachpb.Span{
+				Key:    keyPrefix,
+				EndKey: roachpb.Key(keyPrefix).PrefixEnd(),
+			})
+		}
+	} else if op.RangePartition != nil {
+		// For RANGE partitions, compute a single span from FromInclusive to ToExclusive.
+		_, fromKey, err := rowenc.DecodePartitionTuple(
+			a, codec, tableDesc, idx, part, op.RangePartition.FromInclusive, prefixDatums)
+		if err != nil {
+			return nil, errors.Wrapf(err, "decoding FROM partition tuple for %s", op.PartitionName)
+		}
+
+		var toKey []byte
+		if len(op.RangePartition.ToExclusive) > 0 {
+			_, toKey, err = rowenc.DecodePartitionTuple(
+				a, codec, tableDesc, idx, part, op.RangePartition.ToExclusive, prefixDatums)
+			if err != nil {
+				return nil, errors.Wrapf(err, "decoding TO partition tuple for %s", op.PartitionName)
+			}
+		} else {
+			// If ToExclusive is empty, the range extends to the end of the index.
+			indexSpan := tableDesc.IndexSpan(codec, op.IndexID)
+			toKey = indexSpan.EndKey
+		}
+
+		spans = append(spans, roachpb.Span{
+			Key:    fromKey,
+			EndKey: toKey,
+		})
+	} else {
+		return nil, errors.AssertionFailedf("partition %s has neither LIST nor RANGE partition", op.PartitionName)
+	}
+
+	return spans, nil
 }

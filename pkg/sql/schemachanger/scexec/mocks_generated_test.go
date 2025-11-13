@@ -10,11 +10,13 @@ import (
 
 	zonepb "github.com/cockroachdb/cockroach/pkg/config/zonepb"
 	jobs "github.com/cockroachdb/cockroach/pkg/jobs"
+	keys "github.com/cockroachdb/cockroach/pkg/keys"
 	username "github.com/cockroachdb/cockroach/pkg/security/username"
 	cluster "github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	catalog "github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	catalogkeys "github.com/cockroachdb/cockroach/pkg/sql/catalog/catalogkeys"
 	descpb "github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	isql "github.com/cockroachdb/cockroach/pkg/sql/isql"
 	scexec "github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scexec"
 	scmutationexec "github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scexec/scmutationexec"
 	catid "github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
@@ -425,6 +427,20 @@ func (mr *MockDependenciesMockRecorder) ClusterSettings() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterSettings", reflect.TypeOf((*MockDependencies)(nil).ClusterSettings))
 }
 
+// Codec mocks base method.
+func (m *MockDependencies) Codec() keys.SQLCodec {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Codec")
+	ret0, _ := ret[0].(keys.SQLCodec)
+	return ret0
+}
+
+// Codec indicates an expected call of Codec.
+func (mr *MockDependenciesMockRecorder) Codec() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Codec", reflect.TypeOf((*MockDependencies)(nil).Codec))
+}
+
 // DescriptorMetadataUpdater mocks base method.
 func (m *MockDependencies) DescriptorMetadataUpdater(arg0 context.Context) scexec.DescriptorMetadataUpdater {
 	m.ctrl.T.Helper()
@@ -563,6 +579,20 @@ func (m *MockDependencies) TransactionalJobRegistry() scexec.TransactionalJobReg
 func (mr *MockDependenciesMockRecorder) TransactionalJobRegistry() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TransactionalJobRegistry", reflect.TypeOf((*MockDependencies)(nil).TransactionalJobRegistry))
+}
+
+// Txn mocks base method.
+func (m *MockDependencies) Txn() isql.Txn {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Txn")
+	ret0, _ := ret[0].(isql.Txn)
+	return ret0
+}
+
+// Txn indicates an expected call of Txn.
+func (mr *MockDependenciesMockRecorder) Txn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Txn", reflect.TypeOf((*MockDependencies)(nil).Txn))
 }
 
 // User mocks base method.

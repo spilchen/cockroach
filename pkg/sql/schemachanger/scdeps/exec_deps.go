@@ -612,6 +612,16 @@ func (d *execDeps) ClusterSettings() *cluster.Settings {
 	return d.settings
 }
 
+// Codec implements the scexec.Dependencies interface.
+func (d *execDeps) Codec() keys.SQLCodec {
+	return d.codec
+}
+
+// Txn implements the scexec.Dependencies interface.
+func (d *execDeps) Txn() isql.Txn {
+	return d.txn
+}
+
 // DescriptorMetadataUpdater implements the scexec.Dependencies interface.
 func (d *execDeps) DescriptorMetadataUpdater(ctx context.Context) scexec.DescriptorMetadataUpdater {
 	return d.metadataUpdater

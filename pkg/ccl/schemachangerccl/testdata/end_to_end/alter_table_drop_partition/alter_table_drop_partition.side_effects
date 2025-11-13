@@ -72,7 +72,6 @@ upsert descriptor #104
   +        redactedStatement: ALTER TABLE ‹defaultdb›.‹public›.‹t_range› DROP PARTITION ‹p1› WITH DATA
   +        statement: ALTER TABLE t_range DROP PARTITION p1 WITH DATA
   +        statementTag: ALTER TABLE
-  +    revertible: true
   +    targetRanks: <redacted>
   +    targets: <redacted>
      families:
@@ -93,7 +92,7 @@ upsert descriptor #104
   -  version: "1"
   +  version: "2"
 persist all catalog changes to storage
-create job #1 (non-cancelable: false): "ALTER TABLE defaultdb.public.t_range DROP PARTITION p1 WITH DATA"
+create job #1 (non-cancelable: true): "ALTER TABLE defaultdb.public.t_range DROP PARTITION p1 WITH DATA"
   descriptor IDs: [104]
 # end PreCommitPhase
 commit transaction #1
@@ -102,7 +101,10 @@ notified job registry to adopt jobs: [1]
 begin transaction #2
 commit transaction #2
 begin transaction #3
-## PostCommitPhase stage 1 of 1 with 3 MutationType ops
+## PostCommitNonRevertiblePhase stage 1 of 2 with 1 BackfillType op
+commit transaction #3
+begin transaction #4
+## PostCommitNonRevertiblePhase stage 2 of 2 with 3 MutationType ops
 upsert descriptor #104
   ...
      createAsOfTime:
@@ -131,7 +133,6 @@ upsert descriptor #104
   -        redactedStatement: ALTER TABLE ‹defaultdb›.‹public›.‹t_range› DROP PARTITION ‹p1› WITH DATA
   -        statement: ALTER TABLE t_range DROP PARTITION p1 WITH DATA
   -        statementTag: ALTER TABLE
-  -    revertible: true
   -    targetRanks: <redacted>
   -    targets: <redacted>
      families:
@@ -150,5 +151,5 @@ updated schema change job #1 descriptor IDs to []
 write *eventpb.FinishSchemaChange to event log:
   sc:
     descriptorId: 104
-commit transaction #3
+commit transaction #4
 # end PostCommitPhase
