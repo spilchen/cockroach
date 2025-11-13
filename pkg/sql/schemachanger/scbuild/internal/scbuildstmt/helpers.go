@@ -116,6 +116,13 @@ func undroppedElements(b BuildCtx, id catid.DescID) ElementResultSet {
 			// away anyway and so it doesn't need to have a target set for this DROP.
 			return false
 		}
+		// Skip IndexPartitionEntry elements when dropping a table.
+		// The partition data will be deleted as part of the table's IndexData/TableData deletion,
+		// and removing individual partitions can break validation for multiregion tables
+		// which expect all region partitions to exist until the table is fully dropped.
+		if _, ok := e.(*scpb.IndexPartitionEntry); ok {
+			return false
+		}
 		// Otherwise, return true to signal the removal of the element.
 		return true
 	})

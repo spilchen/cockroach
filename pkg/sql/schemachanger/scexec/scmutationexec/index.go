@@ -393,7 +393,10 @@ func (i *immediateVisitor) RemoveIndexPartitionEntry(
 // addPartitionToDescriptor recursively navigates the partition tree and adds
 // the partition at the specified path.
 func addPartitionToDescriptor(
-	partitioning *catpb.PartitioningDescriptor, entry *scpb.IndexPartitionEntry, partitionPath []string, depth int,
+	partitioning *catpb.PartitioningDescriptor,
+	entry *scpb.IndexPartitionEntry,
+	partitionPath []string,
+	depth int,
 ) error {
 	if depth >= len(partitionPath) {
 		return errors.AssertionFailedf("depth exceeds partition path length")

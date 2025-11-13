@@ -14,6 +14,19 @@ CREATE TABLE t_range (
     PARTITION p3 VALUES FROM (20) TO (30)
 )
 
+# Insert data into all partitions
+statement ok
+INSERT INTO t_range VALUES (5, 1), (5, 2), (15, 1), (25, 1)
+
+# Verify data exists in all partitions
+query II rowsort
+SELECT * FROM t_range
+----
+5   1
+5   2
+15  1
+25  1
+
 # Verify partitions exist
 query T
 SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_range] ORDER BY partition_name
@@ -22,14 +35,23 @@ p1
 p2
 p3
 
+# Drop partition p1 with data
 statement ok
 ALTER TABLE t_range DROP PARTITION p1 WITH DATA
 
+# Verify partition p1 is removed
 query T
 SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_range] ORDER BY partition_name
 ----
 p2
 p3
+
+# Verify data in partition p1 (a=5) is deleted, but data in p2 and p3 remains
+query II rowsort
+SELECT * FROM t_range
+----
+15  1
+25  1
 
 # Test DROP PARTITION WITH DATA on list partitioned table
 statement ok
@@ -43,6 +65,20 @@ CREATE TABLE t_list (
     PARTITION p3 VALUES IN (7, 8, 9)
 )
 
+# Insert data into all partitions
+statement ok
+INSERT INTO t_list VALUES (1, 1), (2, 1), (5, 1), (7, 1), (8, 1)
+
+# Verify data exists in all partitions
+query II rowsort
+SELECT * FROM t_list
+----
+1  1
+2  1
+5  1
+7  1
+8  1
+
 # Verify partitions exist
 query T
 SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_list] ORDER BY partition_name
@@ -51,25 +87,49 @@ p1
 p2
 p3
 
+# Drop partition p1 with data
 statement ok
 ALTER TABLE t_list DROP PARTITION p1 WITH DATA
 
+# Verify partition p1 is removed
 query T
 SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_list] ORDER BY partition_name
 ----
 p2
 p3
 
+# Verify data in partition p1 (a IN (1,2,3)) is deleted, but data in p2 and p3 remains
+query II rowsort
+SELECT * FROM t_list
+----
+5  1
+7  1
+8  1
+
 # Test error case: dropping non-existent partition
 statement error pgcode 42704 partition "nonexistent" of relation "t_list" does not exist
 ALTER TABLE t_list DROP PARTITION nonexistent WITH DATA
 
-# Test multiple DROP PARTITION in one statement
+# Test multiple DROP PARTITION in one statement - verify data deletion
+# First, verify current data
+query II rowsort
+SELECT * FROM t_list
+----
+5  1
+7  1
+8  1
+
 statement ok
 ALTER TABLE t_list DROP PARTITION p2 WITH DATA, DROP PARTITION p3 WITH DATA
 
+# Verify all partitions are removed
 query T
 SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_list] ORDER BY partition_name
+----
+
+# Verify all data in p2 and p3 is deleted (table should be empty)
+query II
+SELECT * FROM t_list
 ----
 
 # Clean up
@@ -140,14 +200,23 @@ ALTER TABLE t_test_drop DROP PARTITION nonexistent WITH DATA
 statement ok
 ALTER TABLE t_test_drop DROP PARTITION IF EXISTS nonexistent WITH DATA
 
-# Test 4: Verify partition exists before dropping.
+# Test 4: Verify partition exists before dropping and insert test data.
+statement ok
+INSERT INTO t_test_drop VALUES (5, 1), (15, 1)
+
+query II rowsort
+SELECT * FROM t_test_drop
+----
+5   1
+15  1
+
 query T
 SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_test_drop] ORDER BY partition_name
 ----
 p1
 p2
 
-# Test 5: Successfully drop an existing partition.
+# Test 5: Successfully drop an existing partition with data.
 statement ok
 ALTER TABLE t_test_drop DROP PARTITION p1 WITH DATA
 
@@ -157,7 +226,13 @@ SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_test_drop] ORDER BY par
 ----
 p2
 
-# Test 6: Test with LIST partition.
+# Verify data in p1 (a=5) is deleted, but data in p2 (a=15) remains.
+query II
+SELECT * FROM t_test_drop
+----
+15  1
+
+# Test 6: Test with LIST partition and data deletion.
 statement ok
 CREATE TABLE t_list_drop (
     a INT,
@@ -169,6 +244,17 @@ CREATE TABLE t_list_drop (
     PARTITION p3 VALUES IN (7, 8, 9)
 )
 
+# Insert test data
+statement ok
+INSERT INTO t_list_drop VALUES (1, 1), (5, 1), (7, 1)
+
+query II rowsort
+SELECT * FROM t_list_drop
+----
+1  1
+5  1
+7  1
+
 query T
 SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_list_drop] ORDER BY partition_name
 ----
@@ -176,7 +262,7 @@ p1
 p2
 p3
 
-# Successfully drop LIST partition.
+# Successfully drop LIST partition with data.
 statement ok
 ALTER TABLE t_list_drop DROP PARTITION p2 WITH DATA
 
@@ -186,6 +272,13 @@ SELECT partition_name FROM [SHOW PARTITIONS FROM TABLE t_list_drop] ORDER BY par
 ----
 p1
 p3
+
+# Verify data in p2 (a=5) is deleted, but data in p1 and p3 remains.
+query II rowsort
+SELECT * FROM t_list_drop
+----
+1  1
+7  1
 
 # Clean up test tables.
 statement ok

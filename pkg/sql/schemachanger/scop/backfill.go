@@ -48,10 +48,10 @@ func (MergeIndex) Description() redact.RedactableString {
 // This is a non-revertible operation that runs in the PostCommitNonRevertiblePhase.
 type DeletePartitionData struct {
 	backfillOp
-	TableID           descpb.ID
-	IndexID           descpb.IndexID
-	PartitionName     string
-	NumColumns        uint32 // Number of columns used in partitioning at this level
+	TableID            descpb.ID
+	IndexID            descpb.IndexID
+	PartitionName      string
+	NumColumns         uint32 // Number of columns used in partitioning at this level
 	NumImplicitColumns uint32 // Number of columns that implicitly prefix the index
 	// PartitionPath represents the hierarchical path to this partition.
 	PartitionPath []string

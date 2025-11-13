@@ -404,8 +404,8 @@ func (w *walkCtx) walkRelation(tbl catalog.TableDescriptor) {
 		}
 		if partitionTTL := tbl.GetPartitionTTL(); partitionTTL != nil {
 			w.ev(scpb.Status_PUBLIC, &scpb.PartitionTTL{
-				TableID:              tbl.GetID(),
-				PartitionTTLConfig:   *partitionTTL,
+				TableID:            tbl.GetID(),
+				PartitionTTLConfig: *partitionTTL,
 			})
 		}
 	}
@@ -780,19 +780,16 @@ func (w *walkCtx) walkIndex(tbl catalog.TableDescriptor, idx catalog.Index) {
 // walkPartitioning recursively walks a partitioning descriptor and creates
 // IndexPartitionEntry elements for each partition.
 func (w *walkCtx) walkPartitioning(
-	tableID catid.DescID,
-	indexID catid.IndexID,
-	p *catpb.PartitioningDescriptor,
-	parentPath []string,
+	tableID catid.DescID, indexID catid.IndexID, p *catpb.PartitioningDescriptor, parentPath []string,
 ) {
 	// Process list partitions.
 	for _, listPartition := range p.List {
 		partitionPath := append(append([]string(nil), parentPath...), listPartition.Name)
 		w.ev(scpb.Status_PUBLIC, &scpb.IndexPartitionEntry{
-			TableID:           tableID,
-			IndexID:           indexID,
-			PartitionPath:     partitionPath,
-			NumColumns:        p.NumColumns,
+			TableID:            tableID,
+			IndexID:            indexID,
+			PartitionPath:      partitionPath,
+			NumColumns:         p.NumColumns,
 			NumImplicitColumns: p.NumImplicitColumns,
 			Partition: &scpb.IndexPartitionEntry_ListPartition{
 				ListPartition: &listPartition,
@@ -808,10 +805,10 @@ func (w *walkCtx) walkPartitioning(
 	for _, rangePartition := range p.Range {
 		partitionPath := append(append([]string(nil), parentPath...), rangePartition.Name)
 		w.ev(scpb.Status_PUBLIC, &scpb.IndexPartitionEntry{
-			TableID:           tableID,
-			IndexID:           indexID,
-			PartitionPath:     partitionPath,
-			NumColumns:        p.NumColumns,
+			TableID:            tableID,
+			IndexID:            indexID,
+			PartitionPath:      partitionPath,
+			NumColumns:         p.NumColumns,
 			NumImplicitColumns: p.NumImplicitColumns,
 			Partition: &scpb.IndexPartitionEntry_RangePartition{
 				RangePartition: &rangePartition,

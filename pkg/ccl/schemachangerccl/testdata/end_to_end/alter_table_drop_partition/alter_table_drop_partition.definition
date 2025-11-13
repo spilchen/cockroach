@@ -16,18 +16,18 @@ CREATE TABLE t_range (
 INSERT INTO t_range VALUES (5, 1), (15, 1), (25, 1);
 ----
 
-# DML operations during PostCommitPhase:
+# DML operations during PostCommitNonRevertiblePhase Stage 1:
 # Insert into non-dropped partitions (p2, p3) and dropped partition range (p1).
 # All inserts succeed because CRDB doesn't enforce range boundaries on INSERT.
 # In PostgreSQL with true range partitioning, inserts into p1's range would fail.
-stage-exec phase=PostCommitPhase stage=:
+stage-exec phase=PostCommitNonRevertiblePhase stage=1
 INSERT INTO t_range VALUES (17, 3);
 INSERT INTO t_range VALUES (27, 3);
 INSERT INTO t_range VALUES (7, 3);
 ----
 
-# Verify inserts succeeded during PostCommitPhase
-stage-query phase=PostCommitPhase stage=:
+# Verify inserts succeeded during PostCommitNonRevertiblePhase Stage 1
+stage-query phase=PostCommitNonRevertiblePhase stage=1
 SELECT count(*) FROM t_range WHERE b = 3;
 ----
 3

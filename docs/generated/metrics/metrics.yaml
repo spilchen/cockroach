@@ -5648,6 +5648,204 @@ layers:
       unit: COUNT
       aggregation: AVG
       derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_cleanup.currently_idle
+      exported_name: jobs_partition_ttl_cleanup_currently_idle
+      labeled_name: 'jobs{type: partition_ttl_cleanup, status: currently_idle}'
+      description: Number of partition_ttl_cleanup jobs currently considered Idle and can be freely shut down
+      y_axis_label: jobs
+      type: GAUGE
+      unit: COUNT
+      aggregation: AVG
+      derivative: NONE
+    - name: jobs.partition_ttl_cleanup.currently_paused
+      exported_name: jobs_partition_ttl_cleanup_currently_paused
+      labeled_name: 'jobs{name: partition_ttl_cleanup, status: currently_paused}'
+      description: Number of partition_ttl_cleanup jobs currently considered Paused
+      y_axis_label: jobs
+      type: GAUGE
+      unit: COUNT
+      aggregation: AVG
+      derivative: NONE
+    - name: jobs.partition_ttl_cleanup.currently_running
+      exported_name: jobs_partition_ttl_cleanup_currently_running
+      labeled_name: 'jobs{type: partition_ttl_cleanup, status: currently_running}'
+      description: Number of partition_ttl_cleanup jobs currently running in Resume or OnFailOrCancel state
+      y_axis_label: jobs
+      type: GAUGE
+      unit: COUNT
+      aggregation: AVG
+      derivative: NONE
+    - name: jobs.partition_ttl_cleanup.expired_pts_records
+      exported_name: jobs_partition_ttl_cleanup_expired_pts_records
+      labeled_name: 'jobs.expired_pts_records{type: partition_ttl_cleanup}'
+      description: Number of expired protected timestamp records owned by partition_ttl_cleanup jobs
+      y_axis_label: records
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_cleanup.fail_or_cancel_completed
+      exported_name: jobs_partition_ttl_cleanup_fail_or_cancel_completed
+      labeled_name: 'jobs.fail_or_cancel{name: partition_ttl_cleanup, status: completed}'
+      description: Number of partition_ttl_cleanup jobs which successfully completed their failure or cancelation process
+      y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_cleanup.fail_or_cancel_retry_error
+      exported_name: jobs_partition_ttl_cleanup_fail_or_cancel_retry_error
+      labeled_name: 'jobs.fail_or_cancel{name: partition_ttl_cleanup, status: retry_error}'
+      description: Number of partition_ttl_cleanup jobs which failed with a retriable error on their failure or cancelation process
+      y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_cleanup.protected_age_sec
+      exported_name: jobs_partition_ttl_cleanup_protected_age_sec
+      labeled_name: 'jobs.protected_age_sec{type: partition_ttl_cleanup}'
+      description: The age of the oldest PTS record protected by partition_ttl_cleanup jobs
+      y_axis_label: seconds
+      type: GAUGE
+      unit: SECONDS
+      aggregation: AVG
+      derivative: NONE
+    - name: jobs.partition_ttl_cleanup.protected_record_count
+      exported_name: jobs_partition_ttl_cleanup_protected_record_count
+      labeled_name: 'jobs.protected_record_count{type: partition_ttl_cleanup}'
+      description: Number of protected timestamp records held by partition_ttl_cleanup jobs
+      y_axis_label: records
+      type: GAUGE
+      unit: COUNT
+      aggregation: AVG
+      derivative: NONE
+    - name: jobs.partition_ttl_cleanup.resume_completed
+      exported_name: jobs_partition_ttl_cleanup_resume_completed
+      labeled_name: 'jobs.resume{name: partition_ttl_cleanup, status: completed}'
+      description: Number of partition_ttl_cleanup jobs which successfully resumed to completion
+      y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_cleanup.resume_failed
+      exported_name: jobs_partition_ttl_cleanup_resume_failed
+      labeled_name: 'jobs.resume{name: partition_ttl_cleanup, status: failed}'
+      description: Number of partition_ttl_cleanup jobs which failed with a non-retriable error
+      y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_cleanup.resume_retry_error
+      exported_name: jobs_partition_ttl_cleanup_resume_retry_error
+      labeled_name: 'jobs.resume{name: partition_ttl_cleanup, status: retry_error}'
+      description: Number of partition_ttl_cleanup jobs which failed with a retriable error
+      y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_scheduler.currently_idle
+      exported_name: jobs_partition_ttl_scheduler_currently_idle
+      labeled_name: 'jobs{type: partition_ttl_scheduler, status: currently_idle}'
+      description: Number of partition_ttl_scheduler jobs currently considered Idle and can be freely shut down
+      y_axis_label: jobs
+      type: GAUGE
+      unit: COUNT
+      aggregation: AVG
+      derivative: NONE
+    - name: jobs.partition_ttl_scheduler.currently_paused
+      exported_name: jobs_partition_ttl_scheduler_currently_paused
+      labeled_name: 'jobs{name: partition_ttl_scheduler, status: currently_paused}'
+      description: Number of partition_ttl_scheduler jobs currently considered Paused
+      y_axis_label: jobs
+      type: GAUGE
+      unit: COUNT
+      aggregation: AVG
+      derivative: NONE
+    - name: jobs.partition_ttl_scheduler.currently_running
+      exported_name: jobs_partition_ttl_scheduler_currently_running
+      labeled_name: 'jobs{type: partition_ttl_scheduler, status: currently_running}'
+      description: Number of partition_ttl_scheduler jobs currently running in Resume or OnFailOrCancel state
+      y_axis_label: jobs
+      type: GAUGE
+      unit: COUNT
+      aggregation: AVG
+      derivative: NONE
+    - name: jobs.partition_ttl_scheduler.expired_pts_records
+      exported_name: jobs_partition_ttl_scheduler_expired_pts_records
+      labeled_name: 'jobs.expired_pts_records{type: partition_ttl_scheduler}'
+      description: Number of expired protected timestamp records owned by partition_ttl_scheduler jobs
+      y_axis_label: records
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_scheduler.fail_or_cancel_completed
+      exported_name: jobs_partition_ttl_scheduler_fail_or_cancel_completed
+      labeled_name: 'jobs.fail_or_cancel{name: partition_ttl_scheduler, status: completed}'
+      description: Number of partition_ttl_scheduler jobs which successfully completed their failure or cancelation process
+      y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_scheduler.fail_or_cancel_retry_error
+      exported_name: jobs_partition_ttl_scheduler_fail_or_cancel_retry_error
+      labeled_name: 'jobs.fail_or_cancel{name: partition_ttl_scheduler, status: retry_error}'
+      description: Number of partition_ttl_scheduler jobs which failed with a retriable error on their failure or cancelation process
+      y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_scheduler.protected_age_sec
+      exported_name: jobs_partition_ttl_scheduler_protected_age_sec
+      labeled_name: 'jobs.protected_age_sec{type: partition_ttl_scheduler}'
+      description: The age of the oldest PTS record protected by partition_ttl_scheduler jobs
+      y_axis_label: seconds
+      type: GAUGE
+      unit: SECONDS
+      aggregation: AVG
+      derivative: NONE
+    - name: jobs.partition_ttl_scheduler.protected_record_count
+      exported_name: jobs_partition_ttl_scheduler_protected_record_count
+      labeled_name: 'jobs.protected_record_count{type: partition_ttl_scheduler}'
+      description: Number of protected timestamp records held by partition_ttl_scheduler jobs
+      y_axis_label: records
+      type: GAUGE
+      unit: COUNT
+      aggregation: AVG
+      derivative: NONE
+    - name: jobs.partition_ttl_scheduler.resume_completed
+      exported_name: jobs_partition_ttl_scheduler_resume_completed
+      labeled_name: 'jobs.resume{name: partition_ttl_scheduler, status: completed}'
+      description: Number of partition_ttl_scheduler jobs which successfully resumed to completion
+      y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_scheduler.resume_failed
+      exported_name: jobs_partition_ttl_scheduler_resume_failed
+      labeled_name: 'jobs.resume{name: partition_ttl_scheduler, status: failed}'
+      description: Number of partition_ttl_scheduler jobs which failed with a non-retriable error
+      y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
+    - name: jobs.partition_ttl_scheduler.resume_retry_error
+      exported_name: jobs_partition_ttl_scheduler_resume_retry_error
+      labeled_name: 'jobs.resume{name: partition_ttl_scheduler, status: retry_error}'
+      description: Number of partition_ttl_scheduler jobs which failed with a retriable error
+      y_axis_label: jobs
+      type: COUNTER
+      unit: COUNT
+      aggregation: AVG
+      derivative: NON_NEGATIVE_DERIVATIVE
     - name: jobs.poll_jobs_stats.currently_idle
       exported_name: jobs_poll_jobs_stats_currently_idle
       labeled_name: 'jobs{type: poll_jobs_stats, status: currently_idle}'

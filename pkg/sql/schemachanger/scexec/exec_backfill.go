@@ -87,7 +87,9 @@ func getTableDescriptorsForBackfillsAndMerges(
 	return tables, nil
 }
 
-func extractBackfillsAndMergesFromOps(execute []scop.Op) ([]Backfill, []Merge, []*scop.DeletePartitionData) {
+func extractBackfillsAndMergesFromOps(
+	execute []scop.Op,
+) ([]Backfill, []Merge, []*scop.DeletePartitionData) {
 	var bfs []Backfill
 	var ms []Merge
 	var pds []*scop.DeletePartitionData
@@ -473,7 +475,9 @@ func (p minimalPartitioning) ForEachPartitionName(fn func(name string) error) er
 	return nil
 }
 
-func (p minimalPartitioning) ForEachList(fn func(name string, values [][]byte, subPartitioning catalog.Partitioning) error) error {
+func (p minimalPartitioning) ForEachList(
+	fn func(name string, values [][]byte, subPartitioning catalog.Partitioning) error,
+) error {
 	return nil
 }
 
