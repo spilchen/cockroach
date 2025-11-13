@@ -1,4 +1,4 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "ttlpartition",
@@ -10,6 +10,23 @@ go_library(
         "//pkg/jobs/jobspb",
         "//pkg/settings/cluster",
         "//pkg/sql",
+        "//pkg/sql/catalog",
+        "//pkg/sql/catalog/catpb",
+        "//pkg/sql/catalog/descs",
+        "//pkg/sql/sem/tree",
+        "//pkg/util/duration",
         "//pkg/util/log",
+        "//pkg/util/timeutil",
+        "@com_github_cockroachdb_errors//:errors",
+    ],
+)
+
+go_test(
+    name = "ttlpartition_test",
+    srcs = ["partition_maintenance_job_test.go"],
+    embed = [":ttlpartition"],
+    deps = [
+        "//pkg/sql/catalog/catpb",
+        "@com_github_stretchr_testify//require",
     ],
 )
