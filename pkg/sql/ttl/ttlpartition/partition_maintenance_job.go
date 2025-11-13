@@ -18,7 +18,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
+	"github.com/cockroachdb/cockroach/pkg/sql/lexbase"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/util/duration"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -109,13 +111,16 @@ func (r *partitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx int
 	log.Dev.Infof(ctx, "partition changes: %d to drop, %d to create",
 		len(toDrop), len(toCreate))
 
-	// TODO: Steps 5-8 will be implemented in the next iteration:
-	// 5. Execute partition drops
+	// Step 5: Execute partition drops.
+	if err := r.executePartitionDrops(ctx, db, details.TableID, toDrop); err != nil {
+		return errors.Wrap(err, "failed to drop expired partitions")
+	}
+
+	// TODO: Steps 6-8 will be implemented in the next iteration:
 	// 6. Execute partition creates
 	// 7. Trigger hybrid cleanup for dropped partitions
 	// 8. Update job progress
 
-	_ = toDrop
 	_ = toCreate
 
 	log.Dev.Infof(ctx, "partition TTL maintenance job completed for table %d", details.TableID)
@@ -289,6 +294,69 @@ func truncateToGranularity(t time.Time, granularity duration.Duration) time.Time
 // Format: p20250113 for 2025-01-13.
 func formatPartitionName(t time.Time) string {
 	return fmt.Sprintf("p%04d%02d%02d", t.Year(), t.Month(), t.Day())
+}
+
+// buildDropPartitionStatement constructs an ALTER TABLE DROP PARTITION statement.
+// Returns the SQL statement as a string.
+func buildDropPartitionStatement(tableName *tree.TableName, partitionName string) string {
+	escapedPartitionName := lexbase.EscapeSQLIdent(partitionName)
+	return fmt.Sprintf(
+		"ALTER TABLE %s DROP PARTITION IF EXISTS %s WITH DATA",
+		tableName.FQString(),
+		escapedPartitionName,
+	)
+}
+
+// executePartitionDrops executes ALTER TABLE DROP PARTITION statements for the specified partitions.
+func (r *partitionTTLMaintenanceResumer) executePartitionDrops(
+	ctx context.Context, db *sql.InternalDB, tableID catid.DescID, toDrop []partitionSpec,
+) error {
+	if len(toDrop) == 0 {
+		return nil
+	}
+
+	return db.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
+		// Get the table descriptor to construct the fully qualified table name.
+		tableDesc, err := txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, tableID)
+		if err != nil {
+			return err
+		}
+
+		// Get database descriptor.
+		dbDesc, err := txn.Descriptors().ByIDWithoutLeased(txn.KV()).Get().Database(ctx, tableDesc.GetParentID())
+		if err != nil {
+			return err
+		}
+
+		// Get schema descriptor.
+		schemaDesc, err := txn.Descriptors().ByIDWithoutLeased(txn.KV()).Get().Schema(ctx, tableDesc.GetParentSchemaID())
+		if err != nil {
+			return err
+		}
+
+		// Construct fully qualified table name.
+		tableName := tree.NewTableNameWithSchema(
+			tree.Name(dbDesc.GetName()),
+			tree.Name(schemaDesc.GetName()),
+			tree.Name(tableDesc.GetName()))
+
+		// Drop each partition.
+		for _, partition := range toDrop {
+			alterStmt := buildDropPartitionStatement(tableName, partition.name)
+
+			log.Dev.Infof(ctx, "dropping partition %s on table %s (upper bound: %s)",
+				partition.name, tableName.FQString(), partition.upperBound.Format(time.RFC3339))
+
+			// Execute the DROP PARTITION statement.
+			if _, err := txn.Exec(ctx, "drop-partition-ttl", txn.KV(), alterStmt); err != nil {
+				return errors.Wrapf(err, "failed to drop partition %q", partition.name)
+			}
+
+			log.Dev.Infof(ctx, "successfully dropped partition %s", partition.name)
+		}
+
+		return nil
+	})
 }
 
 func init() {

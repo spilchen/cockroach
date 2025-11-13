@@ -203,3 +203,45 @@ func TestFormatPartitionName(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildDropPartitionStatement tests the buildDropPartitionStatement helper function.
+func TestBuildDropPartitionStatement(t *testing.T) {
+	testCases := []struct {
+		name          string
+		tableName     *tree.TableName
+		partitionName string
+		expected      string
+	}{
+		{
+			name:          "simple table and partition",
+			tableName:     tree.NewTableNameWithSchema("mydb", "public", "events"),
+			partitionName: "p20250115",
+			expected:      `ALTER TABLE mydb.public.events DROP PARTITION IF EXISTS "p20250115" WITH DATA`,
+		},
+		{
+			name:          "partition name with special characters",
+			tableName:     tree.NewTableNameWithSchema("db", "schema", "tbl"),
+			partitionName: "p-2025-01",
+			expected:      `ALTER TABLE db.schema.tbl DROP PARTITION IF EXISTS "p-2025-01" WITH DATA`,
+		},
+		{
+			name:          "partition name requiring escaping",
+			tableName:     tree.NewTableNameWithSchema("testdb", "public", "metrics"),
+			partitionName: "partition with spaces",
+			expected:      `ALTER TABLE testdb.public.metrics DROP PARTITION IF EXISTS "partition with spaces" WITH DATA`,
+		},
+		{
+			name:          "table name with reserved keywords",
+			tableName:     tree.NewTableNameWithSchema("select", "from", "where"),
+			partitionName: "p20241231",
+			expected:      `ALTER TABLE "select"."from"."where" DROP PARTITION IF EXISTS "p20241231" WITH DATA`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := buildDropPartitionStatement(tc.tableName, tc.partitionName)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}
