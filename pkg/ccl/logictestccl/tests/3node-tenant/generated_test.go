@@ -1443,6 +1443,13 @@ func TestTenantLogic_partition_ttl(
 	runLogicTest(t, "partition_ttl")
 }
 
+func TestTenantLogic_partitioning(
+	t *testing.T,
+) {
+	defer leaktest.AfterTest(t)()
+	runLogicTest(t, "partitioning")
+}
+
 func TestTenantLogic_pg_builtins(
 	t *testing.T,
 ) {

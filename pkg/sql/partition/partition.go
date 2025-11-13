@@ -3,16 +3,14 @@
 // Use of this software is governed by the CockroachDB Software License
 // included in the /LICENSE file.
 
-package partitionccl
+package partition
 
 import (
 	"context"
 	"strings"
 
-	"github.com/cockroachdb/cockroach/pkg/ccl/utilccl"
 	"github.com/cockroachdb/cockroach/pkg/config/zonepb"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
-	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
@@ -322,9 +320,9 @@ func findColumnByNameOnTable(
 	return nil, colinfo.NewUndefinedColumnError(string(col))
 }
 
-// createPartitioning constructs the partitioning descriptor for an index that
+// CreatePartitioning constructs the partitioning descriptor for an index that
 // is partitioned into ranges, each addressable by zone configs.
-func createPartitioning(
+func CreatePartitioning(
 	ctx context.Context,
 	st *cluster.Settings,
 	evalCtx *eval.Context,
@@ -335,10 +333,6 @@ func createPartitioning(
 	allowedNewColumnNames []tree.Name,
 	allowImplicitPartitioning bool,
 ) (newImplicitCols []catalog.Column, newPartitioning catpb.PartitioningDescriptor, err error) {
-	if err := utilccl.CheckEnterpriseEnabled(st, "partitions"); err != nil {
-		return nil, newPartitioning, err
-	}
-
 	// Truncate existing implicitly partitioned column names.
 	newIdxColumnNames := oldKeyColumnNames[oldNumImplicitColumns:]
 
@@ -398,6 +392,6 @@ func createPartitioning(
 }
 
 func init() {
-	sql.CreatePartitioningCCL = createPartitioning
-	scdeps.CreatePartitioningCCL = createPartitioning
+	// Set the schema changer hook to use our partitioning implementation.
+	scdeps.CreatePartitioningCCL = CreatePartitioning
 }

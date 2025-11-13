@@ -23,7 +23,7 @@ import (
 	_ "github.com/cockroachdb/cockroach/pkg/ccl/multiregionccl"
 	_ "github.com/cockroachdb/cockroach/pkg/ccl/multitenantccl"
 	_ "github.com/cockroachdb/cockroach/pkg/ccl/oidcccl"
-	_ "github.com/cockroachdb/cockroach/pkg/ccl/partitionccl"
+	_ "github.com/cockroachdb/cockroach/pkg/sql/partition"
 	_ "github.com/cockroachdb/cockroach/pkg/ccl/pgcryptoccl"
 	_ "github.com/cockroachdb/cockroach/pkg/ccl/securityccl/fipsccl"
 	_ "github.com/cockroachdb/cockroach/pkg/ccl/storageccl"

@@ -37,6 +37,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/typedesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/paramparse"
 	"github.com/cockroachdb/cockroach/pkg/sql/parser"
+	"github.com/cockroachdb/cockroach/pkg/sql/partition"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgnotice"
@@ -1175,7 +1176,7 @@ func CreatePartitioning(
 		// set the partitioning to nothing.
 		return nil, newPartitioning, nil
 	}
-	return CreatePartitioningCCL(
+	return partition.CreatePartitioning(
 		ctx,
 		st,
 		evalCtx,
@@ -1188,23 +1189,6 @@ func CreatePartitioning(
 		allowedNewColumnNames,
 		allowImplicitPartitioning,
 	)
-}
-
-// CreatePartitioningCCL is the public hook point for the CCL-licensed
-// partitioning creation code.
-var CreatePartitioningCCL = func(
-	ctx context.Context,
-	st *cluster.Settings,
-	evalCtx *eval.Context,
-	columnLookupFn func(tree.Name) (catalog.Column, error),
-	oldNumImplicitColumns int,
-	oldKeyColumnNames []string,
-	partBy *tree.PartitionBy,
-	allowedNewColumnNames []tree.Name,
-	allowImplicitPartitioning bool,
-) (newImplicitCols []catalog.Column, newPartitioning catpb.PartitioningDescriptor, err error) {
-	return nil, catpb.PartitioningDescriptor{}, sqlerrors.NewCCLRequiredError(errors.New(
-		"creating or manipulating partitions requires a CCL binary"))
 }
 
 func getFinalSourceQuery(

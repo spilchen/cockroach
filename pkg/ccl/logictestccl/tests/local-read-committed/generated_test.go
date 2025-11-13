@@ -1455,6 +1455,13 @@ func TestReadCommittedLogic_partition_ttl(
 	runLogicTest(t, "partition_ttl")
 }
 
+func TestReadCommittedLogic_partitioning(
+	t *testing.T,
+) {
+	defer leaktest.AfterTest(t)()
+	runLogicTest(t, "partitioning")
+}
+
 func TestReadCommittedLogic_pg_builtins(
 	t *testing.T,
 ) {

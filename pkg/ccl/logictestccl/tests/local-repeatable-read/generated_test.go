@@ -1414,6 +1414,13 @@ func TestRepeatableReadLogic_partition_ttl(
 	runLogicTest(t, "partition_ttl")
 }
 
+func TestRepeatableReadLogic_partitioning(
+	t *testing.T,
+) {
+	defer leaktest.AfterTest(t)()
+	runLogicTest(t, "partitioning")
+}
+
 func TestRepeatableReadLogic_pg_builtins(
 	t *testing.T,
 ) {
