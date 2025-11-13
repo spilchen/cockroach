@@ -729,14 +729,6 @@ func (t *ttlProcessor) runTTLOnQueryBounds(
 	ttlSpec := t.ttlSpec
 	details := ttlSpec.RowLevelTTLDetails
 
-	// TODO(SPILLY): Hybrid cleaner mode deletion
-	// if details.HybridCleanerMode {
-	//   - Skip SELECT phase entirely (no expiration check needed)
-	//   - Directly delete all rows in the secondary index span within partition bounds
-	//   - Use deleteBuilder.Run() with all keys in the span, not selected PKs
-	//   - Return early after deletion completes
-	// }
-
 	flowCtx := t.FlowCtx
 	serverCfg := flowCtx.Cfg
 	ie := serverCfg.DB.Executor()

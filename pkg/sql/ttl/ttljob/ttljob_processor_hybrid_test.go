@@ -7,6 +7,7 @@ package ttljob
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -214,11 +215,147 @@ func TestHybridCleanerMultipleIndexes(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	// TODO(SPILLY): Test that:
-	// 1. Multiple secondary indexes are processed sequentially
-	// 2. Each index gets its own delete operations
-	// 3. Progress is tracked per index
-	// 4. Failure in one index doesn't affect others
+	ctx := context.Background()
+	srv, sqlDB, _ := serverutils.StartServer(t, base.TestServerArgs{})
+	defer srv.Stopper().Stop(ctx)
+
+	s := srv.ApplicationLayer()
+	execCfg := s.ExecutorConfig().(sql.ExecutorConfig)
+
+	// Create a test table with partition TTL and multiple secondary indexes.
+	runner := sqlutils.MakeSQLRunner(sqlDB)
+	runner.Exec(t, "CREATE DATABASE testdb")
+	runner.Exec(t, "CREATE SCHEMA testdb.testschema")
+	runner.Exec(t, `CREATE TABLE testdb.testschema.multi_index_table (
+		ts TIMESTAMPTZ NOT NULL,
+		user_id INT NOT NULL,
+		data STRING,
+		category STRING,
+		PRIMARY KEY (ts, user_id)
+	) PARTITION BY RANGE (ts) (
+		PARTITION p1 VALUES FROM (MINVALUE) TO (MAXVALUE)
+	) WITH (
+		ttl_mode = 'partition',
+		ttl_column = 'ts',
+		ttl_retention = '30d',
+		ttl_granularity = '1d',
+		ttl_lookahead = '2d'
+	)`)
+
+	// Create multiple secondary indexes.
+	runner.Exec(t, "CREATE INDEX idx_data ON testdb.testschema.multi_index_table(data)")
+	runner.Exec(t, "CREATE INDEX idx_category ON testdb.testschema.multi_index_table(category)")
+	runner.Exec(t, "CREATE INDEX idx_user ON testdb.testschema.multi_index_table(user_id)")
+
+	// Insert test data within the partition bounds that will be deleted.
+	partitionStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	partitionEnd := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	// Insert rows that fall within the partition time bounds.
+	for i := 0; i < 10; i++ {
+		ts := partitionStart.Add(time.Duration(i) * time.Hour)
+		runner.Exec(t, "INSERT INTO testdb.testschema.multi_index_table VALUES ($1, $2, $3, $4)",
+			ts, i, fmt.Sprintf("data%d", i), fmt.Sprintf("cat%d", i%3))
+	}
+
+	// Verify initial row count.
+	var initialCount int
+	runner.QueryRow(t, "SELECT count(*) FROM testdb.testschema.multi_index_table").Scan(&initialCount)
+	require.Equal(t, 10, initialCount)
+
+	var tableDesc catalog.TableDescriptor
+	require.NoError(t, sql.DescsTxn(ctx, &execCfg, func(
+		ctx context.Context, txn isql.Txn, descriptors *descs.Collection,
+	) error {
+		db, err := descriptors.ByName(txn.KV()).Get().Database(ctx, "testdb")
+		if err != nil {
+			return err
+		}
+		schema, err := descriptors.ByName(txn.KV()).Get().Schema(ctx, db, "testschema")
+		if err != nil {
+			return err
+		}
+		tableDesc, err = descriptors.ByName(txn.KV()).Get().Table(ctx, db, schema, "multi_index_table")
+		return err
+	}))
+
+	// Get the secondary index IDs.
+	var secondaryIndexIDs []descpb.IndexID
+	for _, idx := range tableDesc.PublicNonPrimaryIndexes() {
+		secondaryIndexIDs = append(secondaryIndexIDs, idx.GetID())
+	}
+	require.Len(t, secondaryIndexIDs, 3, "expected 3 secondary indexes")
+
+	primaryIndexSpan := tableDesc.PrimaryIndexSpan(s.Codec())
+
+	// Setup hybrid cleaner details with all secondary indexes.
+	hybridDetails := &jobspb.HybridCleanerDetails{
+		PartitionStart: partitionStart,
+		PartitionEnd:   partitionEnd,
+		TargetIndexIDs: secondaryIndexIDs,
+		PartitionSpans: []roachpb.Span{primaryIndexSpan},
+	}
+
+	var nodeID base.NodeIDContainer
+	nodeID.Set(ctx, roachpb.NodeID(1))
+
+	flowCtx := execinfra.FlowCtx{
+		Cfg: &execinfra.ServerConfig{
+			DB:          s.InternalDB().(descs.DB),
+			Settings:    s.ClusterSettings(),
+			Codec:       s.Codec(),
+			JobRegistry: s.JobRegistry().(*jobs.Registry),
+		},
+		EvalCtx: &eval.Context{
+			Codec:    s.Codec(),
+			Settings: s.ClusterSettings(),
+		},
+		NodeID: base.NewSQLIDContainerForNode(&nodeID),
+	}
+
+	// Create TTL processor.
+	mockTTLProc := ttlProcessor{
+		ttlSpec: execinfrapb.TTLSpec{
+			RowLevelTTLDetails: jobspb.RowLevelTTLDetails{
+				TableID:              tableDesc.GetID(),
+				TableVersion:         tableDesc.GetVersion(),
+				HybridCleanerDetails: hybridDetails,
+			},
+			DeleteBatchSize: 100,
+			DeleteRateLimit: 1000000,
+			Spans:           hybridDetails.PartitionSpans,
+		},
+		ProcessorBase: execinfra.ProcessorBase{
+			ProcessorBaseNoHelper: execinfra.ProcessorBaseNoHelper{
+				FlowCtx: &flowCtx,
+			},
+		},
+	}
+
+	// Setup progress updater.
+	mockRowReceiver := &metadataCache{}
+	mockTTLProc.progressUpdater = &coordinatorStreamUpdater{proc: &mockTTLProc}
+
+	// Run the hybrid cleaner.
+	err := mockTTLProc.work(ctx, mockRowReceiver)
+	require.NoError(t, err)
+
+	// Verify all rows were deleted (since they all fall within partition bounds).
+	var finalCount int
+	runner.QueryRow(t, "SELECT count(*) FROM testdb.testschema.multi_index_table").Scan(&finalCount)
+	require.Equal(t, 0, finalCount, "all rows should be deleted from all indexes")
+
+	// Verify progress was tracked for all index/span combinations.
+	// With 3 indexes and 1 span, we should have 3 total work items.
+	progressUpdater := mockTTLProc.progressUpdater.(*coordinatorStreamUpdater)
+	progressUpdater.mu.Lock()
+	completedSpanCount := len(progressUpdater.mu.completedSpans)
+	progressUpdater.mu.Unlock()
+
+	// Each (index, span) pair counts as one span in progress tracking.
+	expectedSpanCount := len(secondaryIndexIDs) * len(hybridDetails.PartitionSpans)
+	require.Equal(t, expectedSpanCount, completedSpanCount,
+		"expected progress tracking for all index/span combinations")
 }
 
 // TestHybridCleanerPartitionBoundFiltering tests that deletions are correctly
