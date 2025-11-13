@@ -21,6 +21,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catenumpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
@@ -240,13 +241,11 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 	cutoff := details.Cutoff
 	ttlExpr := ttlSpec.TTLExpr
 
-	// TODO(SPILLY): Hybrid cleaner mode processor setup
-	// if details.HybridCleanerMode {
-	//   - Skip standard TTL processing
-	//   - Use partition bounds from details.PartitionStart and details.PartitionEnd
-	//   - Iterate over assigned secondary index spans (not PK spans)
-	//   - Call different deletion logic (no SELECT phase)
-	// }
+	// Hybrid cleaner mode: skip standard TTL processing and clean secondary indexes.
+	if details.HybridCleanerDetails != nil {
+		log.Dev.Infof(ctx, "TTL processor started in hybrid cleaner mode processorID=%d tableID=%d", t.ProcessorID, tableID)
+		return t.workHybridCleaner(ctx, output)
+	}
 
 	// Note: the ttl-restart test depends on this message to know what nodes are
 	// involved in a TTL job.
@@ -391,6 +390,188 @@ func (t *ttlProcessor) work(ctx context.Context, output execinfra.RowReceiver) e
 		return err
 	}
 	return t.progressUpdater.FinalizeProgress(ctx, output)
+}
+
+// hybridCleanerWorkItem represents a unit of work for the hybrid cleaner:
+// a (secondary index, PK span) pair to process.
+type hybridCleanerWorkItem struct {
+	indexID descpb.IndexID
+	span    roachpb.Span
+}
+
+// workHybridCleaner implements the hybrid cleaner mode for partition TTL.
+// This mode skips the SELECT phase and deletes directly from secondary indexes
+// based on partition time bounds.
+func (t *ttlProcessor) workHybridCleaner(ctx context.Context, output execinfra.RowReceiver) error {
+	ttlSpec := t.ttlSpec
+	flowCtx := t.FlowCtx
+	serverCfg := flowCtx.Cfg
+	db := serverCfg.DB
+	details := ttlSpec.RowLevelTTLDetails
+	tableID := details.TableID
+	hybridDetails := details.HybridCleanerDetails
+
+	// Get table info for metrics and relation name.
+	relationName, _, _, _, _, _, labelMetrics, err := getTableInfo(ctx, db, tableID)
+	if err != nil {
+		return err
+	}
+
+	jobRegistry := serverCfg.JobRegistry
+	metrics := jobRegistry.MetricsStruct().RowLevelTTL.(*RowLevelTTLAggMetrics).loadMetrics(
+		labelMetrics,
+		relationName,
+	)
+
+	// Setup delete rate limiter.
+	deleteRateLimit := ttlSpec.DeleteRateLimit
+	deleteRateLimiter := quotapool.NewRateLimiter(
+		"ttl-delete",
+		quotapool.Limit(deleteRateLimit),
+		deleteRateLimit,
+	)
+
+	// Calculate total work: number of (index, span) pairs.
+	// Progress tracking is per span, just like row-level TTL.
+	totalSpanCount := int64(len(ttlSpec.Spans) * len(hybridDetails.TargetIndexIDs))
+	t.progressUpdater.InitProgress(totalSpanCount)
+	t.processorConcurrency = ttlbase.GetProcessorConcurrency(&flowCtx.Cfg.Settings.SV, int64(runtime.GOMAXPROCS(0)))
+	if totalSpanCount < t.processorConcurrency {
+		t.processorConcurrency = totalSpanCount
+	}
+
+	group := ctxgroup.WithContext(ctx)
+	workChan := make(chan hybridCleanerWorkItem, t.processorConcurrency)
+
+	// Launch worker pool with fixed concurrency.
+	// Workers process (index, span) pairs from the work channel.
+	for i := int64(0); i < t.processorConcurrency; i++ {
+		group.GoCtx(func(ctx context.Context) error {
+			for work := range workChan {
+				start := timeutil.Now()
+				deletedRowCount, err := t.runHybridCleanerOnSpan(
+					ctx,
+					metrics,
+					deleteRateLimiter,
+					work.indexID,
+					work.span,
+				)
+				// Add to totals even on partial success.
+				// Progress is tracked per span, matching row-level TTL behavior.
+				t.progressUpdater.OnSpanProcessed(work.span, deletedRowCount)
+				if err != nil {
+					// Continue until channel is fully read.
+					for range workChan {
+					}
+					return err
+				}
+				metrics.SpanTotalDuration.RecordValue(int64(timeutil.Since(start)))
+			}
+			return nil
+		})
+	}
+
+	// Feed all (index, span) combinations to the worker pool.
+	// This distributes work evenly across all indexes and spans.
+	err = func() error {
+		defer close(workChan)
+		for _, indexID := range hybridDetails.TargetIndexIDs {
+			for _, span := range ttlSpec.Spans {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case workChan <- hybridCleanerWorkItem{indexID: indexID, span: span}:
+					// Progress updates are sent periodically.
+					if err := t.progressUpdater.UpdateProgress(ctx, output); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
+	}
+
+	if err := group.Wait(); err != nil {
+		return err
+	}
+	return t.progressUpdater.FinalizeProgress(ctx, output)
+}
+
+// runHybridCleanerOnSpan deletes entries from a secondary index within a PK span
+// that fall within the partition time bounds.
+func (t *ttlProcessor) runHybridCleanerOnSpan(
+	ctx context.Context,
+	metrics rowLevelTTLMetrics,
+	deleteRateLimiter *quotapool.RateLimiter,
+	indexID descpb.IndexID,
+	span roachpb.Span,
+) (deletedRowCount int64, err error) {
+	metrics.NumActiveSpans.Inc(1)
+	defer metrics.NumActiveSpans.Dec(1)
+
+	ttlSpec := t.ttlSpec
+	details := ttlSpec.RowLevelTTLDetails
+	_ = details.HybridCleanerDetails // Will be used when implementing actual deletion logic.
+	flowCtx := t.FlowCtx
+	serverCfg := flowCtx.Cfg
+	_ = serverCfg.DB.Executor() // Will be used when implementing actual deletion logic.
+
+	// Build a DELETE query for the secondary index within partition bounds.
+	// The query is: DELETE FROM table@index WHERE ttl_col >= $start AND ttl_col < $end LIMIT $batch
+	// For now, we'll use a simplified approach and iterate with batched deletes.
+
+	settingsValues := &serverCfg.Settings.SV
+	_ = ttlSpec.DeleteBatchSize // Will be used when implementing actual deletion logic.
+	_ = indexID                 // Will be used when implementing actual deletion logic.
+	_ = span                    // Will be used when implementing actual deletion logic.
+
+	for {
+		// Check if we should stop.
+		select {
+		case <-ctx.Done():
+			return deletedRowCount, ctx.Err()
+		default:
+		}
+
+		// Build and execute the DELETE query.
+		// TODO(SPILLY): Implement actual query builder for hybrid cleaner mode.
+		// For now, return early to unblock testing.
+		deleted := int64(0)
+
+		if deleted == 0 {
+			// No more rows to delete.
+			break
+		}
+
+		deletedRowCount += deleted
+		metrics.RowDeletions.Inc(deleted)
+
+		// Apply rate limiting.
+		if err := deleteRateLimiter.WaitN(ctx, deleted); err != nil {
+			return deletedRowCount, err
+		}
+
+		// Respect the delete rate limit setting changes.
+		// Get the RowLevelTTL config for rate limit updates.
+		var rowLevelTTL *catpb.RowLevelTTL
+		if err := serverCfg.DB.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
+			desc, err := txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, details.TableID)
+			if err != nil {
+				return err
+			}
+			rowLevelTTL = desc.GetRowLevelTTL()
+			return nil
+		}); err != nil {
+			return deletedRowCount, err
+		}
+		deleteRateLimit := ttlbase.GetDeleteRateLimit(settingsValues, rowLevelTTL)
+		deleteRateLimiter.UpdateLimit(quotapool.Limit(deleteRateLimit), deleteRateLimit)
+	}
+
+	return deletedRowCount, nil
 }
 
 // runTTLOnQueryBounds runs the SELECT/DELETE loop for a single DistSQL span.
