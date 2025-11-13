@@ -364,10 +364,187 @@ func TestHybridCleanerPartitionBoundFiltering(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	// TODO(SPILLY): Test that:
-	// 1. Only rows within [PartitionStart, PartitionEnd) are deleted
-	// 2. Rows outside the bounds are not affected
-	// 3. Boundary conditions are handled correctly (inclusive start, exclusive end)
+	ctx := context.Background()
+	srv, sqlDB, _ := serverutils.StartServer(t, base.TestServerArgs{})
+	defer srv.Stopper().Stop(ctx)
+
+	s := srv.ApplicationLayer()
+	execCfg := s.ExecutorConfig().(sql.ExecutorConfig)
+
+	// Create a test table with partition TTL.
+	runner := sqlutils.MakeSQLRunner(sqlDB)
+	runner.Exec(t, "CREATE DATABASE testdb")
+	runner.Exec(t, "CREATE SCHEMA testdb.testschema")
+	runner.Exec(t, `CREATE TABLE testdb.testschema.bound_test_table (
+		ts TIMESTAMPTZ NOT NULL,
+		user_id INT NOT NULL,
+		data STRING,
+		PRIMARY KEY (ts, user_id)
+	) PARTITION BY RANGE (ts) (
+		PARTITION p1 VALUES FROM (MINVALUE) TO (MAXVALUE)
+	) WITH (
+		ttl_mode = 'partition',
+		ttl_column = 'ts',
+		ttl_retention = '30d',
+		ttl_granularity = '1d',
+		ttl_lookahead = '2d'
+	)`)
+	runner.Exec(t, "CREATE INDEX idx_data ON testdb.testschema.bound_test_table(data)")
+
+	// Define partition boundaries for the hybrid cleaner.
+	// We'll delete rows from 2024-01-02 00:00:00 (inclusive) to 2024-01-03 00:00:00 (exclusive).
+	partitionStart := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+	partitionEnd := time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC)
+
+	// Insert test data with various timestamps relative to partition bounds.
+	testCases := []struct {
+		ts           time.Time
+		userID       int
+		data         string
+		shouldDelete bool
+		description  string
+	}{
+		// Before partition start - should NOT be deleted.
+		{time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), 1, "before_start", false, "before partition start"},
+		{time.Date(2024, 1, 1, 23, 59, 59, 0, time.UTC), 2, "just_before_start", false, "just before partition start"},
+
+		// Exactly at partition start - SHOULD be deleted (inclusive start).
+		{partitionStart, 3, "at_start", true, "exactly at partition start"},
+
+		// Within partition bounds - SHOULD be deleted.
+		{time.Date(2024, 1, 2, 6, 0, 0, 0, time.UTC), 4, "within_bounds_1", true, "within partition bounds (morning)"},
+		{time.Date(2024, 1, 2, 12, 0, 0, 0, time.UTC), 5, "within_bounds_2", true, "within partition bounds (noon)"},
+		{time.Date(2024, 1, 2, 18, 0, 0, 0, time.UTC), 6, "within_bounds_3", true, "within partition bounds (evening)"},
+
+		// Just before partition end - SHOULD be deleted (still within bounds).
+		{time.Date(2024, 1, 2, 23, 59, 59, 0, time.UTC), 7, "just_before_end", true, "just before partition end"},
+
+		// Exactly at partition end - should NOT be deleted (exclusive end).
+		{partitionEnd, 8, "at_end", false, "exactly at partition end"},
+
+		// After partition end - should NOT be deleted.
+		{time.Date(2024, 1, 3, 0, 0, 1, 0, time.UTC), 9, "just_after_end", false, "just after partition end"},
+		{time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC), 10, "after_end", false, "after partition end"},
+	}
+
+	// Insert all test rows.
+	for _, tc := range testCases {
+		runner.Exec(t, "INSERT INTO testdb.testschema.bound_test_table VALUES ($1, $2, $3)",
+			tc.ts, tc.userID, tc.data)
+	}
+
+	// Verify initial row count.
+	var initialCount int
+	runner.QueryRow(t, "SELECT count(*) FROM testdb.testschema.bound_test_table").Scan(&initialCount)
+	require.Equal(t, len(testCases), initialCount)
+
+	var tableDesc catalog.TableDescriptor
+	require.NoError(t, sql.DescsTxn(ctx, &execCfg, func(
+		ctx context.Context, txn isql.Txn, descriptors *descs.Collection,
+	) error {
+		db, err := descriptors.ByName(txn.KV()).Get().Database(ctx, "testdb")
+		if err != nil {
+			return err
+		}
+		schema, err := descriptors.ByName(txn.KV()).Get().Schema(ctx, db, "testschema")
+		if err != nil {
+			return err
+		}
+		tableDesc, err = descriptors.ByName(txn.KV()).Get().Table(ctx, db, schema, "bound_test_table")
+		return err
+	}))
+
+	// Get the secondary index ID.
+	var secondaryIndexID descpb.IndexID
+	for _, idx := range tableDesc.PublicNonPrimaryIndexes() {
+		secondaryIndexID = idx.GetID()
+		break
+	}
+
+	primaryIndexSpan := tableDesc.PrimaryIndexSpan(s.Codec())
+
+	// Setup hybrid cleaner details.
+	hybridDetails := &jobspb.HybridCleanerDetails{
+		PartitionStart: partitionStart,
+		PartitionEnd:   partitionEnd,
+		TargetIndexIDs: []descpb.IndexID{secondaryIndexID},
+		PartitionSpans: []roachpb.Span{primaryIndexSpan},
+	}
+
+	var nodeID base.NodeIDContainer
+	nodeID.Set(ctx, roachpb.NodeID(1))
+
+	flowCtx := execinfra.FlowCtx{
+		Cfg: &execinfra.ServerConfig{
+			DB:          s.InternalDB().(descs.DB),
+			Settings:    s.ClusterSettings(),
+			Codec:       s.Codec(),
+			JobRegistry: s.JobRegistry().(*jobs.Registry),
+		},
+		EvalCtx: &eval.Context{
+			Codec:    s.Codec(),
+			Settings: s.ClusterSettings(),
+		},
+		NodeID: base.NewSQLIDContainerForNode(&nodeID),
+	}
+
+	// Create TTL processor.
+	mockTTLProc := ttlProcessor{
+		ttlSpec: execinfrapb.TTLSpec{
+			RowLevelTTLDetails: jobspb.RowLevelTTLDetails{
+				TableID:              tableDesc.GetID(),
+				TableVersion:         tableDesc.GetVersion(),
+				HybridCleanerDetails: hybridDetails,
+			},
+			DeleteBatchSize: 100,
+			DeleteRateLimit: 1000000,
+			Spans:           hybridDetails.PartitionSpans,
+		},
+		ProcessorBase: execinfra.ProcessorBase{
+			ProcessorBaseNoHelper: execinfra.ProcessorBaseNoHelper{
+				FlowCtx: &flowCtx,
+			},
+		},
+	}
+
+	// Setup progress updater.
+	mockRowReceiver := &metadataCache{}
+	mockTTLProc.progressUpdater = &coordinatorStreamUpdater{proc: &mockTTLProc}
+
+	// Run the hybrid cleaner.
+	err := mockTTLProc.work(ctx, mockRowReceiver)
+	require.NoError(t, err)
+
+	// Verify that only rows within [PartitionStart, PartitionEnd) were deleted.
+	for _, tc := range testCases {
+		var count int
+		runner.QueryRow(t,
+			"SELECT count(*) FROM testdb.testschema.bound_test_table WHERE user_id = $1",
+			tc.userID).Scan(&count)
+
+		if tc.shouldDelete {
+			require.Equal(t, 0, count,
+				"Row with user_id=%d (%s) should have been deleted but still exists",
+				tc.userID, tc.description)
+		} else {
+			require.Equal(t, 1, count,
+				"Row with user_id=%d (%s) should NOT have been deleted but is missing",
+				tc.userID, tc.description)
+		}
+	}
+
+	// Verify the final row count matches expected (rows that should NOT be deleted).
+	var expectedRemainingCount int
+	for _, tc := range testCases {
+		if !tc.shouldDelete {
+			expectedRemainingCount++
+		}
+	}
+
+	var finalCount int
+	runner.QueryRow(t, "SELECT count(*) FROM testdb.testschema.bound_test_table").Scan(&finalCount)
+	require.Equal(t, expectedRemainingCount, finalCount,
+		"Expected %d rows to remain after deletion", expectedRemainingCount)
 }
 
 // TestHybridCleanerErrorHandling tests error handling in hybrid cleaner mode.
