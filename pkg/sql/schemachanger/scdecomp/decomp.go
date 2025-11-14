@@ -740,14 +740,17 @@ func (w *walkCtx) walkIndex(tbl catalog.TableDescriptor, idx catalog.Index) {
 			}
 			w.ev(idxStatus, sec)
 		}
-		if p := idx.GetPartitioning(); p != nil && p.NumLists()+p.NumRanges() > 0 {
+		if p := idx.GetPartitioning(); p != nil {
 			w.ev(scpb.Status_PUBLIC, &scpb.IndexPartitioning{
 				TableID:                tbl.GetID(),
 				IndexID:                idx.GetID(),
 				PartitioningDescriptor: cpy.Partitioning,
 			})
 			// Also create IndexPartitionEntry elements for each individual partition.
-			w.walkPartitioning(tbl.GetID(), idx.GetID(), &cpy.Partitioning, nil)
+			// Only walk individual partitions if they exist.
+			if p.NumLists()+p.NumRanges() > 0 {
+				w.walkPartitioning(tbl.GetID(), idx.GetID(), &cpy.Partitioning, nil)
+			}
 		}
 	}
 	w.ev(scpb.Status_PUBLIC, &scpb.IndexName{

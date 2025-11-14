@@ -771,6 +771,9 @@ func ShowCreatePartitioning(
 	} else if isPrimaryKeyOfPartitionAllByTable {
 		buf.WriteString(`NOTHING`)
 		return nil
+	} else if tableDesc.GetPartitionTTL() != nil {
+		// For partition TTL tables with no partitions yet, show RANGE partitioning.
+		buf.WriteString(`RANGE`)
 	} else {
 		return errors.Errorf(`invalid partition descriptor: %v`, part.PartitioningDesc())
 	}

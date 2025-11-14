@@ -517,11 +517,14 @@ CREATE TABLE t_create_delete_params (
   ts TIMESTAMPTZ NOT NULL,
   id INT,
   data STRING,
-  PRIMARY KEY (ts, id)
+  PRIMARY KEY (ts, id),
+  FAMILY fam_0_ts_id_data (ts, id, data)
 ) WITH (
   ttl_mode = 'partition',
   ttl_column = 'ts',
-  ttl_retention = '30d',
+  ttl_retention = '7d',
+  ttl_granularity = '1d',
+  ttl_lookahead = '2d',
   ttl_delete_batch_size = 300,
   ttl_delete_rate_limit = 500
 )
@@ -532,10 +535,14 @@ SELECT create_statement FROM [SHOW CREATE TABLE t_create_delete_params]
 ----
 CREATE TABLE public.t_create_delete_params (
   ts TIMESTAMPTZ NOT NULL,
-  id INT8 NULL,
+  id INT8 NOT NULL,
   data STRING NULL,
-  CONSTRAINT t_create_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
-) WITH (ttl_column = 'ts', ttl_delete_batch_size = 300, ttl_delete_rate_limit = 500, ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+  CONSTRAINT t_create_delete_params_pkey PRIMARY KEY (ts ASC, id ASC),
+  FAMILY fam_0_ts_id_data (ts, id, data)
+) PARTITION BY RANGE (ts) (
+) WITH (ttl_mode = 'partition', ttl_column = 'ts', ttl_retention = '7d', ttl_granularity = '1d', ttl_lookahead = '2d', ttl_delete_batch_size = 300, ttl_delete_rate_limit = 500, schema_locked = true)
+-- Warning: Partitioned table with no zone configurations.
+;
 
 statement ok
 DROP TABLE t_create_delete_params
@@ -550,7 +557,9 @@ CREATE TABLE t_alter_delete_params (
   ts TIMESTAMPTZ NOT NULL,
   id INT,
   data STRING,
-  PRIMARY KEY (ts, id)
+  PRIMARY KEY (ts, id),
+  FAMILY fam_0_ts (ts),
+  FAMILY fam_1_id_data (id, data)
 ) WITH (
   ttl_mode = 'partition',
   ttl_column = 'ts',
@@ -567,10 +576,15 @@ SELECT create_statement FROM [SHOW CREATE TABLE t_alter_delete_params]
 ----
 CREATE TABLE public.t_alter_delete_params (
   ts TIMESTAMPTZ NOT NULL,
-  id INT8 NULL,
+  id INT8 NOT NULL,
   data STRING NULL,
-  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
-) WITH (ttl_column = 'ts', ttl_delete_batch_size = 500, ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC),
+  FAMILY fam_0_ts (ts),
+  FAMILY fam_1_id_data (id, data)
+) PARTITION BY RANGE (ts) (
+) WITH (ttl_mode = 'partition', ttl_column = 'ts', ttl_retention = '30d', ttl_granularity = '1h', ttl_lookahead = '2h', ttl_delete_batch_size = 500, schema_locked = true)
+-- Warning: Partitioned table with no zone configurations.
+;
 
 # Alter delete_rate_limit
 statement ok
@@ -582,10 +596,15 @@ SELECT create_statement FROM [SHOW CREATE TABLE t_alter_delete_params]
 ----
 CREATE TABLE public.t_alter_delete_params (
   ts TIMESTAMPTZ NOT NULL,
-  id INT8 NULL,
+  id INT8 NOT NULL,
   data STRING NULL,
-  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
-) WITH (ttl_column = 'ts', ttl_delete_batch_size = 500, ttl_delete_rate_limit = 1000, ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC),
+  FAMILY fam_0_ts (ts),
+  FAMILY fam_1_id_data (id, data)
+) PARTITION BY RANGE (ts) (
+) WITH (ttl_mode = 'partition', ttl_column = 'ts', ttl_retention = '30d', ttl_granularity = '1h', ttl_lookahead = '2h', ttl_delete_batch_size = 500, ttl_delete_rate_limit = 1000, schema_locked = true)
+-- Warning: Partitioned table with no zone configurations.
+;
 
 # Alter both at once
 statement ok
@@ -597,10 +616,15 @@ SELECT create_statement FROM [SHOW CREATE TABLE t_alter_delete_params]
 ----
 CREATE TABLE public.t_alter_delete_params (
   ts TIMESTAMPTZ NOT NULL,
-  id INT8 NULL,
+  id INT8 NOT NULL,
   data STRING NULL,
-  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
-) WITH (ttl_column = 'ts', ttl_delete_batch_size = 200, ttl_delete_rate_limit = 2000, ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC),
+  FAMILY fam_0_ts (ts),
+  FAMILY fam_1_id_data (id, data)
+) PARTITION BY RANGE (ts) (
+) WITH (ttl_mode = 'partition', ttl_column = 'ts', ttl_retention = '30d', ttl_granularity = '1h', ttl_lookahead = '2h', ttl_delete_batch_size = 200, ttl_delete_rate_limit = 2000, schema_locked = true)
+-- Warning: Partitioned table with no zone configurations.
+;
 
 # Test negative values are rejected
 statement error "ttl_delete_batch_size" must be at least 0
@@ -619,10 +643,15 @@ SELECT create_statement FROM [SHOW CREATE TABLE t_alter_delete_params]
 ----
 CREATE TABLE public.t_alter_delete_params (
   ts TIMESTAMPTZ NOT NULL,
-  id INT8 NULL,
+  id INT8 NOT NULL,
   data STRING NULL,
-  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
-) WITH (ttl_column = 'ts', ttl_delete_rate_limit = 2000, ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC),
+  FAMILY fam_0_ts (ts),
+  FAMILY fam_1_id_data (id, data)
+) PARTITION BY RANGE (ts) (
+) WITH (ttl_mode = 'partition', ttl_column = 'ts', ttl_retention = '30d', ttl_granularity = '1h', ttl_lookahead = '2h', ttl_delete_rate_limit = 2000, schema_locked = true)
+-- Warning: Partitioned table with no zone configurations.
+;
 
 statement ok
 ALTER TABLE t_alter_delete_params SET (ttl_delete_rate_limit = 0)
@@ -633,12 +662,58 @@ SELECT create_statement FROM [SHOW CREATE TABLE t_alter_delete_params]
 ----
 CREATE TABLE public.t_alter_delete_params (
   ts TIMESTAMPTZ NOT NULL,
-  id INT8 NULL,
+  id INT8 NOT NULL,
   data STRING NULL,
-  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC)
-) WITH (ttl_column = 'ts', ttl_granularity = '1d', ttl_lookahead = '2d', ttl_mode = 'partition', ttl_retention = '30d')
+  CONSTRAINT t_alter_delete_params_pkey PRIMARY KEY (ts ASC, id ASC),
+  FAMILY fam_0_ts (ts),
+  FAMILY fam_1_id_data (id, data)
+) PARTITION BY RANGE (ts) (
+) WITH (ttl_mode = 'partition', ttl_column = 'ts', ttl_retention = '30d', ttl_granularity = '1h', ttl_lookahead = '2h', schema_locked = true)
+-- Warning: Partitioned table with no zone configurations.
+;
 
 statement ok
 DROP TABLE t_alter_delete_params
+
+subtest end
+
+subtest partition_ttl_automatic_partitioning_setup
+
+# Test that tables with ttl_mode='partition' are automatically created with PARTITION BY RANGE.
+# This allows the partition maintenance job to successfully add partitions to the table.
+
+statement ok
+CREATE TABLE t_auto_partitioning (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT8 NOT NULL,
+  data STRING,
+  PRIMARY KEY (ts, id),
+  FAMILY fam_0_ts_id_data (ts, id, data)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '7d',
+  ttl_granularity = '1d',
+  ttl_lookahead = '2d'
+)
+
+# Verify the table was created with PARTITION BY RANGE on the TTL column
+# Check that SHOW CREATE TABLE includes the key partitioning and TTL information
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t_auto_partitioning]
+----
+CREATE TABLE public.t_auto_partitioning (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT8 NOT NULL,
+  data STRING NULL,
+  CONSTRAINT t_auto_partitioning_pkey PRIMARY KEY (ts ASC, id ASC),
+  FAMILY fam_0_ts_id_data (ts, id, data)
+) PARTITION BY RANGE (ts) (
+) WITH (ttl_mode = 'partition', ttl_column = 'ts', ttl_retention = '7d', ttl_granularity = '1d', ttl_lookahead = '2d', schema_locked = true)
+-- Warning: Partitioned table with no zone configurations.
+;
+
+statement ok
+DROP TABLE t_auto_partitioning
 
 subtest end

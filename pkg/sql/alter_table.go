@@ -785,6 +785,12 @@ func (n *alterTableNode) startExec(params runParams) error {
 				return err
 			}
 
+			// Apply partition TTL updates to the table descriptor.
+			if setter.UpdatedPartitionTTL != nil {
+				setter.TableDesc.PartitionTTL = setter.UpdatedPartitionTTL
+				descriptorChanged = true
+			}
+
 			paramIsDelete := t.StorageParams.GetVal("ttl_delete_rate_limit") != nil
 			paramIsSelect := t.StorageParams.GetVal("ttl_select_rate_limit") != nil
 
@@ -812,6 +818,12 @@ func (n *alterTableNode) startExec(params runParams) error {
 			)
 			if err != nil {
 				return err
+			}
+
+			// Apply partition TTL updates to the table descriptor.
+			if setter.UpdatedPartitionTTL != nil {
+				setter.TableDesc.PartitionTTL = setter.UpdatedPartitionTTL
+				descriptorChanged = true
 			}
 
 		case *tree.AlterTableRenameColumn:

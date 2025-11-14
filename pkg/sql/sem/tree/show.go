@@ -1399,6 +1399,10 @@ const (
 	// ScheduledChangefeedExecutor is an executor responsible for
 	// the execution of the scheduled changefeeds.
 	ScheduledChangefeedExecutor
+
+	// ScheduledPartitionTTLExecutor is an executor responsible for the maintenance
+	// of partitions on partition TTL tables.
+	ScheduledPartitionTTLExecutor
 )
 
 var scheduleExecutorInternalNames = map[ScheduledJobExecutorType]string{
@@ -1408,6 +1412,7 @@ var scheduleExecutorInternalNames = map[ScheduledJobExecutorType]string{
 	ScheduledRowLevelTTLExecutor:        "scheduled-row-level-ttl-executor",
 	ScheduledSchemaTelemetryExecutor:    "scheduled-schema-telemetry-executor",
 	ScheduledChangefeedExecutor:         "scheduled-changefeed-executor",
+	ScheduledPartitionTTLExecutor:       "scheduled-partition-ttl-executor",
 }
 
 // InternalName returns an internal executor name.
@@ -1429,6 +1434,8 @@ func (t ScheduledJobExecutorType) UserName() string {
 		return "SCHEMA TELEMETRY"
 	case ScheduledChangefeedExecutor:
 		return "CHANGEFEED"
+	case ScheduledPartitionTTLExecutor:
+		return "PARTITION TTL"
 	}
 	return "unsupported-executor"
 }

@@ -466,6 +466,8 @@ func (p *Payload) UnwrapDetails() Details {
 		return *d.HotRangesLoggerDetails
 	case *Payload_InspectDetails:
 		return *d.InspectDetails
+	case *Payload_PartitionTTLMaintenance:
+		return *d.PartitionTTLMaintenance
 	default:
 		return nil
 	}
@@ -537,6 +539,8 @@ func (p *Progress) UnwrapDetails() ProgressDetails {
 		return *d.HotRangesLogger
 	case *Progress_Inspect:
 		return d.Inspect
+	case *Progress_PartitionTTLMaintenance:
+		return *d.PartitionTTLMaintenance
 	default:
 		return nil
 	}
@@ -600,6 +604,8 @@ func WrapPayloadDetails(details Details) interface {
 		return &Payload_StreamReplication{StreamReplication: &d}
 	case RowLevelTTLDetails:
 		return &Payload_RowLevelTTL{RowLevelTTL: &d}
+	case PartitionTTLMaintenanceDetails:
+		return &Payload_PartitionTTLMaintenance{PartitionTTLMaintenance: &d}
 	case SchemaTelemetryDetails:
 		return &Payload_SchemaTelemetry{SchemaTelemetry: &d}
 	case KeyVisualizerDetails:
@@ -632,8 +638,6 @@ func WrapPayloadDetails(details Details) interface {
 		return &Payload_HotRangesLoggerDetails{HotRangesLoggerDetails: &d}
 	case InspectDetails:
 		return &Payload_InspectDetails{InspectDetails: &d}
-	case PartitionTTLMaintenanceDetails:
-		return &Payload_PartitionTTLMaintenance{PartitionTTLMaintenance: &d}
 	default:
 		panic(errors.AssertionFailedf("jobs.WrapPayloadDetails: unknown details type %T", d))
 	}

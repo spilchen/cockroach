@@ -2562,6 +2562,19 @@ func (desc *wrapper) GetStorageParams(spaceBetweenEqual bool) ([]string, error) 
 			appendStorageParam(`ttl_disable_changefeed_replication`, fmt.Sprintf("%t", ttl.DisableChangefeedReplication))
 		}
 	}
+	if pttl := desc.GetPartitionTTL(); pttl != nil {
+		appendStorageParam(`ttl_mode`, `'partition'`)
+		appendStorageParam(`ttl_column`, fmt.Sprintf(`'%s'`, pttl.ColumnName))
+		appendStorageParam(`ttl_retention`, fmt.Sprintf(`'%s'`, pttl.Retention))
+		appendStorageParam(`ttl_granularity`, fmt.Sprintf(`'%s'`, pttl.Granularity))
+		appendStorageParam(`ttl_lookahead`, fmt.Sprintf(`'%s'`, pttl.Lookahead))
+		if bs := pttl.DeleteBatchSize; bs != 0 {
+			appendStorageParam(`ttl_delete_batch_size`, fmt.Sprintf(`%d`, bs))
+		}
+		if rl := pttl.DeleteRateLimit; rl != 0 {
+			appendStorageParam(`ttl_delete_rate_limit`, fmt.Sprintf(`%d`, rl))
+		}
+	}
 	if exclude := desc.GetExcludeDataFromBackup(); exclude {
 		appendStorageParam(`exclude_data_from_backup`, `true`)
 	}

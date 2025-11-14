@@ -106,6 +106,14 @@ message ScheduledRowLevelTTLArgs {
   ];
 }
 
+message ScheduledPartitionTTLArgs {
+  optional uint32 table_id = 1 [
+    (gogoproto.customname) = "TableID",
+    (gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/sql/sem/catid.DescID",
+    (gogoproto.nullable) = false
+  ];
+}
+
 // PartitioningDescriptor represents the partitioning of an index into spans
 // of keys addressable by a zone config. The key encoding is unchanged. Each
 // partition may optionally be itself divided into further partitions, called
@@ -216,6 +224,8 @@ message PartitionTTLConfig {
   optional int64 delete_batch_size = 5 [(gogoproto.nullable) = false];
   // DeleteRateLimit is the maximum amount of rows to delete per second.
   optional int64 delete_rate_limit = 6 [(gogoproto.nullable) = false];
+  // ScheduleID is the ID of the scheduled job that maintains partitions for this table.
+  optional int64 schedule_id = 7 [(gogoproto.nullable) = false, (gogoproto.customname) = "ScheduleID"];
 }
 
 // AutoStatsSettings represents settings related to automatic statistics

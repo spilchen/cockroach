@@ -431,7 +431,9 @@ func (r *PartitionTTLMaintenanceResumer) executePartitionDrops(
 		return nil
 	}
 
-	return db.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
+	// Get the fully qualified table name.
+	var tableName *tree.TableName
+	if err := db.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
 		// Get the table descriptor to construct the fully qualified table name.
 		tableDesc, err := txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, tableID)
 		if err != nil {
@@ -451,28 +453,38 @@ func (r *PartitionTTLMaintenanceResumer) executePartitionDrops(
 		}
 
 		// Construct fully qualified table name.
-		tableName := tree.NewTableNameWithSchema(
+		tableName = tree.NewTableNameWithSchema(
 			tree.Name(dbDesc.GetName()),
 			tree.Name(schemaDesc.GetName()),
 			tree.Name(tableDesc.GetName()))
 
-		// Drop each partition.
-		for _, partition := range toDrop {
-			alterStmt := BuildDropPartitionStatement(tableName, partition.name)
+		return nil
+	}); err != nil {
+		return err
+	}
 
-			log.Dev.Infof(ctx, "dropping partition %s on table %s (upper bound: %s)",
-				partition.name, tableName.FQString(), partition.upperBound.Format(time.RFC3339))
+	// Ensure autocommit before DDL so we're not in an explicit transaction.
+	// This allows the declarative schema changer to be used for partition operations.
+	if _, err := db.Executor().Exec(ctx, "set-autocommit", nil /* txn */, "SET autocommit_before_ddl = true"); err != nil {
+		return err
+	}
 
-			// Execute the DROP PARTITION statement.
-			if _, err := txn.Exec(ctx, "drop-partition-ttl", txn.KV(), alterStmt); err != nil {
-				return errors.Wrapf(err, "failed to drop partition %q", partition.name)
-			}
+	// Drop each partition without an explicit transaction to allow the declarative schema changer to be used.
+	for _, partition := range toDrop {
+		alterStmt := BuildDropPartitionStatement(tableName, partition.name)
 
-			log.Dev.Infof(ctx, "successfully dropped partition %s", partition.name)
+		log.Dev.Infof(ctx, "dropping partition %s on table %s (upper bound: %s)",
+			partition.name, tableName.FQString(), partition.upperBound.Format(time.RFC3339))
+
+		// Execute the DROP PARTITION statement without an explicit transaction.
+		if _, err := db.Executor().Exec(ctx, "drop-partition-ttl", nil /* txn */, alterStmt); err != nil {
+			return errors.Wrapf(err, "failed to drop partition %q", partition.name)
 		}
 
-		return nil
-	})
+		log.Dev.Infof(ctx, "successfully dropped partition %s", partition.name)
+	}
+
+	return nil
 }
 
 // executePartitionCreates executes ALTER TABLE ADD PARTITION statements for the specified partitions.
@@ -483,7 +495,9 @@ func (r *PartitionTTLMaintenanceResumer) executePartitionCreates(
 		return nil
 	}
 
-	return db.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
+	// Get the fully qualified table name.
+	var tableName *tree.TableName
+	if err := db.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
 		// Get the table descriptor to construct the fully qualified table name.
 		tableDesc, err := txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, tableID)
 		if err != nil {
@@ -503,31 +517,41 @@ func (r *PartitionTTLMaintenanceResumer) executePartitionCreates(
 		}
 
 		// Construct fully qualified table name.
-		tableName := tree.NewTableNameWithSchema(
+		tableName = tree.NewTableNameWithSchema(
 			tree.Name(dbDesc.GetName()),
 			tree.Name(schemaDesc.GetName()),
 			tree.Name(tableDesc.GetName()))
 
-		// Create each partition.
-		for _, partition := range toCreate {
-			alterStmt := BuildAddPartitionStatement(
-				tableName, partition.name, partition.lowerBound, partition.upperBound)
+		return nil
+	}); err != nil {
+		return err
+	}
 
-			log.Dev.Infof(ctx, "creating partition %s on table %s (from: %s, to: %s)",
-				partition.name, tableName.FQString(),
-				partition.lowerBound.Format(time.RFC3339),
-				partition.upperBound.Format(time.RFC3339))
+	// Ensure autocommit before DDL so we're not in an explicit transaction.
+	// This allows the declarative schema changer to be used for partition operations.
+	if _, err := db.Executor().Exec(ctx, "set-autocommit", nil /* txn */, "SET autocommit_before_ddl = true"); err != nil {
+		return err
+	}
 
-			// Execute the ADD PARTITION statement.
-			if _, err := txn.Exec(ctx, "add-partition-ttl", txn.KV(), alterStmt); err != nil {
-				return errors.Wrapf(err, "failed to create partition %q", partition.name)
-			}
+	// Create each partition without an explicit transaction to allow the declarative schema changer to be used.
+	for _, partition := range toCreate {
+		alterStmt := BuildAddPartitionStatement(
+			tableName, partition.name, partition.lowerBound, partition.upperBound)
 
-			log.Dev.Infof(ctx, "successfully created partition %s", partition.name)
+		log.Dev.Infof(ctx, "creating partition %s on table %s (from: %s, to: %s)",
+			partition.name, tableName.FQString(),
+			partition.lowerBound.Format(time.RFC3339),
+			partition.upperBound.Format(time.RFC3339))
+
+		// Execute the ADD PARTITION statement without an explicit transaction.
+		if _, err := db.Executor().Exec(ctx, "add-partition-ttl", nil /* txn */, alterStmt); err != nil {
+			return errors.Wrapf(err, "failed to create partition %q", partition.name)
 		}
 
-		return nil
-	})
+		log.Dev.Infof(ctx, "successfully created partition %s", partition.name)
+	}
+
+	return nil
 }
 
 // triggerHybridCleanup creates hybrid cleanup jobs for dropped partitions.

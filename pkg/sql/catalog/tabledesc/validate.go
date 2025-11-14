@@ -2013,7 +2013,11 @@ func (desc *wrapper) validatePartitioningDescriptor(
 	}
 
 	if part.NumLists() == 0 && part.NumRanges() == 0 {
-		return pgerror.Newf(pgcode.InvalidObjectDefinition, "at least one of LIST or RANGE partitioning must be used")
+		// For partition TTL tables, we allow empty partition lists because partitions are created
+		// dynamically by the maintenance job.
+		if desc.GetPartitionTTL() == nil {
+			return pgerror.Newf(pgcode.InvalidObjectDefinition, "at least one of LIST or RANGE partitioning must be used")
+		}
 	}
 	if part.NumLists() > 0 && part.NumRanges() > 0 {
 		return errors.Newf("only one LIST or RANGE partitioning may used")

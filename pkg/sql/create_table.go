@@ -2214,10 +2214,26 @@ func NewTableDesc(
 		}
 	}
 
-	if n.PartitionByTable.ContainsPartitions() || desc.PartitionAllBy {
+	// For partition TTL tables, we need to set up partitioning even if there are no partitions defined initially.
+	// The maintenance job will create partitions later.
+	// Save the PartitionTTL before partitioning setup in case it gets cleared.
+	savedPartitionTTL := desc.GetPartitionTTL()
+	hasPartitionTTL := savedPartitionTTL != nil
+	if (n.PartitionByTable != nil && n.PartitionByTable.ContainsPartitions()) || desc.PartitionAllBy || hasPartitionTTL {
 		partitionBy := partitionAllBy
-		if partitionBy == nil {
+		if partitionBy == nil && n.PartitionByTable != nil {
 			partitionBy = n.PartitionByTable.PartitionBy
+		}
+		// For partition TTL tables, create partitionBy if it's not already set
+		if partitionBy == nil && hasPartitionTTL {
+			// Verify the TTL column is valid before creating partitionBy
+			ttlCol, err := catalog.MustFindColumnByTreeName(&desc, tree.Name(savedPartitionTTL.ColumnName))
+			if err == nil && !ttlCol.IsNullable() {
+				partitionBy = &tree.PartitionBy{
+					Fields: tree.NameList{tree.Name(savedPartitionTTL.ColumnName)},
+					Range:  []tree.RangePartition{},
+				}
+			}
 		}
 		// At this point, we could have PARTITION ALL BY NOTHING, so check it is != nil.
 		if partitionBy != nil {
@@ -2270,6 +2286,11 @@ func NewTableDesc(
 				desc.SetPrimaryIndex(newPrimaryIndex)
 			}
 		}
+	}
+
+	// Restore PartitionTTL if it was set (it may have been cleared during partitioning setup).
+	if savedPartitionTTL != nil {
+		desc.PartitionTTL = savedPartitionTTL
 	}
 
 	// Once all the IDs have been allocated, we can add the Sequence dependencies
@@ -2594,8 +2615,12 @@ func newTableDesc(
 		ttl.ScheduleID = j.ScheduleID()
 	}
 
-	// Partition TTL tables require an immediate partition maintenance job to create initial partitions.
+	// Partition TTL tables require both an immediate partition maintenance job
+	// to create initial partitions and a scheduled job for ongoing maintenance.
 	if ret.GetPartitionTTL() != nil {
+		partitionTTL := ret.GetPartitionTTL()
+
+		// Create an immediate job to bootstrap initial partitions.
 		if err := CreatePartitionTTLMaintenanceJob(
 			params.ctx,
 			params.ExecCfg().JobRegistry,
@@ -2605,6 +2630,21 @@ func newTableDesc(
 		); err != nil {
 			return nil, err
 		}
+
+		// Create a scheduled job for ongoing partition maintenance.
+		j, err := CreatePartitionTTLScheduledJob(
+			params.ctx,
+			params.ExecCfg().JobsKnobs(),
+			jobs.ScheduledJobTxn(params.p.InternalSQLTxn()),
+			params.p.User(),
+			ret,
+			params.p.extendedEvalCtx.ClusterID,
+			params.p.execCfg.Settings.Version.ActiveVersion(params.ctx),
+		)
+		if err != nil {
+			return nil, err
+		}
+		partitionTTL.ScheduleID = int64(j.ScheduleID())
 	}
 
 	// For tables set schema_locked by default if it hasn't been set, and we
@@ -2733,6 +2773,71 @@ func CreatePartitionTTLMaintenanceJob(
 	}
 
 	return nil
+}
+
+// newPartitionTTLScheduledJob returns a *jobs.ScheduledJob for partition TTL
+// for a given table. newPartitionTTLScheduledJob assumes that
+// tblDesc.GetPartitionTTL() is not nil.
+func newPartitionTTLScheduledJob(
+	env scheduledjobs.JobSchedulerEnv,
+	owner username.SQLUsername,
+	tblDesc *tabledesc.Mutable,
+	clusterID uuid.UUID,
+	clusterVersion clusterversion.ClusterVersion,
+) (*jobs.ScheduledJob, error) {
+	sj := jobs.NewScheduledJob(env)
+	sj.SetScheduleLabel(fmt.Sprintf("partition-ttl: %s [%d]", tblDesc.GetName(), tblDesc.GetID()))
+	sj.SetOwner(owner)
+	sj.SetScheduleDetails(jobspb.ScheduleDetails{
+		Wait: jobspb.ScheduleDetails_SKIP,
+		// If a job fails, try again at the allocated cron time.
+		OnError:                jobspb.ScheduleDetails_RETRY_SCHED,
+		ClusterID:              clusterID,
+		CreationClusterVersion: clusterVersion,
+	})
+
+	// Run partition maintenance hourly to ensure partitions are created/dropped on time.
+	// TODO(SPILLY): Make this configurable based on granularity.
+	if err := sj.SetScheduleAndNextRun("@hourly"); err != nil {
+		return nil, err
+	}
+	args := &catpb.ScheduledPartitionTTLArgs{
+		TableID: tblDesc.GetID(),
+	}
+	any, err := pbtypes.MarshalAny(args)
+	if err != nil {
+		return nil, err
+	}
+	sj.SetExecutionDetails(
+		tree.ScheduledPartitionTTLExecutor.InternalName(),
+		jobspb.ExecutionArguments{Args: any},
+	)
+	return sj, nil
+}
+
+// CreatePartitionTTLScheduledJob creates a new partition TTL schedule.
+func CreatePartitionTTLScheduledJob(
+	ctx context.Context,
+	knobs *jobs.TestingKnobs,
+	s jobs.ScheduledJobStorage,
+	owner username.SQLUsername,
+	tblDesc *tabledesc.Mutable,
+	clusterID uuid.UUID,
+	version clusterversion.ClusterVersion,
+) (*jobs.ScheduledJob, error) {
+	if tblDesc.GetPartitionTTL() == nil {
+		return nil, errors.AssertionFailedf("CreatePartitionTTLScheduledJob called with no partition TTL: %#v", tblDesc)
+	}
+
+	env := JobSchedulerEnv(knobs)
+	j, err := newPartitionTTLScheduledJob(env, owner, tblDesc, clusterID, version)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Create(ctx, j); err != nil {
+		return nil, err
+	}
+	return j, nil
 }
 
 func rowLevelTTLAutomaticColumnDef(ttl *catpb.RowLevelTTL) (*tree.ColumnTableDef, error) {
