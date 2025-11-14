@@ -1364,6 +1364,7 @@ func (u *sqlSymUnion) filterType() tree.FilterType {
 %type <tree.Statement> reset_stmt reset_session_stmt reset_csetting_stmt
 %type <tree.Statement> resume_stmt resume_jobs_stmt resume_schedules_stmt resume_all_jobs_stmt
 %type <tree.Statement> drop_schedule_stmt
+%type <tree.Statement> run_schedules_stmt
 %type <tree.Statement> restore_stmt
 %type <tree.StringOrPlaceholderOptList> string_or_placeholder_opt_list
 %type <tree.Statement> revoke_stmt
@@ -6934,6 +6935,7 @@ preparable_stmt:
 | drop_stmt      // help texts in sub-rule
 | explain_stmt   // EXTEND WITH HELP: EXPLAIN
 | import_stmt    // EXTEND WITH HELP: IMPORT
+| run_schedules_stmt // EXTEND WITH HELP: RUN SCHEDULES
 | insert_stmt    // EXTEND WITH HELP: INSERT
 | inspect_stmt   // EXTEND WITH HELP: INSPECT
 | pause_stmt     // help texts in sub-rule
@@ -9654,7 +9656,7 @@ show_job_options:
 // %Text:
 // SHOW [RUNNING | PAUSED] SCHEDULES [FOR BACKUP]
 // SHOW SCHEDULE <schedule_id>
-// %SeeAlso: PAUSE SCHEDULES, RESUME SCHEDULES, DROP SCHEDULES
+// %SeeAlso: PAUSE SCHEDULES, RESUME SCHEDULES, DROP SCHEDULES, RUN SCHEDULES
 show_schedules_stmt:
   SHOW SCHEDULES opt_schedule_executor_type
   {
@@ -10110,7 +10112,7 @@ opt_show_create_format_options:
 // %Text:
 // SHOW CREATE ALL SCHEDULES
 // SHOW CREATE SCHEDULE <schedule_id>
-// %SeeAlso: SHOW SCHEDULES, PAUSE SCHEDULES, RESUME SCHEDULES, DROP SCHEDULES
+// %SeeAlso: SHOW SCHEDULES, PAUSE SCHEDULES, RESUME SCHEDULES, DROP SCHEDULES, RUN SCHEDULES
 show_create_schedules_stmt:
   SHOW CREATE ALL SCHEDULES
   {
@@ -10903,7 +10905,7 @@ for_schedules_clause:
 // PAUSE SCHEDULES <selectclause>
 //   select clause: select statement returning schedule id to pause.
 // PAUSE SCHEDULE <scheduleID>
-// %SeeAlso: RESUME SCHEDULES, SHOW JOBS, CANCEL JOBS
+// %SeeAlso: RESUME SCHEDULES, RUN SCHEDULES, SHOW JOBS, CANCEL JOBS
 pause_schedules_stmt:
   PAUSE SCHEDULE a_expr
   {
@@ -13464,7 +13466,7 @@ resume_jobs_stmt:
 //
 // RESUME SCHEDULE <scheduleID>
 //
-// %SeeAlso: PAUSE SCHEDULES, SHOW JOBS, RESUME JOBS
+// %SeeAlso: PAUSE SCHEDULES, RUN SCHEDULES, SHOW JOBS, RESUME JOBS
 resume_schedules_stmt:
   RESUME SCHEDULE a_expr
   {
@@ -13493,7 +13495,7 @@ resume_schedules_stmt:
 //
 // DROP SCHEDULE <scheduleID>
 //
-// %SeeAlso: PAUSE SCHEDULES, SHOW JOBS, CANCEL JOBS
+// %SeeAlso: PAUSE SCHEDULES, RUN SCHEDULES, SHOW JOBS, CANCEL JOBS
 drop_schedule_stmt:
   DROP SCHEDULE a_expr
   {
@@ -13513,6 +13515,35 @@ drop_schedule_stmt:
     }
   }
 | DROP SCHEDULES error // SHOW HELP: DROP SCHEDULES
+
+// %Help: RUN SCHEDULES - run scheduled jobs immediately
+// %Category: Misc
+// %Text:
+// RUN SCHEDULES <selectclause>
+//  selectclause: select statement returning schedule IDs to run.
+//
+// RUN SCHEDULE <scheduleID>
+//
+// %SeeAlso: PAUSE SCHEDULES, RESUME SCHEDULES, DROP SCHEDULES, SHOW JOBS
+run_schedules_stmt:
+  RUN SCHEDULE a_expr
+  {
+    $$.val = &tree.ControlSchedules{
+      Schedules: &tree.Select{
+        Select: &tree.ValuesClause{Rows: []tree.Exprs{tree.Exprs{$3.expr()}}},
+      },
+      Command: tree.RunSchedule,
+    }
+  }
+| RUN SCHEDULE error // SHOW HELP: RUN SCHEDULES
+| RUN SCHEDULES select_stmt
+  {
+    $$.val = &tree.ControlSchedules{
+      Schedules: $3.slct(),
+      Command: tree.RunSchedule,
+    }
+  }
+| RUN SCHEDULES error // SHOW HELP: RUN SCHEDULES
 
 // %Help: SAVEPOINT - start a sub-transaction
 // %Category: Txn
