@@ -61,6 +61,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/ttl/ttlbase"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/sql/vecindex"
+	"github.com/cockroachdb/cockroach/pkg/util/duration"
 	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log/eventpb"
@@ -2775,6 +2776,64 @@ func CreatePartitionTTLMaintenanceJob(
 	return nil
 }
 
+// calculatePartitionMaintenanceSchedule determines the cron schedule for the
+// partition maintenance job based on the partition TTL granularity.
+// The job runs frequently relative to the granularity to ensure timely
+// partition creation/deletion.
+func calculatePartitionMaintenanceSchedule(partitionTTL *catpb.PartitionTTLConfig) (string, error) {
+	if partitionTTL == nil || partitionTTL.Granularity == "" {
+		// Default to hourly if no granularity specified.
+		return "@hourly", nil
+	}
+
+	// Parse the granularity interval string (e.g., "1d", "1h", "30m").
+	interval, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, partitionTTL.Granularity)
+	if err != nil {
+		return "", errors.Wrapf(err, "parsing partition TTL granularity %q", partitionTTL.Granularity)
+	}
+
+	// Calculate total nanoseconds: months + days + nanos components.
+	// Note: duration.Duration has separate fields for Months, Days, and nanos.
+	const nanosInDay = 24 * int64(time.Hour)
+	const nanosInMonth = 30 * nanosInDay
+	totalNanos := interval.Duration.Months*nanosInMonth +
+		interval.Duration.Days*nanosInDay +
+		interval.Duration.Nanos()
+	granularitySeconds := totalNanos / int64(time.Second)
+
+	// Calculate maintenance frequency: run the job frequently relative to granularity.
+	// For aggressive maintenance (important for testing and production), run at
+	// 1/6th of the granularity period to ensure partitions are created/dropped promptly.
+	// This provides a good balance between responsiveness and overhead.
+	//
+	// Examples:
+	//   - 10 second granularity -> run every minute
+	//   - 1 hour granularity -> run every 10 minutes
+	//   - 1 day granularity -> run every 4 hours
+	//   - 1 week granularity -> run every ~28 hours (daily)
+	maintenanceIntervalSeconds := granularitySeconds / 6
+
+	// Cap the minimum interval at 1 minute to support aggressive testing
+	// with small granularities (down to the minimum 10s granularity).
+	if maintenanceIntervalSeconds < 60 {
+		return "* * * * *", nil // Every minute
+	}
+
+	// Convert to appropriate cron expression based on interval.
+	if maintenanceIntervalSeconds < 3600 {
+		// Less than 1 hour: express as minutes.
+		minutes := maintenanceIntervalSeconds / 60
+		return fmt.Sprintf("*/%d * * * *", minutes), nil
+	} else if maintenanceIntervalSeconds < 86400 {
+		// Less than 1 day: express as hours.
+		hours := maintenanceIntervalSeconds / 3600
+		return fmt.Sprintf("0 */%d * * *", hours), nil
+	}
+
+	// For very large granularities, run daily.
+	return "@daily", nil
+}
+
 // newPartitionTTLScheduledJob returns a *jobs.ScheduledJob for partition TTL
 // for a given table. newPartitionTTLScheduledJob assumes that
 // tblDesc.GetPartitionTTL() is not nil.
@@ -2796,9 +2855,14 @@ func newPartitionTTLScheduledJob(
 		CreationClusterVersion: clusterVersion,
 	})
 
-	// Run partition maintenance hourly to ensure partitions are created/dropped on time.
-	// TODO(SPILLY): Make this configurable based on granularity.
-	if err := sj.SetScheduleAndNextRun("@hourly"); err != nil {
+	// Calculate partition maintenance schedule based on granularity.
+	// Run the job frequently relative to the granularity to ensure partitions
+	// are created/dropped promptly (important for testing and production use).
+	cronSchedule, err := calculatePartitionMaintenanceSchedule(tblDesc.GetPartitionTTL())
+	if err != nil {
+		return nil, err
+	}
+	if err := sj.SetScheduleAndNextRun(cronSchedule); err != nil {
 		return nil, err
 	}
 	args := &catpb.ScheduledPartitionTTLArgs{
