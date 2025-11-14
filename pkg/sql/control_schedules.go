@@ -38,6 +38,8 @@ func collectTelemetry(command tree.ScheduleCommand) {
 		telemetry.Inc(sqltelemetry.ScheduledBackupControlCounter("resume"))
 	case tree.DropSchedule:
 		telemetry.Inc(sqltelemetry.ScheduledBackupControlCounter("drop"))
+	case tree.RunSchedule:
+		telemetry.Inc(sqltelemetry.ScheduledBackupControlCounter("run"))
 	}
 }
 
@@ -149,6 +151,18 @@ func (n *controlSchedulesNode) startExec(params runParams) error {
 						Update(params.ctx, schedule)
 				}
 			}
+		case tree.RunSchedule:
+			// Similar to backup's EXECUTE IMMEDIATELY, set the next run to now.
+			// The job scheduler daemon will pick it up and execute it.
+			if schedule.IsPaused() {
+				err = errors.Newf("cannot run a paused schedule; use RESUME SCHEDULE instead")
+			} else {
+				env := JobSchedulerEnv(params.ExecCfg().JobsKnobs())
+				schedule.SetNextRun(env.Now())
+				err = jobs.ScheduledJobTxn(params.p.InternalSQLTxn()).
+					Update(params.ctx, schedule)
+			}
+
 		case tree.DropSchedule:
 			var ex jobs.ScheduledJobExecutor
 			ex, err = jobs.GetScheduledJobExecutor(schedule.ExecutorType())

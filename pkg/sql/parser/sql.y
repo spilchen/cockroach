@@ -1365,6 +1365,7 @@ func (u *sqlSymUnion) filterType() tree.FilterType {
 %type <tree.Statement> reset_stmt reset_session_stmt reset_csetting_stmt
 %type <tree.Statement> resume_stmt resume_jobs_stmt resume_schedules_stmt resume_all_jobs_stmt
 %type <tree.Statement> drop_schedule_stmt
+%type <tree.Statement> run_schedules_stmt
 %type <tree.Statement> restore_stmt
 %type <tree.StringOrPlaceholderOptList> string_or_placeholder_opt_list
 %type <tree.Statement> revoke_stmt
@@ -6965,6 +6966,7 @@ preparable_stmt:
 | drop_stmt      // help texts in sub-rule
 | explain_stmt   // EXTEND WITH HELP: EXPLAIN
 | import_stmt    // EXTEND WITH HELP: IMPORT
+| run_schedules_stmt // EXTEND WITH HELP: RUN SCHEDULES
 | insert_stmt    // EXTEND WITH HELP: INSERT
 | inspect_stmt   // EXTEND WITH HELP: INSPECT
 | pause_stmt     // help texts in sub-rule
@@ -13544,6 +13546,35 @@ drop_schedule_stmt:
     }
   }
 | DROP SCHEDULES error // SHOW HELP: DROP SCHEDULES
+
+// %Help: RUN SCHEDULES - run scheduled jobs immediately
+// %Category: Misc
+// %Text:
+// RUN SCHEDULES <selectclause>
+//  selectclause: select statement returning schedule IDs to run.
+//
+// RUN SCHEDULE <scheduleID>
+//
+// %SeeAlso: PAUSE SCHEDULES, RESUME SCHEDULES, SHOW JOBS
+run_schedules_stmt:
+  RUN SCHEDULE a_expr
+  {
+    $$.val = &tree.ControlSchedules{
+      Schedules: &tree.Select{
+        Select: &tree.ValuesClause{Rows: []tree.Exprs{tree.Exprs{$3.expr()}}},
+      },
+      Command: tree.RunSchedule,
+    }
+  }
+| RUN SCHEDULE error // SHOW HELP: RUN SCHEDULES
+| RUN SCHEDULES select_stmt
+  {
+    $$.val = &tree.ControlSchedules{
+      Schedules: $3.slct(),
+      Command: tree.RunSchedule,
+    }
+  }
+| RUN SCHEDULES error // SHOW HELP: RUN SCHEDULES
 
 // %Help: SAVEPOINT - start a sub-transaction
 // %Category: Txn

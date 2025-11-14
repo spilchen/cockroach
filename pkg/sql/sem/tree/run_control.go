@@ -92,6 +92,7 @@ const (
 	PauseSchedule ScheduleCommand = iota
 	ResumeSchedule
 	DropSchedule
+	RunSchedule
 )
 
 func (c ScheduleCommand) String() string {
@@ -102,6 +103,8 @@ func (c ScheduleCommand) String() string {
 		return "RESUME"
 	case DropSchedule:
 		return "DROP"
+	case RunSchedule:
+		return "RUN"
 	default:
 		panic("unhandled schedule command")
 	}

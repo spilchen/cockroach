@@ -1756,3 +1756,31 @@ ALTER TABLE tbl_to_add_ttl SET (ttl_expiration_expression = 'expire_at')
 NOTICE: Columns within table tbl_to_add_ttl are referenced as foreign keys. This will make TTL deletion jobs more expensive as dependent rows in other tables will need to be updated as well. To improve performance of the TTL job, consider reducing the value of ttl_delete_batch_size.
 
 subtest end
+
+subtest run_schedule
+
+statement ok
+CREATE TABLE tbl_run_schedule (
+  id INT PRIMARY KEY,
+  expire_at TIMESTAMPTZ NOT NULL DEFAULT now() - '1 day'
+) WITH (ttl_expiration_expression = 'expire_at', ttl_job_cron = '@daily')
+
+# Get the schedule ID.
+let $schedule_id
+SELECT id FROM [SHOW SCHEDULES] WHERE label LIKE '%tbl_run_schedule%'
+
+# Verify RUN SCHEDULE syntax works with a schedule ID.
+statement ok
+RUN SCHEDULE $schedule_id
+
+# Verify RUN SCHEDULES syntax works with a SELECT statement.
+statement ok
+RUN SCHEDULES SELECT $schedule_id
+
+# Verify that the job was created (the schedule execution should have created a job).
+query I
+SELECT count(*) > 0 FROM [SHOW JOBS] WHERE description LIKE '%ttl for%tbl_run_schedule%'
+----
+true
+
+subtest end
