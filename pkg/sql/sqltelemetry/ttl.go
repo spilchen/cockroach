@@ -17,4 +17,7 @@ var (
 
 	// RowLevelTTLExecuted is incremented when a row level TTL job has executed.
 	RowLevelTTLExecuted = telemetry.GetCounterOnce("sql.row_level_ttl.job_executed")
+
+	// PartitionTTLCreated is incremented when a partition TTL table is created.
+	PartitionTTLCreated = telemetry.GetCounterOnce("sql.partition_ttl.created")
 )

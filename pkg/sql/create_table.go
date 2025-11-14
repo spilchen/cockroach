@@ -35,6 +35,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/schemaexpr"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/tabledesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/typedesc"
+	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/sql/paramparse"
 	"github.com/cockroachdb/cockroach/pkg/sql/parser"
 	"github.com/cockroachdb/cockroach/pkg/sql/partition"
@@ -2593,6 +2594,19 @@ func newTableDesc(
 		ttl.ScheduleID = j.ScheduleID()
 	}
 
+	// Partition TTL tables require an immediate partition maintenance job to create initial partitions.
+	if ret.GetPartitionTTL() != nil {
+		if err := CreatePartitionTTLMaintenanceJob(
+			params.ctx,
+			params.ExecCfg().JobRegistry,
+			params.p.InternalSQLTxn(),
+			params.p.User(),
+			ret,
+		); err != nil {
+			return nil, err
+		}
+	}
+
 	// For tables set schema_locked by default if it hasn't been set, and we
 	// aren't running under an internal executor.
 	if !ret.IsView() && !ret.IsSequence() && !ret.IsTemporary() &&
@@ -2668,6 +2682,57 @@ func CreateRowLevelTTLScheduledJob(
 		return nil, err
 	}
 	return j, nil
+}
+
+// CreatePartitionTTLMaintenanceJob creates a partition TTL maintenance job for
+// a table. This job runs immediately to create the initial set of partitions.
+func CreatePartitionTTLMaintenanceJob(
+	ctx context.Context,
+	jobRegistry *jobs.Registry,
+	txn isql.Txn,
+	user username.SQLUsername,
+	tblDesc *tabledesc.Mutable,
+) error {
+	if tblDesc.GetPartitionTTL() == nil {
+		return errors.AssertionFailedf(
+			"CreatePartitionTTLMaintenanceJob called with no partition TTL: %#v",
+			tblDesc,
+		)
+	}
+
+	telemetry.Inc(sqltelemetry.PartitionTTLCreated)
+
+	details := jobspb.PartitionTTLMaintenanceDetails{
+		TableID: tblDesc.GetID(),
+	}
+
+	progress := jobspb.PartitionTTLMaintenanceProgress{
+		// Initially no partitions have been created.
+		PartitionsCreated: 0,
+		PartitionsDropped: 0,
+	}
+
+	description := fmt.Sprintf(
+		"initial partition maintenance for table %s (%d)",
+		tblDesc.GetName(),
+		tblDesc.GetID(),
+	)
+
+	jobRecord := jobs.Record{
+		Description: description,
+		Username:    user,
+		Details:     details,
+		Progress:    progress,
+	}
+
+	jobID := jobRegistry.MakeJobID()
+	if _, err := jobRegistry.CreateJobWithTxn(
+		ctx, jobRecord, jobID, txn,
+	); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func rowLevelTTLAutomaticColumnDef(ttl *catpb.RowLevelTTL) (*tree.ColumnTableDef, error) {

@@ -34,6 +34,7 @@ var (
 	_ Details = ImportDetails{}
 	_ Details = StreamReplicationDetails{}
 	_ Details = RowLevelTTLDetails{}
+	_ Details = PartitionTTLMaintenanceDetails{}
 	_ Details = SchemaTelemetryDetails{}
 	_ Details = KeyVisualizerDetails{}
 	_ Details = AutoConfigRunnerDetails{}
@@ -67,6 +68,7 @@ var (
 	_ ProgressDetails = AutoSpanConfigReconciliationDetails{}
 	_ ProgressDetails = StreamReplicationProgress{}
 	_ ProgressDetails = RowLevelTTLProgress{}
+	_ ProgressDetails = PartitionTTLMaintenanceProgress{}
 	_ ProgressDetails = SchemaTelemetryProgress{}
 	_ ProgressDetails = KeyVisualizerProgress{}
 	_ ProgressDetails = AutoConfigRunnerProgress{}
@@ -359,6 +361,8 @@ func WrapProgressDetails(details ProgressDetails) interface {
 		return &Progress_StreamReplication{StreamReplication: &d}
 	case RowLevelTTLProgress:
 		return &Progress_RowLevelTTL{RowLevelTTL: &d}
+	case PartitionTTLMaintenanceProgress:
+		return &Progress_PartitionTTLMaintenance{PartitionTTLMaintenance: &d}
 	case SchemaTelemetryProgress:
 		return &Progress_SchemaTelemetry{SchemaTelemetry: &d}
 	case KeyVisualizerProgress:
