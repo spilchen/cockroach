@@ -15,6 +15,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
+	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
@@ -29,6 +30,21 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
+)
+
+var (
+	// autoAddPartitionsEnabled controls whether the partition TTL maintenance job
+	// automatically creates new partitions. When disabled, the job will only drop
+	// expired partitions and trigger hybrid cleanup for the dropped data.
+	// This allows manual partition management while still getting automatic cleanup.
+	autoAddPartitionsEnabled = settings.RegisterBoolSetting(
+		settings.ApplicationLevel,
+		"sql.ttl.partition.auto_add_partitions.enabled",
+		"controls whether partition TTL maintenance jobs automatically create new partitions; "+
+			"when disabled, only partition drops and hybrid cleanup are performed",
+		true, // default: enabled (current behavior)
+		settings.WithPublic,
+	)
 )
 
 // PartitionWindow represents the time range for which partitions should exist.
@@ -106,7 +122,8 @@ func (r *PartitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx int
 
 	// Step 3-4: Identify partitions to drop and create.
 	codec := execCfg.Codec
-	toDrop, toCreate, err := r.computePartitionChanges(codec, tableDesc, partitionTTL, window)
+	autoAddEnabled := autoAddPartitionsEnabled.Get(&r.St.SV)
+	toDrop, toCreate, err := r.computePartitionChanges(codec, tableDesc, partitionTTL, window, autoAddEnabled)
 	if err != nil {
 		return err
 	}
@@ -119,9 +136,13 @@ func (r *PartitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx int
 		return errors.Wrap(err, "failed to drop expired partitions")
 	}
 
-	// Step 6: Execute partition creates.
-	if err := r.executePartitionCreates(ctx, db, details.TableID, toCreate); err != nil {
-		return errors.Wrap(err, "failed to create new partitions")
+	// Step 6: Execute partition creates (only if auto-add is enabled).
+	if autoAddEnabled {
+		if err := r.executePartitionCreates(ctx, db, details.TableID, toCreate); err != nil {
+			return errors.Wrap(err, "failed to create new partitions")
+		}
+	} else {
+		log.Dev.Infof(ctx, "skipping partition creation (auto_add_partitions.enabled=false), %d partitions would have been created", len(toCreate))
 	}
 
 	// Step 7: Trigger hybrid cleanup for dropped partitions.
@@ -175,13 +196,21 @@ func (r *PartitionTTLMaintenanceResumer) ComputePartitionWindow(
 }
 
 // computePartitionChanges determines which partitions need to be dropped and created.
-// Partitions with upperBound < window.RetentionStart should be dropped.
-// New partitions should be created to maintain coverage until window.LookaheadEnd.
+//
+// When autoAddEnabled is true:
+//   - Partitions with upperBound < window.RetentionStart are dropped (expired)
+//   - New partitions are created to maintain coverage until window.LookaheadEnd
+//
+// When autoAddEnabled is false:
+//   - Calculate expected partition count: (retention + lookahead) / granularity
+//   - If we have more partitions than expected, drop the oldest ones
+//   - No new partitions are created
 func (r *PartitionTTLMaintenanceResumer) computePartitionChanges(
 	codec keys.SQLCodec,
 	tableDesc catalog.TableDescriptor,
 	config *catpb.PartitionTTLConfig,
 	window PartitionWindow,
+	autoAddEnabled bool,
 ) (toDrop []PartitionSpec, toCreate []PartitionSpec, err error) {
 	// Parse granularity to determine partition interval.
 	granularityInterval, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, config.Granularity)
@@ -200,6 +229,9 @@ func (r *PartitionTTLMaintenanceResumer) computePartitionChanges(
 
 	// Track existing partition upper bounds to avoid creating duplicates.
 	existingUpperBounds := make(map[time.Time]bool)
+
+	// Collect all existing partitions for analysis.
+	var existingPartitions []PartitionSpec
 
 	// Datum allocator for decoding partition bounds.
 	a := &tree.DatumAlloc{}
@@ -243,14 +275,12 @@ func (r *PartitionTTLMaintenanceResumer) computePartitionChanges(
 		// Track existing upper bounds.
 		existingUpperBounds[upperBound] = true
 
-		// Check if this partition should be dropped (upper bound is before retention start).
-		if upperBound.Before(window.RetentionStart) {
-			toDrop = append(toDrop, PartitionSpec{
-				name:       name,
-				lowerBound: lowerBound,
-				upperBound: upperBound,
-			})
-		}
+		// Store partition info for later analysis.
+		existingPartitions = append(existingPartitions, PartitionSpec{
+			name:       name,
+			lowerBound: lowerBound,
+			upperBound: upperBound,
+		})
 
 		return nil
 	})
@@ -258,23 +288,51 @@ func (r *PartitionTTLMaintenanceResumer) computePartitionChanges(
 		return nil, nil, err
 	}
 
-	// Generate partitions to create for coverage until lookaheadEnd.
-	// Start from the retention start and create partitions at granularity intervals.
-	current := TruncateToGranularity(window.RetentionStart, granularityInterval.Duration)
-	for current.Before(window.LookaheadEnd) {
-		next := duration.Add(current, granularityInterval.Duration)
-
-		// Only create if this upper bound doesn't already exist.
-		if !existingUpperBounds[next] {
-			partName := FormatPartitionName(current)
-			toCreate = append(toCreate, PartitionSpec{
-				name:       partName,
-				lowerBound: current,
-				upperBound: next,
-			})
+	// Determine which partitions to drop based on the mode.
+	if autoAddEnabled {
+		// Mode 1: Drop expired partitions (upper bound before retention start).
+		for _, partition := range existingPartitions {
+			if partition.upperBound.Before(window.RetentionStart) {
+				toDrop = append(toDrop, partition)
+			}
 		}
+	} else {
+		// Mode 2: Drop oldest partitions to maintain expected count.
+		// Calculate expected partition count: (retention + lookahead) / granularity.
+		windowDuration := window.LookaheadEnd.Sub(window.RetentionStart)
+		granularityNanos := calculateTotalNanos(granularityInterval.Duration)
+		expectedCount := int(windowDuration.Nanoseconds() / granularityNanos)
 
-		current = next
+		// If we have more partitions than expected, drop the oldest ones.
+		if len(existingPartitions) > expectedCount {
+			// Sort partitions by lower bound (oldest first).
+			sortPartitionsByLowerBound(existingPartitions)
+
+			// Drop the oldest (expectedCount - len(existing)) partitions.
+			numToDrop := len(existingPartitions) - expectedCount
+			toDrop = existingPartitions[:numToDrop]
+		}
+	}
+
+	// Generate partitions to create for coverage until lookaheadEnd (only if auto-add is enabled).
+	if autoAddEnabled {
+		// Start from the retention start and create partitions at granularity intervals.
+		current := TruncateToGranularity(window.RetentionStart, granularityInterval.Duration)
+		for current.Before(window.LookaheadEnd) {
+			next := duration.Add(current, granularityInterval.Duration)
+
+			// Only create if this upper bound doesn't already exist.
+			if !existingUpperBounds[next] {
+				partName := FormatPartitionName(current)
+				toCreate = append(toCreate, PartitionSpec{
+					name:       partName,
+					lowerBound: current,
+					upperBound: next,
+				})
+			}
+
+			current = next
+		}
 	}
 
 	return toDrop, toCreate, nil
@@ -753,6 +811,26 @@ func (r *PartitionTTLMaintenanceResumer) computePartitionPKSpans(
 	}
 
 	return []roachpb.Span{span}, nil
+}
+
+// calculateTotalNanos calculates the total nanoseconds from a duration.Duration,
+// accounting for all components (Months, Days, Nanos).
+func calculateTotalNanos(d duration.Duration) int64 {
+	const nanosInDay = 24 * int64(time.Hour)
+	const nanosInMonth = 30 * nanosInDay
+	return d.Months*nanosInMonth + d.Days*nanosInDay + d.Nanos()
+}
+
+// sortPartitionsByLowerBound sorts partitions by their lower bound timestamp (oldest first).
+func sortPartitionsByLowerBound(partitions []PartitionSpec) {
+	// Simple bubble sort since partition count is typically small.
+	for i := 0; i < len(partitions)-1; i++ {
+		for j := i + 1; j < len(partitions); j++ {
+			if partitions[j].lowerBound.Before(partitions[i].lowerBound) {
+				partitions[i], partitions[j] = partitions[j], partitions[i]
+			}
+		}
+	}
 }
 
 func init() {

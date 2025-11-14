@@ -2621,18 +2621,27 @@ func newTableDesc(
 	if ret.GetPartitionTTL() != nil {
 		partitionTTL := ret.GetPartitionTTL()
 
-		// Create an immediate job to bootstrap initial partitions.
-		if err := CreatePartitionTTLMaintenanceJob(
-			params.ctx,
-			params.ExecCfg().JobRegistry,
-			params.p.InternalSQLTxn(),
-			params.p.User(),
-			ret,
-		); err != nil {
-			return nil, err
+		// Only create an immediate job to bootstrap initial partitions if the table
+		// doesn't already have partitions defined. If partitions were created as part
+		// of the CREATE TABLE statement, skip the immediate job.
+		primaryIndex := ret.GetPrimaryIndex()
+		partitioning := primaryIndex.GetPartitioning()
+		hasExistingPartitions := partitioning.NumRanges() > 0 || partitioning.NumLists() > 0
+
+		if !hasExistingPartitions {
+			// Create an immediate job to bootstrap initial partitions.
+			if err := CreatePartitionTTLMaintenanceJob(
+				params.ctx,
+				params.ExecCfg().JobRegistry,
+				params.p.InternalSQLTxn(),
+				params.p.User(),
+				ret,
+			); err != nil {
+				return nil, err
+			}
 		}
 
-		// Create a scheduled job for ongoing partition maintenance.
+		// Always create a scheduled job for ongoing partition maintenance.
 		j, err := CreatePartitionTTLScheduledJob(
 			params.ctx,
 			params.ExecCfg().JobsKnobs(),
