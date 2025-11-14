@@ -110,7 +110,7 @@ func canDropPartitionTTLSchedule(
 		return true, nil
 	}
 	// If there is a schedule id mismatch we can drop this schedule.
-	if desc.GetPartitionTTL().ScheduleID != schedule.ScheduleID() {
+	if desc.GetPartitionTTL().ScheduleID != int64(schedule.ScheduleID()) {
 		return true, nil
 	}
 	return false, nil

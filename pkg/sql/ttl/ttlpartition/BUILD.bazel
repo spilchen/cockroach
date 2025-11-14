@@ -2,14 +2,19 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "ttlpartition",
-    srcs = ["partition_maintenance_job.go"],
+    srcs = [
+        "partition_maintenance_job.go",
+        "partition_ttl_schedule.go",
+    ],
     importpath = "github.com/cockroachdb/cockroach/pkg/sql/ttl/ttlpartition",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/jobs",
         "//pkg/jobs/jobspb",
         "//pkg/keys",
+        "//pkg/kv",
         "//pkg/roachpb",
+        "//pkg/scheduledjobs",
         "//pkg/security/username",
         "//pkg/settings/cluster",
         "//pkg/sql",
@@ -17,14 +22,21 @@ go_library(
         "//pkg/sql/catalog/catpb",
         "//pkg/sql/catalog/descpb",
         "//pkg/sql/catalog/descs",
+        "//pkg/sql/isql",
         "//pkg/sql/lexbase",
+        "//pkg/sql/pgwire/pgcode",
+        "//pkg/sql/pgwire/pgerror",
         "//pkg/sql/rowenc",
         "//pkg/sql/sem/catid",
         "//pkg/sql/sem/tree",
+        "//pkg/sql/sqlerrors",
         "//pkg/util/duration",
         "//pkg/util/log",
+        "//pkg/util/metric",
         "//pkg/util/timeutil",
         "@com_github_cockroachdb_errors//:errors",
+        "@com_github_cockroachdb_redact//:redact",
+        "@com_github_gogo_protobuf//types",
     ],
 )
 
@@ -34,8 +46,8 @@ go_test(
         "main_test.go",
         "partition_maintenance_job_test.go",
     ],
-    embed = [":ttlpartition"],
     deps = [
+        ":ttlpartition",
         "//pkg/base",
         "//pkg/jobs",
         "//pkg/jobs/jobspb",
