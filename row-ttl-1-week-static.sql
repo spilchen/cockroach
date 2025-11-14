@@ -24,9 +24,9 @@ CREATE TABLE rides (
       --INDEX rides_auto_index_fk_vehicle_city_ref_vehicles (vehicle_city ASC, vehicle_id ASC)
 ) WITH (
     ttl_expiration_expression = "start_time + INTERVAL '1 day'",
-    ttl_job_cron = '* * * * *',
-    ttl_select_batch_size = 2500000,
-    ttl_delete_batch_size = 2500000,
+    ttl_job_cron = '@hourly',
+    ttl_select_batch_size = 500000,
+    ttl_delete_batch_size = 32000,
     ttl_select_rate_limit = 0,
     ttl_delete_rate_limit = 0
 );
