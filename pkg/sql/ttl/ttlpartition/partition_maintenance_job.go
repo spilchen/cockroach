@@ -31,16 +31,16 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-// partitionWindow represents the time range for which partitions should exist.
-type partitionWindow struct {
+// PartitionWindow represents the time range for which partitions should exist.
+type PartitionWindow struct {
 	// retentionStart is the earliest time for which data should be retained (now - retention).
-	retentionStart time.Time
+	RetentionStart time.Time
 	// lookaheadEnd is the furthest time for which partitions should be created (now + lookahead).
-	lookaheadEnd time.Time
+	LookaheadEnd time.Time
 }
 
-// partitionSpec describes a partition to be created or dropped.
-type partitionSpec struct {
+// PartitionSpec describes a partition to be created or dropped.
+type PartitionSpec struct {
 	// name is the partition name (e.g., "p20250113").
 	name string
 	// lowerBound is the inclusive lower bound of the partition.
@@ -49,26 +49,26 @@ type partitionSpec struct {
 	upperBound time.Time
 }
 
-// partitionTTLMaintenanceResumer implements the partition TTL maintenance job.
+// PartitionTTLMaintenanceResumer implements the partition TTL maintenance job.
 // This job is responsible for:
 // 1. Computing the partition window [now - retention, now + lookahead]
 // 2. Dropping expired partitions
 // 3. Creating new partitions to maintain coverage
 // 4. Triggering hybrid cleanup for dropped partitions
-type partitionTTLMaintenanceResumer struct {
-	job *jobs.Job
-	st  *cluster.Settings
+type PartitionTTLMaintenanceResumer struct {
+	Job *jobs.Job
+	St  *cluster.Settings
 }
 
-var _ jobs.Resumer = (*partitionTTLMaintenanceResumer)(nil)
+var _ jobs.Resumer = (*PartitionTTLMaintenanceResumer)(nil)
 
 // Resume implements the jobs.Resumer interface.
-func (r *partitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx interface{}) error {
+func (r *PartitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx interface{}) error {
 	jobExecCtx := execCtx.(sql.JobExecContext)
 	execCfg := jobExecCtx.ExecCfg()
 	db := execCfg.InternalDB
 
-	details := r.job.Details().(jobspb.PartitionTTLMaintenanceDetails)
+	details := r.Job.Details().(jobspb.PartitionTTLMaintenanceDetails)
 
 	log.Dev.Infof(ctx, "partition TTL maintenance job started for table %d", details.TableID)
 
@@ -95,14 +95,14 @@ func (r *partitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx int
 
 	// Step 2: Compute partition window [now - retention, now + lookahead].
 	now := timeutil.Now()
-	window, err := r.computePartitionWindow(partitionTTL, now)
+	window, err := r.ComputePartitionWindow(partitionTTL, now)
 	if err != nil {
 		return err
 	}
 
 	log.Dev.Infof(ctx, "partition window: retention_start=%s, lookahead_end=%s",
-		window.retentionStart.Format(time.RFC3339),
-		window.lookaheadEnd.Format(time.RFC3339))
+		window.RetentionStart.Format(time.RFC3339),
+		window.LookaheadEnd.Format(time.RFC3339))
 
 	// Step 3-4: Identify partitions to drop and create.
 	codec := execCfg.Codec
@@ -130,7 +130,7 @@ func (r *partitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx int
 	}
 
 	// Step 8: Update job progress.
-	if err := r.job.NoTxn().FractionProgressed(ctx, jobs.FractionUpdater(1.0)); err != nil {
+	if err := r.Job.NoTxn().FractionProgressed(ctx, jobs.FractionUpdater(1.0)); err != nil {
 		return errors.Wrap(err, "failed to update job progress")
 	}
 
@@ -139,7 +139,7 @@ func (r *partitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx int
 }
 
 // OnFailOrCancel implements the jobs.Resumer interface.
-func (r *partitionTTLMaintenanceResumer) OnFailOrCancel(
+func (r *PartitionTTLMaintenanceResumer) OnFailOrCancel(
 	ctx context.Context, execCtx interface{}, _ error,
 ) error {
 	// TODO: Implement cleanup logic if needed.
@@ -147,42 +147,42 @@ func (r *partitionTTLMaintenanceResumer) OnFailOrCancel(
 }
 
 // CollectProfile implements the jobs.Resumer interface.
-func (r *partitionTTLMaintenanceResumer) CollectProfile(_ context.Context, _ interface{}) error {
+func (r *PartitionTTLMaintenanceResumer) CollectProfile(_ context.Context, _ interface{}) error {
 	return nil
 }
 
 // computePartitionWindow calculates the time range for which partitions should exist.
 // Returns [now - retention, now + lookahead].
-func (r *partitionTTLMaintenanceResumer) computePartitionWindow(
+func (r *PartitionTTLMaintenanceResumer) ComputePartitionWindow(
 	config *catpb.PartitionTTLConfig, now time.Time,
-) (partitionWindow, error) {
+) (PartitionWindow, error) {
 	// Parse retention duration.
 	retentionInterval, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, config.Retention)
 	if err != nil {
-		return partitionWindow{}, errors.Wrapf(err, "failed to parse retention %q", config.Retention)
+		return PartitionWindow{}, errors.Wrapf(err, "failed to parse retention %q", config.Retention)
 	}
 
 	// Parse lookahead duration.
 	lookaheadInterval, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, config.Lookahead)
 	if err != nil {
-		return partitionWindow{}, errors.Wrapf(err, "failed to parse lookahead %q", config.Lookahead)
+		return PartitionWindow{}, errors.Wrapf(err, "failed to parse lookahead %q", config.Lookahead)
 	}
 
-	return partitionWindow{
-		retentionStart: duration.Add(now, retentionInterval.Duration.Mul(-1)),
-		lookaheadEnd:   duration.Add(now, lookaheadInterval.Duration),
+	return PartitionWindow{
+		RetentionStart: duration.Add(now, retentionInterval.Duration.Mul(-1)),
+		LookaheadEnd:   duration.Add(now, lookaheadInterval.Duration),
 	}, nil
 }
 
 // computePartitionChanges determines which partitions need to be dropped and created.
-// Partitions with upperBound < window.retentionStart should be dropped.
-// New partitions should be created to maintain coverage until window.lookaheadEnd.
-func (r *partitionTTLMaintenanceResumer) computePartitionChanges(
+// Partitions with upperBound < window.RetentionStart should be dropped.
+// New partitions should be created to maintain coverage until window.LookaheadEnd.
+func (r *PartitionTTLMaintenanceResumer) computePartitionChanges(
 	codec keys.SQLCodec,
 	tableDesc catalog.TableDescriptor,
 	config *catpb.PartitionTTLConfig,
-	window partitionWindow,
-) (toDrop []partitionSpec, toCreate []partitionSpec, err error) {
+	window PartitionWindow,
+) (toDrop []PartitionSpec, toCreate []PartitionSpec, err error) {
 	// Parse granularity to determine partition interval.
 	granularityInterval, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, config.Granularity)
 	if err != nil {
@@ -190,7 +190,7 @@ func (r *partitionTTLMaintenanceResumer) computePartitionChanges(
 	}
 
 	// Validate granularity meets minimum requirements.
-	if err := validateGranularity(granularityInterval.Duration, config.Granularity); err != nil {
+	if err := ValidateGranularity(granularityInterval.Duration, config.Granularity); err != nil {
 		return nil, nil, err
 	}
 
@@ -230,12 +230,12 @@ func (r *partitionTTLMaintenanceResumer) computePartitionChanges(
 
 		// Get the lower and upper bound timestamps.
 		var lowerBound, upperBound time.Time
-		lowerBound, err = extractTimestamp(fromTuple.Datums[0])
+		lowerBound, err = ExtractTimestamp(fromTuple.Datums[0])
 		if err != nil {
 			return errors.Wrapf(err, "failed to extract lower bound timestamp for partition %q", name)
 		}
 
-		upperBound, err = extractTimestamp(toTuple.Datums[0])
+		upperBound, err = ExtractTimestamp(toTuple.Datums[0])
 		if err != nil {
 			return errors.Wrapf(err, "failed to extract upper bound timestamp for partition %q", name)
 		}
@@ -244,8 +244,8 @@ func (r *partitionTTLMaintenanceResumer) computePartitionChanges(
 		existingUpperBounds[upperBound] = true
 
 		// Check if this partition should be dropped (upper bound is before retention start).
-		if upperBound.Before(window.retentionStart) {
-			toDrop = append(toDrop, partitionSpec{
+		if upperBound.Before(window.RetentionStart) {
+			toDrop = append(toDrop, PartitionSpec{
 				name:       name,
 				lowerBound: lowerBound,
 				upperBound: upperBound,
@@ -260,14 +260,14 @@ func (r *partitionTTLMaintenanceResumer) computePartitionChanges(
 
 	// Generate partitions to create for coverage until lookaheadEnd.
 	// Start from the retention start and create partitions at granularity intervals.
-	current := truncateToGranularity(window.retentionStart, granularityInterval.Duration)
-	for current.Before(window.lookaheadEnd) {
+	current := TruncateToGranularity(window.RetentionStart, granularityInterval.Duration)
+	for current.Before(window.LookaheadEnd) {
 		next := duration.Add(current, granularityInterval.Duration)
 
 		// Only create if this upper bound doesn't already exist.
 		if !existingUpperBounds[next] {
-			partName := formatPartitionName(current)
-			toCreate = append(toCreate, partitionSpec{
+			partName := FormatPartitionName(current)
+			toCreate = append(toCreate, PartitionSpec{
 				name:       partName,
 				lowerBound: current,
 				upperBound: next,
@@ -281,7 +281,7 @@ func (r *partitionTTLMaintenanceResumer) computePartitionChanges(
 }
 
 // extractTimestamp extracts a time.Time value from a datum.
-func extractTimestamp(d tree.Datum) (time.Time, error) {
+func ExtractTimestamp(d tree.Datum) (time.Time, error) {
 	switch t := d.(type) {
 	case *tree.DTimestamp:
 		return t.Time, nil
@@ -294,7 +294,7 @@ func extractTimestamp(d tree.Datum) (time.Time, error) {
 
 // validateGranularity validates that the granularity meets minimum requirements.
 // The minimum granularity is 10 seconds to prevent creating too many partitions.
-func validateGranularity(granularity duration.Duration, granularityStr string) error {
+func ValidateGranularity(granularity duration.Duration, granularityStr string) error {
 	const minGranularityNanos = int64(10 * time.Second)
 
 	// Month-based granularities are always valid (months are > 10 seconds).
@@ -327,7 +327,7 @@ func validateGranularity(granularity duration.Duration, granularityStr string) e
 //   - 1 day: truncates to midnight UTC
 //   - 6 hours: truncates to 6-hour period (00:00, 06:00, 12:00, 18:00)
 //   - 10 seconds: truncates to 10-second period (useful for testing)
-func truncateToGranularity(t time.Time, granularity duration.Duration) time.Time {
+func TruncateToGranularity(t time.Time, granularity duration.Duration) time.Time {
 	// Handle month-based granularities.
 	if granularity.Months > 0 {
 		// Truncate to the start of the month.
@@ -389,13 +389,13 @@ func truncateToGranularity(t time.Time, granularity duration.Duration) time.Time
 //   - p1736870400000000000 (2025-01-15 00:00:00 UTC)
 //   - p1736956800000000000 (2025-01-16 00:00:00 UTC)
 //   - p1736870400500000000 (2025-01-15 00:00:00.5 UTC for sub-second granularity)
-func formatPartitionName(t time.Time) string {
+func FormatPartitionName(t time.Time) string {
 	return fmt.Sprintf("p%d", t.UnixNano())
 }
 
 // buildDropPartitionStatement constructs an ALTER TABLE DROP PARTITION statement.
 // Returns the SQL statement as a string.
-func buildDropPartitionStatement(tableName *tree.TableName, partitionName string) string {
+func BuildDropPartitionStatement(tableName *tree.TableName, partitionName string) string {
 	escapedPartitionName := lexbase.EscapeSQLIdent(partitionName)
 	return fmt.Sprintf(
 		"ALTER TABLE %s DROP PARTITION IF EXISTS %s WITH DATA",
@@ -406,7 +406,7 @@ func buildDropPartitionStatement(tableName *tree.TableName, partitionName string
 
 // buildAddPartitionStatement constructs an ALTER TABLE ADD PARTITION statement for a RANGE partition.
 // Returns the SQL statement as a string.
-func buildAddPartitionStatement(
+func BuildAddPartitionStatement(
 	tableName *tree.TableName, partitionName string, fromBound, toBound time.Time,
 ) string {
 	escapedPartitionName := lexbase.EscapeSQLIdent(partitionName)
@@ -424,8 +424,8 @@ func buildAddPartitionStatement(
 }
 
 // executePartitionDrops executes ALTER TABLE DROP PARTITION statements for the specified partitions.
-func (r *partitionTTLMaintenanceResumer) executePartitionDrops(
-	ctx context.Context, db *sql.InternalDB, tableID catid.DescID, toDrop []partitionSpec,
+func (r *PartitionTTLMaintenanceResumer) executePartitionDrops(
+	ctx context.Context, db *sql.InternalDB, tableID catid.DescID, toDrop []PartitionSpec,
 ) error {
 	if len(toDrop) == 0 {
 		return nil
@@ -458,7 +458,7 @@ func (r *partitionTTLMaintenanceResumer) executePartitionDrops(
 
 		// Drop each partition.
 		for _, partition := range toDrop {
-			alterStmt := buildDropPartitionStatement(tableName, partition.name)
+			alterStmt := BuildDropPartitionStatement(tableName, partition.name)
 
 			log.Dev.Infof(ctx, "dropping partition %s on table %s (upper bound: %s)",
 				partition.name, tableName.FQString(), partition.upperBound.Format(time.RFC3339))
@@ -476,8 +476,8 @@ func (r *partitionTTLMaintenanceResumer) executePartitionDrops(
 }
 
 // executePartitionCreates executes ALTER TABLE ADD PARTITION statements for the specified partitions.
-func (r *partitionTTLMaintenanceResumer) executePartitionCreates(
-	ctx context.Context, db *sql.InternalDB, tableID catid.DescID, toCreate []partitionSpec,
+func (r *PartitionTTLMaintenanceResumer) executePartitionCreates(
+	ctx context.Context, db *sql.InternalDB, tableID catid.DescID, toCreate []PartitionSpec,
 ) error {
 	if len(toCreate) == 0 {
 		return nil
@@ -510,7 +510,7 @@ func (r *partitionTTLMaintenanceResumer) executePartitionCreates(
 
 		// Create each partition.
 		for _, partition := range toCreate {
-			alterStmt := buildAddPartitionStatement(
+			alterStmt := BuildAddPartitionStatement(
 				tableName, partition.name, partition.lowerBound, partition.upperBound)
 
 			log.Dev.Infof(ctx, "creating partition %s on table %s (from: %s, to: %s)",
@@ -532,12 +532,12 @@ func (r *partitionTTLMaintenanceResumer) executePartitionCreates(
 
 // triggerHybridCleanup creates hybrid cleanup jobs for dropped partitions.
 // These jobs clean up orphaned secondary index entries that remain after partition drops.
-func (r *partitionTTLMaintenanceResumer) triggerHybridCleanup(
+func (r *PartitionTTLMaintenanceResumer) triggerHybridCleanup(
 	ctx context.Context,
 	execCfg *sql.ExecutorConfig,
 	tableDesc catalog.TableDescriptor,
 	config *catpb.PartitionTTLConfig,
-	droppedPartitions []partitionSpec,
+	droppedPartitions []PartitionSpec,
 ) error {
 	// If no partitions were dropped, nothing to clean up.
 	if len(droppedPartitions) == 0 {
@@ -601,11 +601,11 @@ func DetermineNonAlignedIndexes(
 }
 
 // createHybridCleanupJob creates a single hybrid cleanup job for a dropped partition.
-func (r *partitionTTLMaintenanceResumer) createHybridCleanupJob(
+func (r *PartitionTTLMaintenanceResumer) createHybridCleanupJob(
 	ctx context.Context,
 	execCfg *sql.ExecutorConfig,
 	tableDesc catalog.TableDescriptor,
-	partition partitionSpec,
+	partition PartitionSpec,
 	targetIndexIDs []descpb.IndexID,
 ) error {
 	// Compute the PK spans for this partition.
@@ -673,8 +673,8 @@ func (r *partitionTTLMaintenanceResumer) createHybridCleanupJob(
 
 // computePartitionPKSpans computes the primary key spans for a given partition.
 // Returns a span that covers exactly the partition's time range in the primary index.
-func (r *partitionTTLMaintenanceResumer) computePartitionPKSpans(
-	codec keys.SQLCodec, tableDesc catalog.TableDescriptor, partition partitionSpec,
+func (r *PartitionTTLMaintenanceResumer) computePartitionPKSpans(
+	codec keys.SQLCodec, tableDesc catalog.TableDescriptor, partition PartitionSpec,
 ) ([]roachpb.Span, error) {
 	primaryIndex := tableDesc.GetPrimaryIndex()
 
@@ -733,9 +733,9 @@ func (r *partitionTTLMaintenanceResumer) computePartitionPKSpans(
 
 func init() {
 	jobs.RegisterConstructor(jobspb.TypePartitionTTLScheduler, func(job *jobs.Job, settings *cluster.Settings) jobs.Resumer {
-		return &partitionTTLMaintenanceResumer{
-			job: job,
-			st:  settings,
+		return &PartitionTTLMaintenanceResumer{
+			Job: job,
+			St:  settings,
 		}
 	}, jobs.UsesTenantCostControl)
 }

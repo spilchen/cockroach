@@ -3,7 +3,7 @@
 // Use of this software is governed by the CockroachDB Software License
 // included in the /LICENSE file.
 
-package ttlpartition
+package ttlpartition_test
 
 import (
 	"context"
@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/sql/ttl/ttlpartition"
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/skip"
 	"github.com/cockroachdb/cockroach/pkg/util/duration"
@@ -37,13 +38,13 @@ func TestComputePartitionWindow(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 
-	r := &partitionTTLMaintenanceResumer{}
+	r := &ttlpartition.PartitionTTLMaintenanceResumer{}
 
 	testCases := []struct {
 		name           string
 		config         *catpb.PartitionTTLConfig
 		now            time.Time
-		expectedWindow partitionWindow
+		expectedWindow ttlpartition.PartitionWindow
 		expectError    bool
 		errorContains  string
 	}{
@@ -54,9 +55,9 @@ func TestComputePartitionWindow(t *testing.T) {
 				Lookahead: "2 days",
 			},
 			now: time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC),
-			expectedWindow: partitionWindow{
-				retentionStart: time.Date(2024, 12, 16, 12, 0, 0, 0, time.UTC), // 30 days ago
-				lookaheadEnd:   time.Date(2025, 1, 17, 12, 0, 0, 0, time.UTC),  // 2 days ahead
+			expectedWindow: ttlpartition.PartitionWindow{
+				RetentionStart: time.Date(2024, 12, 16, 12, 0, 0, 0, time.UTC), // 30 days ago
+				LookaheadEnd:   time.Date(2025, 1, 17, 12, 0, 0, 0, time.UTC),  // 2 days ahead
 			},
 			expectError: false,
 		},
@@ -67,9 +68,9 @@ func TestComputePartitionWindow(t *testing.T) {
 				Lookahead: "1 day",
 			},
 			now: time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
-			expectedWindow: partitionWindow{
-				retentionStart: time.Date(2025, 1, 8, 0, 0, 0, 0, time.UTC),  // 7 days ago
-				lookaheadEnd:   time.Date(2025, 1, 16, 0, 0, 0, 0, time.UTC), // 1 day ahead
+			expectedWindow: ttlpartition.PartitionWindow{
+				RetentionStart: time.Date(2025, 1, 8, 0, 0, 0, 0, time.UTC),  // 7 days ago
+				LookaheadEnd:   time.Date(2025, 1, 16, 0, 0, 0, 0, time.UTC), // 1 day ahead
 			},
 			expectError: false,
 		},
@@ -97,7 +98,7 @@ func TestComputePartitionWindow(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			window, err := r.computePartitionWindow(tc.config, tc.now)
+			window, err := r.ComputePartitionWindow(tc.config, tc.now)
 
 			if tc.expectError {
 				require.Error(t, err)
@@ -106,14 +107,14 @@ func TestComputePartitionWindow(t *testing.T) {
 				}
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, tc.expectedWindow.retentionStart, window.retentionStart)
-				require.Equal(t, tc.expectedWindow.lookaheadEnd, window.lookaheadEnd)
+				require.Equal(t, tc.expectedWindow.RetentionStart, window.RetentionStart)
+				require.Equal(t, tc.expectedWindow.LookaheadEnd, window.LookaheadEnd)
 			}
 		})
 	}
 }
 
-// TestExtractTimestamp tests the extractTimestamp helper function.
+// TestExtractTimestamp tests the ttlpartition.ExtractTimestamp helper function.
 func TestExtractTimestamp(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -147,7 +148,7 @@ func TestExtractTimestamp(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := extractTimestamp(tc.datum)
+			result, err := ttlpartition.ExtractTimestamp(tc.datum)
 
 			if tc.expectError {
 				require.Error(t, err)
@@ -162,7 +163,7 @@ func TestExtractTimestamp(t *testing.T) {
 	}
 }
 
-// TestValidateGranularity tests the validateGranularity helper function.
+// TestValidateGranularity tests the ttlpartition.ValidateGranularity helper function.
 func TestValidateGranularity(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -228,7 +229,7 @@ func TestValidateGranularity(t *testing.T) {
 			granularityInterval, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, tc.granularity)
 			require.NoError(t, err)
 
-			err = validateGranularity(granularityInterval.Duration, tc.granularity)
+			err = ttlpartition.ValidateGranularity(granularityInterval.Duration, tc.granularity)
 
 			if tc.expectError {
 				require.Error(t, err)
@@ -242,7 +243,7 @@ func TestValidateGranularity(t *testing.T) {
 	}
 }
 
-// TestTruncateToGranularity tests the truncateToGranularity helper function.
+// TestTruncateToGranularity tests the ttlpartition.TruncateToGranularity helper function.
 func TestTruncateToGranularity(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -320,15 +321,15 @@ func TestTruncateToGranularity(t *testing.T) {
 			granularityInterval, err := tree.ParseDInterval(duration.IntervalStyle_POSTGRES, tc.granularity)
 			require.NoError(t, err)
 
-			result := truncateToGranularity(tc.input, granularityInterval.Duration)
+			result := ttlpartition.TruncateToGranularity(tc.input, granularityInterval.Duration)
 			require.Equal(t, tc.expected, result,
-				"truncateToGranularity(%v, %s) = %v, want %v",
+				"ttlpartition.TruncateToGranularity(%v, %s) = %v, want %v",
 				tc.input, tc.granularity, result, tc.expected)
 		})
 	}
 }
 
-// TestFormatPartitionName tests the formatPartitionName helper function.
+// TestFormatPartitionName tests the ttlpartition.FormatPartitionName helper function.
 func TestFormatPartitionName(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -362,13 +363,13 @@ func TestFormatPartitionName(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := formatPartitionName(tc.input)
+			result := ttlpartition.FormatPartitionName(tc.input)
 			require.Equal(t, tc.expected, result)
 		})
 	}
 }
 
-// TestBuildDropPartitionStatement tests the buildDropPartitionStatement helper function.
+// TestBuildDropPartitionStatement tests the ttlpartition.BuildDropPartitionStatement helper function.
 func TestBuildDropPartitionStatement(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -401,13 +402,13 @@ func TestBuildDropPartitionStatement(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := buildDropPartitionStatement(tc.tableName, tc.partitionName)
+			result := ttlpartition.BuildDropPartitionStatement(tc.tableName, tc.partitionName)
 			require.Equal(t, tc.expected, result)
 		})
 	}
 }
 
-// TestBuildAddPartitionStatement tests the buildAddPartitionStatement helper function.
+// TestBuildAddPartitionStatement tests the ttlpartition.BuildAddPartitionStatement helper function.
 func TestBuildAddPartitionStatement(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -448,7 +449,7 @@ func TestBuildAddPartitionStatement(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := buildAddPartitionStatement(tc.tableName, tc.partitionName, tc.fromBound, tc.toBound)
+			result := ttlpartition.BuildAddPartitionStatement(tc.tableName, tc.partitionName, tc.fromBound, tc.toBound)
 			require.Equal(t, tc.expected, result)
 		})
 	}
@@ -482,7 +483,7 @@ func TestComputePartitionPKSpans(t *testing.T) {
 // resumer correctly updates progress to 1.0 on completion.
 //
 // Note: Since PartitionTTLMaintenanceDetails doesn't have a registered Progress type yet,
-// we use a compatible job type (RowLevelTTL) but instantiate the actual partitionTTLMaintenanceResumer
+// we use a compatible job type (RowLevelTTL) but instantiate the actual ttlpartition.PartitionTTLMaintenanceResumer
 // to test its progress update mechanism. This validates that step 8's FractionProgressed call works correctly.
 func TestPartitionTTLJobProgress(t *testing.T) {
 	defer leaktest.AfterTest(t)()
@@ -511,14 +512,14 @@ func TestPartitionTTLJobProgress(t *testing.T) {
 
 	// Create the actual partition TTL maintenance resumer to test.
 	// This tests the real resumer code that's used in production.
-	resumer := &partitionTTLMaintenanceResumer{
-		job: job,
-		st:  settings,
+	resumer := &ttlpartition.PartitionTTLMaintenanceResumer{
+		Job: job,
+		St:  settings,
 	}
 
 	// Test the progress update API that's used in step 8.
 	// This is the exact same call made at partition_maintenance_job.go:133.
-	err = resumer.job.NoTxn().FractionProgressed(ctx, jobs.FractionUpdater(1.0))
+	err = resumer.Job.NoTxn().FractionProgressed(ctx, jobs.FractionUpdater(1.0))
 	require.NoError(t, err)
 
 	// Verify progress is now 1.0.
@@ -529,7 +530,7 @@ func TestPartitionTTLJobProgress(t *testing.T) {
 		"progress fraction should be 1.0 after step 8 completion")
 }
 
-// TestDetermineNonAlignedIndexes tests the DetermineNonAlignedIndexes helper function.
+// TestDetermineNonAlignedIndexes tests the ttlpartition.DetermineNonAlignedIndexes helper function.
 func TestDetermineNonAlignedIndexes(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
@@ -654,7 +655,7 @@ func TestDetermineNonAlignedIndexes(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			// Get the table descriptor and call DetermineNonAlignedIndexes.
+			// Get the table descriptor and call ttlpartition.DetermineNonAlignedIndexes.
 			var nonAlignedIndexes []descpb.IndexID
 			err = db.DescsTxn(ctx, func(ctx context.Context, txn descs.Txn) error {
 				tableDesc, err := txn.Descriptors().ByIDWithLeased(txn.KV()).WithoutNonPublic().Get().Table(ctx, tableID)
@@ -662,7 +663,7 @@ func TestDetermineNonAlignedIndexes(t *testing.T) {
 					return err
 				}
 
-				nonAlignedIndexes, err = DetermineNonAlignedIndexes(tableDesc, tc.partitionCol)
+				nonAlignedIndexes, err = ttlpartition.DetermineNonAlignedIndexes(tableDesc, tc.partitionCol)
 				return err
 			})
 			require.NoError(t, err)
