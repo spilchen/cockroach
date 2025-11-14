@@ -717,3 +717,153 @@ statement ok
 DROP TABLE t_auto_partitioning
 
 subtest end
+
+subtest partition_ttl_schedule_cleanup_on_drop_table
+
+# Test that partition TTL schedules are properly cleaned up when tables are dropped.
+statement ok
+CREATE TABLE tbl_schedule_cleanup (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  data STRING,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '7d',
+  ttl_granularity = '1d',
+  ttl_lookahead = '2d'
+)
+
+# Get the label for the scheduled job to verify it exists.
+let $label_suffix
+SELECT relname || ' [' || oid || ']' FROM pg_class WHERE relname = 'tbl_schedule_cleanup'
+
+# Verify that a partition TTL schedule was created.
+query I
+SELECT count(1) FROM [SHOW SCHEDULES]
+WHERE label = 'partition-ttl: $label_suffix'
+----
+1
+
+# Drop the table.
+statement ok
+DROP TABLE tbl_schedule_cleanup
+
+# Verify the schedule was deleted.
+query I
+SELECT count(1) FROM [SHOW SCHEDULES]
+WHERE label = 'partition-ttl: $label_suffix'
+----
+0
+
+subtest end
+
+subtest partition_ttl_schedule_cleanup_on_drop_schema
+
+# Create TTL on a different schema and ensure schedules are removed when dropped.
+statement ok
+CREATE SCHEMA drop_me_partition
+
+statement ok
+CREATE TABLE drop_me_partition.tbl (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '10d'
+)
+
+statement ok
+CREATE TABLE drop_me_partition.tbl2 (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '10d'
+)
+
+let $label_suffix
+SELECT relname || ' [' || oid || ']' FROM pg_class WHERE relname = 'tbl' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'drop_me_partition')
+
+# Verify partition TTL schedule exists.
+query I
+SELECT count(1) FROM [SHOW SCHEDULES]
+WHERE label = 'partition-ttl: $label_suffix'
+----
+1
+
+# Drop the schema with CASCADE.
+statement ok
+DROP SCHEMA drop_me_partition CASCADE
+
+# Verify the schedules were deleted.
+query I
+SELECT count(1) FROM [SHOW SCHEDULES]
+WHERE label = 'partition-ttl: $label_suffix'
+----
+0
+
+subtest end
+
+subtest partition_ttl_schedule_cleanup_on_drop_database
+
+# Create TTL on a different database and ensure schedules are removed when dropped.
+statement ok
+CREATE DATABASE drop_me_partition_db
+
+statement ok
+USE drop_me_partition_db
+
+statement ok
+CREATE TABLE tbl (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '10d'
+)
+
+statement ok
+CREATE TABLE tbl2 (
+  ts TIMESTAMPTZ NOT NULL,
+  id INT,
+  PRIMARY KEY (ts, id)
+) WITH (
+  ttl_mode = 'partition',
+  ttl_column = 'ts',
+  ttl_retention = '10d'
+)
+
+let $label_suffix
+SELECT relname || ' [' || oid || ']' FROM pg_class WHERE relname = 'tbl'
+
+# Verify partition TTL schedule exists.
+query I
+SELECT count(1) FROM [SHOW SCHEDULES]
+WHERE label = 'partition-ttl: $label_suffix'
+----
+1
+
+# Switch back to test database before dropping.
+statement ok
+USE test
+
+# Drop the database.
+statement ok
+DROP DATABASE drop_me_partition_db
+
+# Verify the schedules were deleted.
+query I
+SELECT count(1) FROM [SHOW SCHEDULES]
+WHERE label = 'partition-ttl: $label_suffix'
+----
+0
+
+subtest end

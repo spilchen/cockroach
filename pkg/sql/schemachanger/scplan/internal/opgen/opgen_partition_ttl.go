@@ -6,6 +6,7 @@
 package opgen
 
 import (
+	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scop"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
 )
@@ -23,8 +24,12 @@ func init() {
 		toAbsent(
 			scpb.Status_PUBLIC,
 			to(scpb.Status_ABSENT,
-				emit(func(this *scpb.PartitionTTL) *scop.NotImplementedForPublicObjects {
-					return notImplementedForPublicObjects(this)
+				// TODO(postamar): remove revertibility constraint when possible
+				revertible(false),
+				emit(func(this *scpb.PartitionTTL) *scop.DeleteSchedule {
+					return &scop.DeleteSchedule{
+						ScheduleID: jobspb.ScheduleID(this.ScheduleID),
+					}
 				}),
 			),
 		),
