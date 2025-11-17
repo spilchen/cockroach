@@ -4,6 +4,8 @@ cluster=${CLUSTER:-local}
 
 roachprod put $cluster cockroach cockroach
 roachprod put $cluster last-ttl-partition-maintenance-job.sql last-ttl-partition-maintenance-job.sql
+roachprod put $cluster last-row-level-ttl-job.sql last-row-level-ttl-job.sql
+roachprod put $cluster last-hybrid-ttl-job.sql last-hybrid-ttl-job.sql
 roachprod put $cluster partition-ttl-1-week-static.sql partition-ttl-1-week-static.sql
 roachprod put $cluster row-ttl-1-week-static.sql row-ttl-1-week-static.sql
 roachprod put $cluster partition-ttl-schedule.sql partition-ttl-schedule.sql

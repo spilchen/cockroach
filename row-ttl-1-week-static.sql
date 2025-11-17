@@ -19,16 +19,16 @@ CREATE TABLE rides (
     start_time TIMESTAMPTZ NULL,
     end_time TIMESTAMPTZ NULL,
     revenue DECIMAL(10,2) NULL,
-    CONSTRAINT rides_pkey PRIMARY KEY (city ASC, id ASC) -- ,
-      --INDEX rides_auto_index_fk_city_ref_users (city ASC, rider_id ASC),
-      --INDEX rides_auto_index_fk_vehicle_city_ref_vehicles (vehicle_city ASC, vehicle_id ASC)
+    CONSTRAINT rides_pkey PRIMARY KEY (city ASC, id ASC) --,
+    --INDEX rides_auto_index_fk_city_ref_users (city ASC, rider_id ASC),
+    --INDEX rides_auto_index_fk_vehicle_city_ref_vehicles (vehicle_city ASC, vehicle_id ASC)
 ) WITH (
-    ttl_expiration_expression = "start_time + INTERVAL '1 day'",
+    ttl_expiration_expression = "CASE WHEN start_time < '2025-11-02 00:00:00+00'::TIMESTAMPTZ THEN '2000-01-01 00:00:00+00'::TIMESTAMPTZ ELSE '2099-12-31 00:00:00+00'::TIMESTAMPTZ END",
     ttl_job_cron = '@hourly',
     ttl_select_batch_size = 500000,
     ttl_delete_batch_size = 32000,
-    ttl_select_rate_limit = 0,
-    ttl_delete_rate_limit = 0
+    ttl_select_rate_limit = 9223372036854775807,
+    ttl_delete_rate_limit = 9223372036854775807
 );
 
 IMPORT INTO rides CSV DATA ('nodelocal://1/rides_csv/*/*');
