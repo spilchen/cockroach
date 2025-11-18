@@ -80,6 +80,7 @@ var _ jobs.Resumer = (*PartitionTTLMaintenanceResumer)(nil)
 
 // Resume implements the jobs.Resumer interface.
 func (r *PartitionTTLMaintenanceResumer) Resume(ctx context.Context, execCtx interface{}) error {
+
 	jobExecCtx := execCtx.(sql.JobExecContext)
 	execCfg := jobExecCtx.ExecCfg()
 	db := execCfg.InternalDB
@@ -730,17 +731,33 @@ func (r *PartitionTTLMaintenanceResumer) createHybridCleanupJob(
 			PartitionSpans: pkSpans,
 		}
 
+		// TODO(partition-ttl): hack. This small sleep is necessary so that the TTL
+		// hybrid cleaner uses an AOST after the last schema change. If it's before
+		// the schema change (partition operations), then the delete won't work.
+		// This sleep needs to be bigger than DefaultAOSTDuration, which itself
+		// was lowered for the prototype.
+		time.Sleep(100 * time.Microsecond)
+
 		// Create the job record.
+		// TODO(partition-ttl): The Cutoff field is being set to timeutil.Now() as a workaround
+		// to avoid "found a recent schema change" errors. The hybrid cleanup job checks if
+		// desc.GetModificationTime() > (Cutoff + AOST duration). If we use partition.upperBound
+		// (which is in the past), the check will fail when the descriptor was just modified by
+		// partition drop/create operations. This workaround may not be appropriate for production.
+		// Consider either:
+		// 1. Adjusting the AOST check in the hybrid cleanup job to handle this case
+		// 2. Using a different timestamp strategy for partition-based hybrid cleanup
+		// 3. Delaying hybrid cleanup job creation to avoid the recent schema change check
 		record := jobs.Record{
 			Description: description,
 			Username:    username.NodeUserName(),
 			Details: jobspb.RowLevelTTLDetails{
 				TableID:              tableDesc.GetID(),
-				Cutoff:               partition.upperBound, // Use partition end as cutoff
+				Cutoff:               timeutil.Now(),
 				TableVersion:         tableDesc.GetVersion(),
 				HybridCleanerDetails: hybridCleanerDetails,
 			},
-			Progress: jobspb.RowLevelTTLProgress{},
+			Progress: jobspb.RowLevelTTLProgress{UseCheckpointing: true},
 		}
 
 		// Submit the job using the transaction.

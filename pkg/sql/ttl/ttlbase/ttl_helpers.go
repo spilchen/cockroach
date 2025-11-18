@@ -24,7 +24,10 @@ import (
 const (
 	// DefaultAOSTDuration is the default duration to use in the AS OF SYSTEM TIME
 	// clause used in the SELECT query.
-	DefaultAOSTDuration         = -time.Second * 30
+	// TODO(SPILLY): changing this in the prototype to get the hybrid TTL cleaner
+	// to run. However, the value using for AOST in the TTL cleaner job is before
+	// a schema change, which prevents a DELETE.
+	DefaultAOSTDuration         = -time.Microsecond * 30
 	DefaultSelectBatchSizeValue = 500
 )
 
