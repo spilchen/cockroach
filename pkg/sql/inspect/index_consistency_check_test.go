@@ -766,3 +766,37 @@ func TestMissingIndexEntryWithHistoricalQuery(t *testing.T) {
 	require.Contains(t, err.Error(), "INSPECT found inconsistencies",
 		"INSPECT should detect the missing index entry that existed at the historical timestamp")
 }
+
+// TestInspectASOFAfterPrimaryKeySwapFails runs an INSPECT ASOF statement while
+// doing a schema change after the ASOF time.
+func TestInspectASOFAfterPrimaryKeySwap(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	ctx := context.Background()
+	s, db, _ := serverutils.StartServer(t, base.TestServerArgs{})
+	defer s.Stopper().Stop(ctx)
+	r := sqlutils.MakeSQLRunner(db)
+
+	r.ExecMultiple(t,
+		`SET enable_inspect_command = true`,
+		`CREATE DATABASE t`,
+		`CREATE TABLE t.pk_swap (
+			old_pk INT PRIMARY KEY,
+			new_pk INT UNIQUE NOT NULL,
+			payload INT NOT NULL,
+			INDEX payload_idx (payload)
+		)`,
+		`INSERT INTO t.pk_swap SELECT i, i+100, i+200 FROM generate_series(1, 5) AS g(i)`,
+	)
+
+	var asOf string
+	r.QueryRow(t, `SELECT cluster_logical_timestamp()`).Scan(&asOf)
+
+	// Rewrite the table descriptors by swapping the primary key.
+	r.Exec(t, `ALTER TABLE t.pk_swap ALTER PRIMARY KEY USING COLUMNS (new_pk)`)
+
+	inspectStmt := fmt.Sprintf(`INSPECT TABLE t.pk_swap AS OF SYSTEM TIME '%s' WITH OPTIONS INDEX ALL`, asOf)
+	_, err := db.Exec(inspectStmt)
+	require.NoError(t, err)
+}
