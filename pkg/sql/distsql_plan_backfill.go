@@ -12,15 +12,13 @@ import (
 	"unsafe"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
-	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
+	"github.com/cockroachdb/cockroach/pkg/sql/backfill"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
-	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
-	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/physicalplan"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -86,27 +84,28 @@ var initialSplitsPerProcessor = settings.RegisterIntSetting(
 	settings.NonNegativeInt,
 )
 
-var distributedMergeIndexBackfillEnabled = settings.RegisterBoolSetting(
-	settings.ApplicationLevel,
-	"bulkio.index_backfill.distributed_merge.enabled",
-	"enable the distributed merge pipeline for index backfills",
-	false,
-)
+func enableDistributedMergeIndexBackfillSink(
+	nodeID base.SQLInstanceID, spec *execinfrapb.BackfillerSpec,
+) {
+	spec.UseDistributedMergeSink = true
+	spec.DistributedMergeFilePrefix = fmt.Sprintf("nodelocal://%d/index-backfill", nodeID)
+}
 
 func maybeEnableDistributedMergeIndexBackfill(
 	ctx context.Context,
 	st *cluster.Settings,
 	nodeID base.SQLInstanceID,
+	consumer backfill.DistributedMergeConsumer,
 	spec *execinfrapb.BackfillerSpec,
 ) error {
-	if !distributedMergeIndexBackfillEnabled.Get(&st.SV) {
+	useDistributedMerge, err := backfill.ShouldEnableDistributedMergeIndexBackfill(ctx, st, consumer)
+	if err != nil {
+		return err
+	}
+	if !useDistributedMerge {
 		return nil
 	}
-	if !st.Version.IsActive(ctx, clusterversion.V26_1) {
-		return pgerror.New(pgcode.FeatureNotSupported, "distributed merge requires cluster version 26.1")
-	}
-	spec.UseDistributedMergeSink = true
-	spec.DistributedMergeFilePrefix = fmt.Sprintf("nodelocal://%d/index-backfill", nodeID)
+	enableDistributedMergeIndexBackfillSink(nodeID, spec)
 	return nil
 }
 

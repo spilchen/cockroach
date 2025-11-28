@@ -38,6 +38,11 @@ func executeMutationOps(
 	}
 	// Execute deferred ops last.
 	nvs := deferredState{}
+	mode, err := DetermineDistributedMergeMode(ctx, deps.ClusterSettings())
+	if err != nil {
+		return err
+	}
+	nvs.distributedMergeMode = mode
 	nv := scmutationexec.NewDeferredVisitor(&nvs)
 	for _, op := range ops {
 		if dop, ok := op.(scop.DeferredMutationOp); ok {

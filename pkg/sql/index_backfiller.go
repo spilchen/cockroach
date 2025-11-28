@@ -121,6 +121,12 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	updateSSTManifests := func(newManifests []jobspb.IndexBackfillSSTManifest) {
 		progress.SSTManifests = sstManifestBuf.Append(newManifests)
 	}
+	payload := job.Payload()
+	details := payload.GetNewSchemaChange()
+	if details == nil {
+		return errors.AssertionFailedf("expected new schema change details on job %d", job.ID())
+	}
+	mode := details.DistributedMergeMode
 	updateFunc := func(
 		ctx context.Context, meta *execinfrapb.ProducerMetadata,
 	) error {
@@ -175,6 +181,7 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	// timestamp because other writing transactions have been writing at the
 	// appropriate timestamps in-between.
 	readAsOf := now
+	useDistributedMerge := mode == jobspb.IndexBackfillDistributedMergeMode_INDEX_BACKFILL_DISTRIBUTED_MERGE_MODE_ENABLED
 	run, retErr := ib.plan(
 		ctx,
 		descriptor,
@@ -184,6 +191,7 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 		spansToDo,
 		progress.DestIndexIDs,
 		progress.SourceIndexID,
+		useDistributedMerge,
 		updateFunc,
 	)
 	if retErr != nil {
@@ -235,6 +243,7 @@ func (ib *IndexBackfillPlanner) plan(
 	sourceSpans []roachpb.Span,
 	indexesToBackfill []descpb.IndexID,
 	sourceIndexID descpb.IndexID,
+	useDistributedMerge bool,
 	callback func(_ context.Context, meta *execinfrapb.ProducerMetadata) error,
 ) (runFunc func(context.Context) error, _ error) {
 
@@ -258,8 +267,8 @@ func (ib *IndexBackfillPlanner) plan(
 			*td.TableDesc(), writeAsOf, writeAtRequestTimestamp, chunkSize,
 			indexesToBackfill, sourceIndexID,
 		)
-		if err := maybeEnableDistributedMergeIndexBackfill(ctx, ib.execCfg.Settings, ib.execCfg.NodeInfo.NodeID.SQLInstanceID(), &spec); err != nil {
-			return err
+		if useDistributedMerge {
+			enableDistributedMergeIndexBackfillSink(ib.execCfg.NodeInfo.NodeID.SQLInstanceID(), &spec)
 		}
 		var err error
 		p, err = ib.execCfg.DistSQLPlanner.createBackfillerPhysicalPlan(ctx, planCtx, spec, sourceSpans)

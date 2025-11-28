@@ -29,6 +29,10 @@ import (
 func CreateDeclarativeSchemaChangeJobs(
 	ctx context.Context, registry *jobs.Registry, txn isql.Txn, allMut nstree.Catalog,
 ) ([]jobspb.JobID, error) {
+	mode, err := scexec.DetermineDistributedMergeMode(ctx, registry.ClusterSettings())
+	if err != nil {
+		return nil, err
+	}
 	byJobID := make(map[catpb.JobID][]catalog.MutableDescriptor)
 	_ = allMut.ForEachDescriptor(func(d catalog.Descriptor) error {
 		if s := d.GetDeclarativeSchemaChangerState(); s != nil {
@@ -89,6 +93,7 @@ func CreateDeclarativeSchemaChangeJobs(
 			currentState.Authorization,
 			screl.AllTargetStateDescIDs(currentState.TargetState),
 			runningStatus,
+			mode,
 		))
 	}
 	jobIDs, err := registry.CreateJobsWithTxn(ctx, txn, records)

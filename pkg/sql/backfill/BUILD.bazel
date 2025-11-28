@@ -4,6 +4,7 @@ go_library(
     name = "backfill",
     srcs = [
         "backfill.go",
+        "distributed_merge_mode.go",
         "index_backfiller_cols.go",
         "mvcc_index_merger.go",
     ],
@@ -17,6 +18,7 @@ go_library(
         "//pkg/kv/kvpb",
         "//pkg/roachpb",
         "//pkg/settings",
+        "//pkg/settings/cluster",
         "//pkg/sql/catalog",
         "//pkg/sql/catalog/catenumpb",
         "//pkg/sql/catalog/descpb",

@@ -4,6 +4,7 @@ go_library(
     name = "scexec",
     srcs = [
         "dependencies.go",
+        "distributed_merge_mode.go",
         "exec_backfill.go",
         "exec_deferred_mutation.go",
         "exec_immediate_mutation.go",
@@ -25,6 +26,7 @@ go_library(
         "//pkg/roachpb",
         "//pkg/security/username",
         "//pkg/settings/cluster",
+        "//pkg/sql/backfill",
         "//pkg/sql/catalog",
         "//pkg/sql/catalog/catalogkeys",
         "//pkg/sql/catalog/descpb",
