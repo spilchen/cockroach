@@ -248,7 +248,6 @@ func (s dbSplitAndScatterer) findDestination(res *kvpb.AdminScatterResponse) roa
 	return roachpb.NodeID(0)
 }
 
-
 type entryNode struct {
 	entry execinfrapb.RestoreSpanEntry
 	node  roachpb.NodeID
@@ -735,7 +734,6 @@ var splitAndScatterOutputTypes = []*types.T{
 	types.Bytes, // Span key for the range router
 	types.Bytes, // RestoreDataEntry bytes
 }
-
 
 func init() {
 	rowexec.NewGenerativeSplitAndScatterProcessor = newGenerativeSplitAndScatterProcessor

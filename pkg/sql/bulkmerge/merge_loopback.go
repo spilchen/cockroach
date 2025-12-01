@@ -10,12 +10,44 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
-	"github.com/cockroachdb/cockroach/pkg/sql/physicalplan"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowexec"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
+	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
+	"github.com/cockroachdb/errors"
 )
+
+// loopbackMap is a temporary coordination mechanism that lets the merge
+// coordinator enqueue tasks directly into the merge loopback processor running
+// on the same node.
+type loopbackMap struct {
+	syncutil.Mutex
+	loopback map[execinfrapb.FlowID]chan rowenc.EncDatumRow
+}
+
+var loopback = &loopbackMap{loopback: make(map[execinfrapb.FlowID]chan rowenc.EncDatumRow)}
+
+func (l *loopbackMap) get(flowCtx *execinfra.FlowCtx) (chan rowenc.EncDatumRow, bool) {
+	l.Lock()
+	defer l.Unlock()
+	ch, ok := l.loopback[flowCtx.ID]
+	return ch, ok
+}
+
+func (l *loopbackMap) create(flowCtx *execinfra.FlowCtx) (chan rowenc.EncDatumRow, func()) {
+	l.Lock()
+	defer l.Unlock()
+	ch := make(chan rowenc.EncDatumRow)
+	l.loopback[flowCtx.ID] = ch
+	return ch, func() {
+		l.Lock()
+		defer l.Unlock()
+		if existing, ok := l.loopback[flowCtx.ID]; ok && existing == ch {
+			delete(l.loopback, flowCtx.ID)
+		}
+		close(ch)
+	}
+}
 
 var (
 	_ execinfra.Processor = &mergeLoopback{}
@@ -23,54 +55,52 @@ var (
 )
 
 var mergeLoopbackOutputTypes = []*types.T{
-	// Span key for the range router. It encodes the destination
-	// processor's SQL instance ID.
-	types.Bytes,
-	// Task ID
-	types.Int4,
+	types.Bytes, // routing key (encoded SQL instance ID)
+	types.Int4,  // task ID
 }
 
 type mergeLoopback struct {
 	execinfra.ProcessorBase
-	done bool
+	loopback chan rowenc.EncDatumRow
 }
 
 // Next implements execinfra.RowSource.
 func (m *mergeLoopback) Next() (rowenc.EncDatumRow, *execinfrapb.ProducerMetadata) {
-	if m.done {
+	if m.State != execinfra.StateRunning {
+		return nil, m.DrainHelper()
+	}
+	row, ok := <-m.loopback
+	if !ok {
 		m.MoveToDraining(nil)
 		return nil, m.DrainHelper()
 	}
-	m.done = true
-	// Generate a routing key for the current SQL instance (where this processor is running).
-	// This ensures the routing key matches one of the spans in the range router.
-	routingDatum, _ := physicalplan.RoutingDatumsForSQLInstance(m.FlowCtx.NodeID.SQLInstanceID())
-	return rowenc.EncDatumRow{
-		routingDatum,
-		rowenc.EncDatum{Datum: tree.NewDInt(1)},
-	}, nil
+	return row, nil
 }
 
 // Start implements execinfra.RowSource.
 func (m *mergeLoopback) Start(ctx context.Context) {
 	m.StartInternal(ctx, "mergeLoopback")
-	// TODO(jeffswenson): create the initial set of tasks
+	ch, ok := loopback.get(m.FlowCtx)
+	if !ok {
+		m.MoveToDraining(errors.New("loopback channel not found"))
+		return
+	}
+	m.loopback = ch
 }
 
 func init() {
 	rowexec.NewMergeLoopbackProcessor = func(
 		ctx context.Context,
 		flow *execinfra.FlowCtx,
-		flowID int32,
+		processorID int32,
 		spec execinfrapb.MergeLoopbackSpec,
 		postSpec *execinfrapb.PostProcessSpec,
 	) (execinfra.Processor, error) {
 		ml := &mergeLoopback{}
-		err := ml.Init(
-			ctx, ml, postSpec, mergeLoopbackOutputTypes, flow, flowID, nil,
+		if err := ml.Init(
+			ctx, ml, postSpec, mergeLoopbackOutputTypes, flow, processorID, nil,
 			execinfra.ProcStateOpts{},
-		)
-		if err != nil {
+		); err != nil {
 			return nil, err
 		}
 		return ml, nil

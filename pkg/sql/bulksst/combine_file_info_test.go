@@ -53,7 +53,7 @@ func TestCombineFileInfo(t *testing.T) {
 			},
 			schemaSpans: []roachpb.Span{span("a", "z")},
 			expectedSSTs: []execinfrapb.BulkMergeSpec_SST{
-				{URI: "file1.sst", StartKey: roachpb.Key("b"), EndKey: roachpb.Key("d")},
+				{Uri: "file1.sst", StartKey: roachpb.Key("b"), EndKey: roachpb.Key("d")},
 			},
 			expectedMergeSpan: []roachpb.Span{span("a", "z")},
 		},
@@ -73,8 +73,8 @@ func TestCombineFileInfo(t *testing.T) {
 			},
 			schemaSpans: []roachpb.Span{span("a", "z")},
 			expectedSSTs: []execinfrapb.BulkMergeSpec_SST{
-				{URI: "file1.sst", StartKey: roachpb.Key("a"), EndKey: roachpb.Key("e")},
-				{URI: "file2.sst", StartKey: roachpb.Key("e"), EndKey: roachpb.Key("z")},
+				{Uri: "file1.sst", StartKey: roachpb.Key("a"), EndKey: roachpb.Key("e")},
+				{Uri: "file2.sst", StartKey: roachpb.Key("e"), EndKey: roachpb.Key("z")},
 			},
 			expectedMergeSpan: []roachpb.Span{
 				span("a", "c"),
@@ -102,8 +102,8 @@ func TestCombineFileInfo(t *testing.T) {
 				span("m", "z"),
 			},
 			expectedSSTs: []execinfrapb.BulkMergeSpec_SST{
-				{URI: "file1.sst", StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
-				{URI: "file2.sst", StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
+				{Uri: "file1.sst", StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
+				{Uri: "file2.sst", StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
 			},
 			expectedMergeSpan: []roachpb.Span{
 				span("a", "c"),
@@ -133,8 +133,8 @@ func TestCombineFileInfo(t *testing.T) {
 				span("m", "z"),
 			},
 			expectedSSTs: []execinfrapb.BulkMergeSpec_SST{
-				{URI: "file1.sst", StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
-				{URI: "file2.sst", StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
+				{Uri: "file1.sst", StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
+				{Uri: "file2.sst", StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
 			},
 			expectedMergeSpan: []roachpb.Span{
 				span("a", "c"),
@@ -159,8 +159,8 @@ func TestCombineFileInfo(t *testing.T) {
 			},
 			schemaSpans: []roachpb.Span{span("a", "z")},
 			expectedSSTs: []execinfrapb.BulkMergeSpec_SST{
-				{URI: "file1a.sst", StartKey: roachpb.Key("a"), EndKey: roachpb.Key("e")},
-				{URI: "file1b.sst", StartKey: roachpb.Key("e"), EndKey: roachpb.Key("m")},
+				{Uri: "file1a.sst", StartKey: roachpb.Key("a"), EndKey: roachpb.Key("e")},
+				{Uri: "file1b.sst", StartKey: roachpb.Key("e"), EndKey: roachpb.Key("m")},
 			},
 			expectedMergeSpan: []roachpb.Span{
 				span("a", "c"),

@@ -45,7 +45,7 @@ func CombineFileInfo(
 			result = append(result, execinfrapb.BulkMergeSpec_SST{
 				StartKey: sst.StartKey,
 				EndKey:   sst.EndKey,
-				URI:      sst.URI,
+				Uri:      sst.URI,
 			})
 		}
 		for _, sample := range file.RowSamples {
