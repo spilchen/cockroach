@@ -83,6 +83,49 @@ func TestDistributedMergeThreeNodes(t *testing.T) {
 	testMergeProcessors(t, tc.Server(nodeIdx))
 }
 
+func TestBulkMergeSpecCarriesOutputConfig(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	ctx := context.Background()
+	dir, cleanup := testutils.TempDir(t)
+	defer cleanup()
+
+	srv := serverutils.StartServerOnly(t, base.TestServerArgs{
+		ExternalIODir:     dir,
+		DefaultTestTenant: base.TestIsSpecificToStorageLayerAndNeedsASystemTenant,
+	})
+	defer srv.Stopper().Stop(ctx)
+
+	execCfg := srv.ApplicationLayer().ExecutorConfig().(sql.ExecutorConfig)
+	tsa := newTestServerAllocator(t, ctx, execCfg)
+
+	jobExecCtx, close := sql.MakeJobExecContext(ctx, "test", username.RootUserName(), &sql.MemoryMetrics{}, &execCfg)
+	defer close()
+
+	bulksst.BatchSize.Override(ctx, &srv.ClusterSettings().SV, 1)
+	fileAllocator := bulksst.NewExternalFileAllocator(tsa.es, tsa.mapPrefix, execCfg.Clock)
+	writer := bulksst.NewUnsortedSSTBatcher(srv.ClusterSettings(), fileAllocator)
+	_ = writeSSTs(t, ctx, writer, 5)
+	ssts := importToMerge(fileAllocator.GetFileList())
+
+	plan, _, err := newBulkMergePlan(ctx, jobExecCtx, ssts, []roachpb.Span{{Key: nil, EndKey: roachpb.KeyMax}}, func(instanceID base.SQLInstanceID) string {
+		return fmt.Sprintf("userfile://defaultdb.public.userfile_table/%s/spec-out-%d", tsa.baseSubdir, instanceID)
+	})
+	require.NoError(t, err)
+	defer plan.Release()
+
+	found := 0
+	for _, proc := range plan.Processors {
+		if spec := proc.Spec.Core.BulkMerge; spec != nil {
+			require.NotNil(t, spec.OutputStore)
+			found++
+		}
+	}
+	require.NotZero(t, found)
+
+}
+
 func randIntSlice(n int) []int {
 	ls := make([]int, n)
 	for i := range ls {

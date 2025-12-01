@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/storageccl"
+	"github.com/cockroachdb/cockroach/pkg/cloud"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/settings"
@@ -196,6 +197,20 @@ func isOverlapping(mergeSpan roachpb.Span, sst execinfrapb.BulkMergeSpec_SST) bo
 	return true
 }
 
+func (m *bulkMergeProcessor) getOutputStorage(ctx context.Context) (cloud.ExternalStorage, error) {
+	if m.spec.OutputStore != nil {
+		store, err := m.flowCtx.Cfg.ExternalStorage(ctx, *m.spec.OutputStore)
+		if err != nil {
+			return nil, err
+		}
+		return store, nil
+	}
+	if m.spec.OutputUri != "" {
+		return m.flowCtx.Cfg.ExternalStorageFromURI(ctx, m.spec.OutputUri, username.RootUserName())
+	}
+	return nil, errors.New("bulk merge spec missing output storage definition")
+}
+
 func (m *bulkMergeProcessor) mergeSSTs(
 	ctx context.Context, taskID taskset.TaskID,
 ) (execinfrapb.BulkMergeSpec_Output, error) {
@@ -205,7 +220,11 @@ func (m *bulkMergeProcessor) mergeSSTs(
 	}
 	mergeSpan := m.spec.Spans[idx]
 
-	destStore, err := m.flowCtx.Cfg.ExternalStorageFromURI(ctx, m.spec.OutputUri, username.RootUserName())
+	if m.spec.OutputUri == "" {
+		return execinfrapb.BulkMergeSpec_Output{}, errors.New("bulk merge spec missing output URI")
+	}
+
+	destStore, err := m.getOutputStorage(ctx)
 	if err != nil {
 		return execinfrapb.BulkMergeSpec_Output{}, err
 	}

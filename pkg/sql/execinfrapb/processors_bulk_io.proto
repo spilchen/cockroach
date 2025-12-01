@@ -615,7 +615,17 @@ message BulkMergeSpec {
   // output_uri is a URI like 'nodelocal://1/<job_id>/merger'. The uri should
   // use this as the base for all output files. So an output file would be
   // 'nodelocal://1/<job_id>/merger/0.sst'
-  optional string output_uri = 3 [(gogoproto.nullable) = false];
+  // TODO(SPILLY): remove this in favour of output_store.
+  optional string output_uri = 3 [(gogoproto.nullable) = false, deprecated = true];
+
+  // output_store provides a fully qualified external storage configuration for
+  // the processor's output location. When present it takes precedence over
+  // output_uri.
+  optional cloud.cloudpb.ExternalStorage output_store = 4;
+
+  // write_timestamp is the MVCC timestamp that downstream ingestion should use
+  // when applying the merged SSTs.
+  optional util.hlc.Timestamp write_timestamp = 5 [(gogoproto.nullable) = false];
 
   message SST {
     // uri is a fully qualifed URI to the SST file. It will look something like

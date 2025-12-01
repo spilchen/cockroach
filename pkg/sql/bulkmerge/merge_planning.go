@@ -12,6 +12,7 @@ import (
 	"slices"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
+	"github.com/cockroachdb/cockroach/pkg/cloud"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catenumpb"
@@ -67,6 +68,12 @@ func newBulkMergePlan(
 
 	mergeStage := plan.NewStageOnNodes(sqlInstanceIDs)
 	for streamID, sqlInstanceID := range sqlInstanceIDs {
+		outputPath := outputURI(sqlInstanceID)
+		storeConf, err := cloud.ExternalStorageConfFromURI(outputPath, execCtx.User())
+		if err != nil {
+			return nil, nil, err
+		}
+		storeConfCopy := storeConf
 		pIdx := plan.AddProcessor(physicalplan.Processor{
 			SQLInstanceID: sqlInstanceID,
 			Spec: execinfrapb.ProcessorSpec{
@@ -75,9 +82,10 @@ func newBulkMergePlan(
 				}},
 				Core: execinfrapb.ProcessorCoreUnion{
 					BulkMerge: &execinfrapb.BulkMergeSpec{
-						Ssts:      ssts,
-						Spans:     spans,
-						OutputUri: outputURI(sqlInstanceID),
+						Ssts:        ssts,
+						Spans:       spans,
+						OutputUri:   outputPath,
+						OutputStore: &storeConfCopy,
 					},
 				},
 				Post: execinfrapb.PostProcessSpec{},
