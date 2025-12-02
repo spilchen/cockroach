@@ -184,7 +184,7 @@ func (p *ingestFileProcessor) processSST(
 	memAcc *mon.BoundAccount,
 	buffer []byte,
 ) ([]byte, error) {
-	file, err := cloudMux.StoreFile(ctx, sst.URI)
+	file, err := cloudMux.StoreFile(ctx, sst.Uri)
 	if err != nil {
 		return buffer, err
 	}
@@ -225,7 +225,7 @@ func (p *ingestFileProcessor) processSST(
 	if err != nil {
 		return buffer, errors.Wrapf(
 			err, "worker %d: failed to ingest SST (uri: %s, start: %s, end: %s)",
-			workerIndex, sst.URI, sst.StartKey, sst.EndKey,
+			workerIndex, sst.Uri, sst.StartKey, sst.EndKey,
 		)
 	}
 	return buffer, nil

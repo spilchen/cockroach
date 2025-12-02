@@ -231,6 +231,8 @@ go_library(
         "//pkg/sql/catalog/lease",
         "//pkg/sql/catalog/schematelemetry",
         "//pkg/sql/catalog/systemschema",
+        "//pkg/sql/bulkingest",
+        "//pkg/sql/bulkmerge",
         "//pkg/sql/clusterunique",
         "//pkg/sql/colexec",
         "//pkg/sql/consistencychecker",
