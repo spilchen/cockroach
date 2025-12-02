@@ -73,3 +73,7 @@ func Merge(
 
 	return result.Ssts, nil
 }
+
+func init() {
+	sql.RegisterBulkMerge(Merge)
+}
