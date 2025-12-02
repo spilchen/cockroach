@@ -350,6 +350,15 @@ func (m *bulkMergeProcessor) mergeSSTs(
 				return execinfrapb.BulkMergeSpec_Output{}, err
 			}
 		}
+
+		hasPoint, hasRange := iter.HasPointAndRange()
+		if hasRange {
+			return execinfrapb.BulkMergeSpec_Output{}, errors.AssertionFailedf("bulk merge processor encountered unsupported MVCC range key")
+		}
+		if !hasPoint {
+			return execinfrapb.BulkMergeSpec_Output{}, errors.AssertionFailedf("bulk merge processor landed on non-point, non-range position")
+		}
+
 		if !writerOpen {
 			if err := openWriter(); err != nil {
 				return execinfrapb.BulkMergeSpec_Output{}, err
