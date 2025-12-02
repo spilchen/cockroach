@@ -59,3 +59,7 @@ func IngestFiles(
 
 	return res.Err()
 }
+
+func init() {
+	sql.RegisterBulkIngest(IngestFiles)
+}

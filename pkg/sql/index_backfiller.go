@@ -210,7 +210,10 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 		return err
 	}
 	progress.SSTManifests = merged
-	return tracker.SetBackfillProgress(ctx, progress)
+	if err := tracker.SetBackfillProgress(ctx, progress); err != nil {
+		return err
+	}
+	return ib.runDistributedIngest(ctx, job, descriptor, progress, merged)
 }
 
 // Index backfilling ingests SSTs that don't play nicely with running txns
@@ -378,4 +381,37 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 		})
 	}
 	return out, nil
+}
+
+func (ib *IndexBackfillPlanner) runDistributedIngest(
+	ctx context.Context,
+	job *jobs.Job,
+	descriptor catalog.TableDescriptor,
+	progress scexec.BackfillProgress,
+	outputs []jobspb.IndexBackfillSSTManifest,
+) error {
+	if len(outputs) == 0 {
+		return nil
+	}
+	spans := make([]roachpb.Span, len(progress.DestIndexIDs))
+	for i, idxID := range progress.DestIndexIDs {
+		spans[i] = descriptor.IndexSpan(ib.execCfg.Codec, idxID)
+	}
+	ssts := make([]execinfrapb.BulkMergeSpec_SST, len(outputs))
+	for i, manifest := range outputs {
+		if manifest.Span == nil {
+			return errors.AssertionFailedf("manifest missing span metadata")
+		}
+		ssts[i] = execinfrapb.BulkMergeSpec_SST{
+			Uri:      manifest.URI,
+			StartKey: append([]byte(nil), manifest.Span.Key...),
+			EndKey:   append([]byte(nil), manifest.Span.EndKey...),
+		}
+	}
+
+	mem := &MemoryMetrics{}
+	jobExecCtx, cleanup := MakeJobExecContext(ctx, "index-backfill-ingest", username.NodeUserName(), mem, ib.execCfg)
+	defer cleanup()
+
+	return invokeBulkIngest(ctx, jobExecCtx, spans, ssts)
 }
