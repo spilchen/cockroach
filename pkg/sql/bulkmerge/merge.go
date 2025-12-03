@@ -37,7 +37,7 @@ func Merge(
 
 	var result execinfrapb.BulkMergeSpec_Output
 	rowWriter := sql.NewCallbackResultWriter(func(ctx context.Context, row tree.Datums) error {
-		return protoutil.Unmarshal([]byte(*row[2].(*tree.DBytes)), &result)
+		return protoutil.Unmarshal([]byte(*row[0].(*tree.DBytes)), &result)
 	})
 
 	evalCtx := execCtx.ExtendedEvalContext()

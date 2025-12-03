@@ -184,7 +184,6 @@ func init() {
 		postSpec *execinfrapb.PostProcessSpec,
 		input execinfra.RowSource,
 	) (execinfra.Processor, error) {
-		channel, cleanup := loopback.create(flow)
 		taskCount := int64(0)
 		if spec.TaskCount != nil {
 			taskCount = *spec.TaskCount
@@ -193,6 +192,10 @@ func init() {
 		if workerCount <= 0 {
 			workerCount = 1
 		}
+		// Buffer the channel to prevent blocking when publishing initial tasks.
+		// TODO(SPILLY): The buffer size should be tuned based on the number of workers.
+		bufferSize := int(workerCount)
+		channel, cleanup := loopback.create(flow, bufferSize)
 		mc := &mergeCoordinator{
 			input:    input,
 			spec:     spec,

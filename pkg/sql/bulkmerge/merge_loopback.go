@@ -34,10 +34,12 @@ func (l *loopbackMap) get(flowCtx *execinfra.FlowCtx) (chan rowenc.EncDatumRow, 
 	return ch, ok
 }
 
-func (l *loopbackMap) create(flowCtx *execinfra.FlowCtx) (chan rowenc.EncDatumRow, func()) {
+func (l *loopbackMap) create(
+	flowCtx *execinfra.FlowCtx, bufferSize int,
+) (chan rowenc.EncDatumRow, func()) {
 	l.Lock()
 	defer l.Unlock()
-	ch := make(chan rowenc.EncDatumRow)
+	ch := make(chan rowenc.EncDatumRow, bufferSize)
 	l.loopback[flowCtx.ID] = ch
 	return ch, func() {
 		l.Lock()

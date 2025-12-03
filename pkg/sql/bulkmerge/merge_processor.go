@@ -280,7 +280,8 @@ func (m *bulkMergeProcessor) mergeSSTs(
 		}
 		writer.Close()
 		if writerCloser != nil {
-			if err := writerCloser.Close(); closeErr == nil {
+			if err := writerCloser.Close(); closeErr == nil && !errors.Is(err, io.EOF) {
+				// Ignore EOF from sink close - it's expected after Finish() succeeds.
 				closeErr = err
 			}
 			writerCloser = nil
@@ -301,7 +302,7 @@ func (m *bulkMergeProcessor) mergeSSTs(
 		if err != nil {
 			return err
 		}
-		writer = storage.MakeIngestionSSTWriter(ctx, m.flowCtx.EvalCtx.Settings, objstorageprovider.NewRemoteWritable(sink))
+		writer = storage.MakeTransportSSTWriter(ctx, m.flowCtx.EvalCtx.Settings, objstorageprovider.NewRemoteWritable(sink))
 		writerCloser = sink
 		currentURI = fmt.Sprintf("%s/%s", baseOutputURI, fileName)
 		writerOpen = true
@@ -359,16 +360,16 @@ func (m *bulkMergeProcessor) mergeSSTs(
 			return execinfrapb.BulkMergeSpec_Output{}, errors.AssertionFailedf("bulk merge processor landed on non-point, non-range position")
 		}
 
-		if !writerOpen {
-			if err := openWriter(); err != nil {
-				return execinfrapb.BulkMergeSpec_Output{}, err
-			}
-		}
-
 		key := iter.UnsafeKey()
 		val, err := iter.UnsafeValue()
 		if err != nil {
 			return execinfrapb.BulkMergeSpec_Output{}, err
+		}
+
+		if !writerOpen {
+			if err := openWriter(); err != nil {
+				return execinfrapb.BulkMergeSpec_Output{}, err
+			}
 		}
 
 		if firstKey == nil {
@@ -377,7 +378,8 @@ func (m *bulkMergeProcessor) mergeSSTs(
 		if err := writer.PutRawMVCC(key, val); err != nil {
 			return execinfrapb.BulkMergeSpec_Output{}, err
 		}
-		lastKey = key.Key.Clone()
+		// Use Next() to ensure endKey is after all MVCC versions of this user key.
+		lastKey = key.Key.Clone().Next()
 		sstSize += int64(len(key.Key) + len(val))
 	}
 

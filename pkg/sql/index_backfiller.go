@@ -347,7 +347,8 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	}
 	targetSpans := make([]roachpb.Span, 0, len(progress.DestIndexIDs))
 	for _, idxID := range progress.DestIndexIDs {
-		targetSpans = append(targetSpans, descriptor.IndexSpan(ib.execCfg.Codec, idxID))
+		span := descriptor.IndexSpan(ib.execCfg.Codec, idxID)
+		targetSpans = append(targetSpans, span)
 	}
 	if len(targetSpans) == 0 {
 		return nil, errors.AssertionFailedf("no destination index spans provided for merge")
