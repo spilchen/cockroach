@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/ccl/storageccl"
@@ -262,11 +261,10 @@ func (m *bulkMergeProcessor) mergeSSTs(
 	}
 
 	var (
-		writerOpen   bool
-		writer       storage.SSTWriter
-		writerCloser io.Closer
-		currentURI   string
-		fileIndex    int
+		writerOpen bool
+		writer     storage.SSTWriter
+		currentURI string
+		fileIndex  int
 	)
 	closeWriter := func(finish bool) error {
 		if !writerOpen {
@@ -279,13 +277,6 @@ func (m *bulkMergeProcessor) mergeSSTs(
 			}
 		}
 		writer.Close()
-		if writerCloser != nil {
-			if err := writerCloser.Close(); closeErr == nil && !errors.Is(err, io.EOF) {
-				// Ignore EOF from sink close - it's expected after Finish() succeeds.
-				closeErr = err
-			}
-			writerCloser = nil
-		}
 		writerOpen = false
 		currentURI = ""
 		return closeErr
@@ -303,7 +294,6 @@ func (m *bulkMergeProcessor) mergeSSTs(
 			return err
 		}
 		writer = storage.MakeTransportSSTWriter(ctx, m.flowCtx.EvalCtx.Settings, objstorageprovider.NewRemoteWritable(sink))
-		writerCloser = sink
 		currentURI = fmt.Sprintf("%s/%s", baseOutputURI, fileName)
 		writerOpen = true
 		return nil
