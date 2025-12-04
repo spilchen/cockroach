@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/errors"
 )
 
@@ -103,9 +104,12 @@ func EnableDistributedMergeIndexBackfillSink(
 
 // DetermineDistributedMergeMode evaluates the cluster setting to decide
 // whether backfills for the specified consumer should opt into the distributed
-// merge pipeline.
+// merge pipeline. Statements describes the SQL statements whose schema changes
+// will be orchestrated by the resulting job.
 func DetermineDistributedMergeMode(
-	ctx context.Context, st *cluster.Settings, consumer DistributedMergeConsumer,
+	ctx context.Context,
+	st *cluster.Settings,
+	consumer DistributedMergeConsumer,
 ) (jobspb.IndexBackfillDistributedMergeMode, error) {
 	if st == nil {
 		return jobspb.IndexBackfillDistributedMergeMode_Disabled, nil
@@ -118,4 +122,44 @@ func DetermineDistributedMergeMode(
 		return jobspb.IndexBackfillDistributedMergeMode_Enabled, nil
 	}
 	return jobspb.IndexBackfillDistributedMergeMode_Disabled, nil
+}
+
+// StatementCreatesUniqueIndex returns true when the provided statement adds or
+// rebuilds a unique index and therefore should not use the distributed merge
+// pipeline during backfill.
+func StatementCreatesUniqueIndex(stmt tree.Statement) bool {
+	switch s := stmt.(type) {
+	case *tree.CreateIndex:
+		return s.Unique
+	case *tree.AlterTable:
+		for _, cmd := range s.Cmds {
+			if alterTableCmdCreatesUniqueIndex(cmd) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func alterTableCmdCreatesUniqueIndex(cmd tree.AlterTableCmd) bool {
+	switch c := cmd.(type) {
+	case *tree.AlterTableAddColumn:
+		col := c.ColumnDef
+		if col == nil {
+			return false
+		}
+		if col.Unique.IsUnique && !col.Unique.WithoutIndex {
+			return true
+		}
+		if col.PrimaryKey.IsPrimaryKey {
+			return true
+		}
+	case *tree.AlterTableAddConstraint:
+		if u, ok := c.ConstraintDef.(*tree.UniqueConstraintTableDef); ok {
+			return !u.WithoutIndex
+		}
+	case *tree.AlterTableAlterPrimaryKey:
+		return true
+	}
+	return false
 }
