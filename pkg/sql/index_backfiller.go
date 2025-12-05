@@ -191,6 +191,7 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	useDistributedMerge := mode == jobspb.IndexBackfillDistributedMergeMode_Enabled
 	run, retErr := ib.plan(
 		ctx,
+		int64(job.ID()),
 		descriptor,
 		now,
 		progress.MinimumWriteTimestamp,
@@ -259,6 +260,7 @@ var _ scexec.Backfiller = (*IndexBackfillPlanner)(nil)
 
 func (ib *IndexBackfillPlanner) plan(
 	ctx context.Context,
+	jobID int64,
 	tableDesc catalog.TableDescriptor,
 	nowTimestamp, writeAsOf, readAsOf hlc.Timestamp,
 	sourceSpans []roachpb.Span,
@@ -289,7 +291,7 @@ func (ib *IndexBackfillPlanner) plan(
 			indexesToBackfill, sourceIndexID,
 		)
 		if useDistributedMerge {
-			backfill.EnableDistributedMergeIndexBackfillSink(ib.execCfg.NodeInfo.NodeID.SQLInstanceID(), &spec)
+			backfill.EnableDistributedMergeIndexBackfillSink(ib.execCfg.NodeInfo.NodeID.SQLInstanceID(), jobID, &spec)
 		}
 		var err error
 		p, err = ib.execCfg.DistSQLPlanner.createBackfillerPhysicalPlan(ctx, planCtx, spec, sourceSpans)
@@ -364,7 +366,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	defer cleanup()
 
 	outputURI := func(instanceID base.SQLInstanceID) string {
-		return fmt.Sprintf("nodelocal://%d/index-backfill/%d/merge", instanceID, job.ID())
+		return fmt.Sprintf("nodelocal://%d/job/%d/merge/iter-0", instanceID, job.ID())
 	}
 
 	merged, err := invokeBulkMerge(ctx, jobExecCtx, ssts, targetSpans, outputURI)

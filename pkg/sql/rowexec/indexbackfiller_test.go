@@ -63,7 +63,7 @@ func TestIndexBackfillSinkSelection(t *testing.T) {
 
 		tempDir := t.TempDir()
 		ib.spec.UseDistributedMergeSink = true
-		ib.spec.DistributedMergeFilePrefix = "nodelocal://0/index-backfill/test"
+		ib.spec.DistributedMergeFilePrefix = "nodelocal://0/job/123/map"
 		ib.flowCtx.Cfg.DB = srv.SystemLayer().InternalDB().(descs.DB)
 		ib.flowCtx.Cfg.ExternalStorageFromURI = func(
 			ctx context.Context, uri string, _ username.SQLUsername, opts ...cloud.ExternalStorageOption,
