@@ -107,9 +107,7 @@ func EnableDistributedMergeIndexBackfillSink(
 // merge pipeline. Statements describes the SQL statements whose schema changes
 // will be orchestrated by the resulting job.
 func DetermineDistributedMergeMode(
-	ctx context.Context,
-	st *cluster.Settings,
-	consumer DistributedMergeConsumer,
+	ctx context.Context, st *cluster.Settings, consumer DistributedMergeConsumer,
 ) (jobspb.IndexBackfillDistributedMergeMode, error) {
 	if st == nil {
 		return jobspb.IndexBackfillDistributedMergeMode_Disabled, nil

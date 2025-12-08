@@ -144,10 +144,7 @@ func Build(
 }
 
 func determineDistributedMergeModeForStatement(
-	ctx context.Context,
-	deps Dependencies,
-	incumbent scpb.CurrentState,
-	stmt tree.Statement,
+	ctx context.Context, deps Dependencies, incumbent scpb.CurrentState, stmt tree.Statement,
 ) (scpb.DistributedMergeMode, error) {
 	baseJobMode, err := backfill.DetermineDistributedMergeMode(
 		ctx, deps.ClusterSettings(), backfill.DistributedMergeConsumerDeclarative,
@@ -170,7 +167,9 @@ func determineDistributedMergeModeForStatement(
 	return mode, nil
 }
 
-func jobModeToStateMode(jobMode jobspb.IndexBackfillDistributedMergeMode) scpb.DistributedMergeMode {
+func jobModeToStateMode(
+	jobMode jobspb.IndexBackfillDistributedMergeMode,
+) scpb.DistributedMergeMode {
 	switch jobMode {
 	case jobspb.IndexBackfillDistributedMergeMode_Enabled:
 		return scpb.DistributedMergeModeEnabled

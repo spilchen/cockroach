@@ -25,7 +25,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 )
 
-func newBulkMergePlan(
+func NewBulkMergePlan(
 	ctx context.Context,
 	execCtx sql.JobExecContext,
 	ssts []execinfrapb.BulkMergeSpec_SST,
@@ -110,7 +110,7 @@ func newBulkMergePlan(
 			TaskCount:            proto.Int64(int64(len(spans))),
 			WorkerSqlInstanceIds: routingKeys,
 		},
-	}, execinfrapb.PostProcessSpec{}, mergeCoordinatorOutputTypes, nil)
+	}, execinfrapb.PostProcessSpec{}, MergeCoordinatorOutputTypes, nil)
 
 	plan.PlanToStreamColMap = []int{0}
 	sql.FinalizePlan(ctx, planCtx, plan)

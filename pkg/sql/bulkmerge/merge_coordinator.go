@@ -26,7 +26,7 @@ var (
 
 // mergeCoordinator collects results from merge processors and emits a single
 // protobuf row describing all generated SSTs.
-var mergeCoordinatorOutputTypes = []*types.T{
+var MergeCoordinatorOutputTypes = []*types.T{
 	types.Bytes,
 }
 
@@ -204,7 +204,7 @@ func init() {
 			cleanup:  cleanup,
 		}
 		if err := mc.Init(
-			ctx, mc, postSpec, mergeCoordinatorOutputTypes, flow, processorID, nil,
+			ctx, mc, postSpec, MergeCoordinatorOutputTypes, flow, processorID, nil,
 			execinfra.ProcStateOpts{InputsToDrain: []execinfra.RowSource{input}},
 		); err != nil {
 			return nil, err

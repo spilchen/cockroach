@@ -29,7 +29,7 @@ func Merge(
 ) ([]execinfrapb.BulkMergeSpec_SST, error) {
 	execCfg := execCtx.ExecCfg()
 
-	plan, planCtx, err := newBulkMergePlan(ctx, execCtx, ssts, spans, outputURI)
+	plan, planCtx, err := NewBulkMergePlan(ctx, execCtx, ssts, spans, outputURI)
 	if err != nil {
 		return nil, err
 	}

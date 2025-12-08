@@ -130,9 +130,9 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 		return err
 	}
 	if mode == jobspb.IndexBackfillDistributedMergeMode_Enabled {
-		fmt.Printf("SPILLY: using distributed merge for index backfill job %d\n", job.ID())
+		fmt.Printf("SPILLY: [declarative] using distributed merge for index backfill job %d\n", job.ID())
 	} else {
-		fmt.Printf("SPILLY: _NOT_ using distributed merge for index backfill job %d\n", job.ID())
+		fmt.Printf("SPILLY: [declarative] _NOT_ using distributed merge for index backfill job %d\n", job.ID())
 	}
 	updateFunc := func(
 		ctx context.Context, meta *execinfrapb.ProducerMetadata,

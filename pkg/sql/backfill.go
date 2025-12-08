@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
@@ -50,6 +51,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
+	gogotypes "github.com/gogo/protobuf/types"
 )
 
 const (
@@ -944,6 +946,17 @@ func (sc *SchemaChanger) distIndexBackfill(
 	// Gather the initial resume spans for the table.
 	var todoSpans []roachpb.Span
 	var mutationIdx int
+	var sstManifests []jobspb.IndexBackfillSSTManifest
+	useDistributedMerge := false
+	if details, ok := sc.job.Details().(jobspb.SchemaChangeDetails); ok &&
+		details.DistributedMergeMode == jobspb.IndexBackfillDistributedMergeMode_Enabled {
+		useDistributedMerge = true
+	}
+	if useDistributedMerge {
+		fmt.Printf("SPILLY: [legacy] using distributed merge for index backfill job %d\n", sc.job.ID())
+	} else {
+		fmt.Printf("SPILLY: [legacy] _NOT_ using distributed merge for index backfill job %d\n", sc.job.ID())
+	}
 
 	if err := sc.txn(ctx, func(
 		ctx context.Context, txn descs.Txn,
@@ -1075,6 +1088,15 @@ func (sc *SchemaChanger) distIndexBackfill(
 				mu.updatedTodoSpans = make([]roachpb.Span, len(todoSpans))
 				copy(mu.updatedTodoSpans, todoSpans)
 			}()
+			var mapProgress execinfrapb.IndexBackfillMapProgress
+			if gogotypes.Is(&meta.BulkProcessorProgress.ProgressDetails, &mapProgress) {
+				if err := gogotypes.UnmarshalAny(&meta.BulkProcessorProgress.ProgressDetails, &mapProgress); err != nil {
+					return err
+				}
+				// TODO(SPILLY): persist manifests and add resume-aware staging so we
+				// can skip directly to merge/ingest on restart.
+				sstManifests = append(sstManifests, mapProgress.SSTManifests...)
+			}
 
 			if sc.testingKnobs.AlwaysUpdateIndexBackfillDetails {
 				if err := updateJobDetails(); err != nil {
@@ -1244,7 +1266,100 @@ func (sc *SchemaChanger) distIndexBackfill(
 		return err
 	}
 
+	if useDistributedMerge {
+		// TODO(SPILLY): wire in staged/resume-aware checkpoints so we don't redo
+		// map work when merge/ingest fails part-way.
+		merged, err := sc.runLegacyDistributedMerge(ctx, writeAsOf, targetSpans, sstManifests)
+		if err != nil {
+			return err
+		}
+		if err := sc.runLegacyDistributedIngest(ctx, targetSpans, merged); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+func (sc *SchemaChanger) runLegacyDistributedMerge(
+	ctx context.Context,
+	writeTS hlc.Timestamp,
+	targetSpans []roachpb.Span,
+	manifests []jobspb.IndexBackfillSSTManifest,
+) ([]jobspb.IndexBackfillSSTManifest, error) {
+	if len(manifests) == 0 {
+		return nil, nil
+	}
+	if sc.job == nil {
+		return nil, errors.AssertionFailedf("legacy backfill missing job when running distributed merge")
+	}
+	ssts := make([]execinfrapb.BulkMergeSpec_SST, 0, len(manifests))
+	for _, manifest := range manifests {
+		if len(manifest.Span.Key) == 0 && len(manifest.Span.EndKey) == 0 {
+			return nil, errors.AssertionFailedf("manifest missing span metadata")
+		}
+		ssts = append(ssts, execinfrapb.BulkMergeSpec_SST{
+			Uri:      manifest.URI,
+			StartKey: append([]byte(nil), manifest.Span.Key...),
+			EndKey:   append([]byte(nil), manifest.Span.EndKey...),
+		})
+	}
+
+	mem := &MemoryMetrics{}
+	jobExecCtx, cleanup := MakeJobExecContext(ctx, "legacy-index-backfill-merge", username.NodeUserName(), mem, sc.execCfg)
+	defer cleanup()
+
+	outputURI := func(instanceID base.SQLInstanceID) string {
+		// TODO(SPILLY): include attempt/iteration in path so retries don't reuse
+		// prior outputs once resume plumbing is added.
+		return fmt.Sprintf("nodelocal://%d/job/%d/merge/legacy", instanceID, sc.job.ID())
+	}
+
+	merged, err := invokeBulkMerge(ctx, jobExecCtx, ssts, targetSpans, outputURI)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]jobspb.IndexBackfillSSTManifest, 0, len(merged))
+	for _, sst := range merged {
+		span := roachpb.Span{
+			Key:    append([]byte(nil), sst.StartKey...),
+			EndKey: append([]byte(nil), sst.EndKey...),
+		}
+		ts := writeTS
+		out = append(out, jobspb.IndexBackfillSSTManifest{
+			URI:            sst.Uri,
+			Span:           &span,
+			WriteTimestamp: &ts,
+		})
+	}
+	return out, nil
+}
+
+func (sc *SchemaChanger) runLegacyDistributedIngest(
+	ctx context.Context, targetSpans []roachpb.Span, outputs []jobspb.IndexBackfillSSTManifest,
+) error {
+	if len(outputs) == 0 {
+		return nil
+	}
+
+	ssts := make([]execinfrapb.BulkMergeSpec_SST, 0, len(outputs))
+	for _, manifest := range outputs {
+		if len(manifest.Span.Key) == 0 && len(manifest.Span.EndKey) == 0 {
+			return errors.AssertionFailedf("manifest missing span metadata")
+		}
+		ssts = append(ssts, execinfrapb.BulkMergeSpec_SST{
+			Uri:      manifest.URI,
+			StartKey: append([]byte(nil), manifest.Span.Key...),
+			EndKey:   append([]byte(nil), manifest.Span.EndKey...),
+		})
+	}
+
+	mem := &MemoryMetrics{}
+	jobExecCtx, cleanup := MakeJobExecContext(ctx, "legacy-index-backfill-ingest", username.NodeUserName(), mem, sc.execCfg)
+	defer cleanup()
+
+	return invokeBulkIngest(ctx, jobExecCtx, targetSpans, ssts)
 }
 
 // distColumnBackfill runs (or continues) a backfill for the first mutation

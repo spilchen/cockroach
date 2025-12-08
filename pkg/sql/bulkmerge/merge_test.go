@@ -3,7 +3,7 @@
 // Use of this software is governed by the CockroachDB Software License
 // included in the /LICENSE file.
 
-package bulkmerge
+package bulkmerge_test
 
 import (
 	"bytes"
@@ -21,6 +21,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql"
+	"github.com/cockroachdb/cockroach/pkg/sql/bulkmerge"
 	"github.com/cockroachdb/cockroach/pkg/sql/bulksst"
 	"github.com/cockroachdb/cockroach/pkg/sql/bulkutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
@@ -109,7 +110,7 @@ func TestBulkMergeSpecCarriesOutputConfig(t *testing.T) {
 	_ = writeSSTs(t, ctx, writer, 5)
 	ssts := importToMerge(fileAllocator.GetFileList())
 
-	plan, _, err := newBulkMergePlan(ctx, jobExecCtx, ssts, []roachpb.Span{{Key: nil, EndKey: roachpb.KeyMax}}, func(instanceID base.SQLInstanceID) string {
+	plan, _, err := bulkmerge.NewBulkMergePlan(ctx, jobExecCtx, ssts, []roachpb.Span{{Key: nil, EndKey: roachpb.KeyMax}}, func(instanceID base.SQLInstanceID) string {
 		return fmt.Sprintf("userfile://defaultdb.public.userfile_table/%s/spec-out-%d", tsa.baseSubdir, instanceID)
 	})
 	require.NoError(t, err)
@@ -201,20 +202,20 @@ func testMergeProcessors(t *testing.T, s serverutils.ApplicationLayerInterface) 
 	defer cleanup()
 
 	bulksst.BatchSize.Override(ctx, &s.ClusterSettings().SV, 1)
-	targetFileSize.Override(ctx, &s.ClusterSettings().SV, 30)
+	bulkmerge.TargetFileSize.Override(ctx, &s.ClusterSettings().SV, 30)
 
 	fileAllocator := bulksst.NewExternalFileAllocator(tsa.es, tsa.mapPrefix, execCfg.Clock)
 	writer := bulksst.NewUnsortedSSTBatcher(s.ClusterSettings(), fileAllocator)
 	ls := writeSSTs(t, ctx, writer, 13)
 	ssts := importToMerge(fileAllocator.GetFileList())
 
-	plan, planCtx, err := newBulkMergePlan(ctx, jobExecCtx, ssts, []roachpb.Span{{Key: nil, EndKey: roachpb.KeyMax}}, func(instanceID base.SQLInstanceID) string {
+	plan, planCtx, err := bulkmerge.NewBulkMergePlan(ctx, jobExecCtx, ssts, []roachpb.Span{{Key: nil, EndKey: roachpb.KeyMax}}, func(instanceID base.SQLInstanceID) string {
 		return fmt.Sprintf("userfile://defaultdb.public.userfile_table/%s/out-%d", tsa.baseSubdir, instanceID)
 	})
 	require.NoError(t, err)
 	defer plan.Release()
 
-	require.Equal(t, mergeCoordinatorOutputTypes, plan.GetResultTypes())
+	require.Equal(t, bulkmerge.MergeCoordinatorOutputTypes, plan.GetResultTypes())
 
 	var result execinfrapb.BulkMergeSpec_Output
 	rowWriter := sql.NewCallbackResultWriter(func(ctx context.Context, row tree.Datums) error {

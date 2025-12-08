@@ -831,7 +831,9 @@ func (bc buildContext) createSchemaChangeJobOp(
 	}
 }
 
-func stateModeToJobMode(stateMode scpb.DistributedMergeMode) jobspb.IndexBackfillDistributedMergeMode {
+func stateModeToJobMode(
+	stateMode scpb.DistributedMergeMode,
+) jobspb.IndexBackfillDistributedMergeMode {
 	if stateMode == scpb.DistributedMergeModeEnabled {
 		return jobspb.IndexBackfillDistributedMergeMode_Enabled
 	}

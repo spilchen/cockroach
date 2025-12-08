@@ -37,7 +37,7 @@ var (
 )
 
 var (
-	targetFileSize = settings.RegisterByteSizeSetting(
+	TargetFileSize = settings.RegisterByteSizeSetting(
 		settings.ApplicationLevel,
 		"bulkio.merge.file_size",
 		"target size for individual data files produced during merge phase",
@@ -325,7 +325,7 @@ func (m *bulkMergeProcessor) mergeSSTs(
 		return nil
 	}
 
-	targetSize := targetFileSize.Get(&m.flowCtx.EvalCtx.Settings.SV)
+	targetSize := TargetFileSize.Get(&m.flowCtx.EvalCtx.Settings.SV)
 
 	for iter.SeekGE(storage.MVCCKey{Key: mergeSpan.Key}); ; iter.NextKey() {
 		ok, err := iter.Valid()
