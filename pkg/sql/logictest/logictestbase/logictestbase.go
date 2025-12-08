@@ -556,6 +556,12 @@ var LogicTestConfigs = []TestClusterConfig{
 		OverrideDistSQLMode:              "on",
 		UseDistributedMergeIndexBackfill: true,
 	},
+	{
+		Name:                             "local-dist-merge-backfill-legacy-schema-changer",
+		NumNodes:                         1,
+		OverrideDistSQLMode:              "on",
+		UseDistributedMergeIndexBackfill: false,
+	},
 }
 
 // ConfigIdx is an index in the above slice.
@@ -688,6 +694,7 @@ var DefaultConfigSets = map[string]ConfigSet{
 	// Alias for configs that uses distributed merge pipeline for index backfills.
 	"dist-merge-index-backfill": makeConfigSet(
 		"local-dist-merge-backfill-declarative-schema-changer",
+		"local-dist-merge-backfill-legacy-schema-changer",
 	),
 }
 
