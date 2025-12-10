@@ -71,8 +71,6 @@ components match. For example, the tag "a/b" will match both "a/b" and
   local      - Use a provided local binary, must provide the path to the binary.`
 	workloadApp = `
   workload   - Cockroach workload application.`
-	libHelp = `
-  lib        - Supplementary Cockroach libraries (libgeos).`
 )
 
 var bashCompletion = os.ExpandEnv("$HOME/.roachprod/bash-completion.sh")
@@ -168,7 +166,7 @@ be fairly distributed across the zones of the cluster).
 `,
 		Args: cobra.ExactArgs(2),
 		Run: Wrap(func(cmd *cobra.Command, args []string) error {
-			count, err := strconv.ParseInt(args[1], 10, 16)
+			count, err := strconv.ParseInt(args[1], 10, 8)
 			if err != nil || count < 1 {
 				return errors.Wrapf(err, "invalid num-nodes argument")
 			}
@@ -1332,10 +1330,7 @@ Some examples of usage:
 
   -- Stage customized binary of CockroachDB at version v23.2.0-alpha.2-4375-g7cd2b76ed00
   roachprod stage my-cluster customized v23.2.0-alpha.2-4375-g7cd2b76ed00
-
-  -- Stage the most recent edge build of the libraries (libgeos):
-  roachprod stage my-cluster lib
-`, strings.TrimSpace(cockroachApp+workloadApp+releaseApp+customizedApp+libHelp)),
+`, strings.TrimSpace(cockroachApp+workloadApp+releaseApp+customizedApp)),
 		Args: cobra.RangeArgs(2, 3),
 		Run: Wrap(func(cmd *cobra.Command, args []string) error {
 			versionArg := ""
@@ -2148,32 +2143,6 @@ func (cr *commandRegistry) buildOpentelemetryStopCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		Run: Wrap(func(cmd *cobra.Command, args []string) error {
 			return roachprod.StopOpenTelemetry(context.Background(), config.Logger, args[0])
-		}),
-	}
-}
-
-func (cr *commandRegistry) buildParcaAgentStartCmd() *cobra.Command {
-	parcaAgentStartCmd := &cobra.Command{
-		Use:   "parca-agent-start <cluster>",
-		Short: "Install and start the Parca Agent",
-		Long:  "Install and start the Parca Agent",
-		Args:  cobra.ExactArgs(1),
-		Run: Wrap(func(cmd *cobra.Command, args []string) error {
-			return roachprod.StartParcaAgent(context.Background(), config.Logger, args[0], parcaAgentConfig)
-		}),
-	}
-	initParcaAgentStartCmdFlags(parcaAgentStartCmd)
-	return parcaAgentStartCmd
-}
-
-func (cr *commandRegistry) buildParcaAgentStopCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "parca-agent-stop <cluster>",
-		Short: "Stop the Parca Agent",
-		Long:  "Stop the Parca Agent",
-		Args:  cobra.ExactArgs(1),
-		Run: Wrap(func(cmd *cobra.Command, args []string) error {
-			return roachprod.StopParcaAgent(context.Background(), config.Logger, args[0])
 		}),
 	}
 }

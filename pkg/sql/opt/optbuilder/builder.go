@@ -240,12 +240,23 @@ func New(
 //
 // If any subroutines panic with a non-runtime error as part of the build
 // process, the panic is caught here and returned as an error.
-func (b *Builder) Build() (retErr error) {
+func (b *Builder) Build() (err error) {
 	log.VEventf(b.ctx, 1, "optbuilder start")
 	defer log.VEventf(b.ctx, 1, "optbuilder finish")
-	defer errorutil.MaybeCatchPanic(&retErr, func(caughtErr error) {
-		log.VEventf(b.ctx, 1, "%v", caughtErr)
-	})
+	defer func() {
+		if r := recover(); r != nil {
+			// This code allows us to propagate errors without adding lots of checks
+			// for `if err != nil` throughout the construction code. This is only
+			// possible because the code does not update shared state and does not
+			// manipulate locks.
+			if ok, e := errorutil.ShouldCatch(r); ok {
+				err = e
+				log.VEventf(b.ctx, 1, "%v", err)
+			} else {
+				panic(r)
+			}
+		}
+	}()
 
 	// TODO (rohany): We shouldn't be modifying the semaCtx passed to the builder
 	//  but we unfortunately rely on mutation to the semaCtx. We modify the input
@@ -582,11 +593,6 @@ func (b *Builder) maybeTrackUserDefinedTypeDepsForViews(texpr tree.TypedExpr) {
 // DisableUnsafeInternalCheck is used to disable the check that the
 // prevents external users from accessing unsafe internals.
 func (b *Builder) DisableUnsafeInternalCheck() func() {
-	// Already in the middle of a disabled section.
-	if b.skipUnsafeInternalsCheck {
-		return func() {}
-	}
-
 	b.skipUnsafeInternalsCheck = true
 	var cleanup func()
 	if b.catalog != nil {
@@ -598,27 +604,6 @@ func (b *Builder) DisableUnsafeInternalCheck() func() {
 		if cleanup != nil {
 			cleanup()
 		}
-	}
-}
-
-// DisableSchemaDepTracking is used to disable dependency tracking for views and
-// routines, so that users don't have to face unnecessary restrictions during
-// schema changes.
-//
-// For example, we must prevent dropping a column that is referenced in the
-// WHERE clause or SET clause of an UPDATE statement. However, adding or
-// dropping columns that are synthesized with default or computed values is
-// perfectly safe, because those columns are determined from the table schema
-// rather than being user specified. If such a column is dropped, its value will
-// simply not be synthesized in mutation statements going forward.
-func (b *Builder) DisableSchemaDepTracking() func() {
-	if !b.trackSchemaDeps {
-		return func() {}
-	}
-	originalTrackSchemaDeps := b.trackSchemaDeps
-	b.trackSchemaDeps = false
-	return func() {
-		b.trackSchemaDeps = originalTrackSchemaDeps
 	}
 }
 

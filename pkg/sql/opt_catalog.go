@@ -530,12 +530,6 @@ func (oc *optCatalog) UserHasGlobalPrivilegeOrRoleOption(
 }
 
 // FullyQualifiedName is part of the cat.Catalog interface.
-//
-// Note that:
-//   - this call may involve a database operation so it shouldn't be used in
-//     performance sensitive paths;
-//   - the fully qualified name of a data source object can change without the
-//     object itself changing (e.g. when a database is renamed).
 func (oc *optCatalog) FullyQualifiedName(
 	ctx context.Context, ds cat.DataSource,
 ) (cat.DataSourceName, error) {
@@ -750,9 +744,13 @@ func (oc *optCatalog) codec() keys.SQLCodec {
 	return oc.planner.ExecCfg().Codec
 }
 
-// DisableUnsafeInternalCheck forwards the call to the planner.
+// DisableUnsafeInternalCheck sets the planners skipUnsafeInternalsCheck
+// to true, and returns a function which reverses it to false.
 func (oc *optCatalog) DisableUnsafeInternalCheck() func() {
-	return oc.planner.DisableUnsafeInternalsCheck()
+	oc.planner.skipUnsafeInternalsCheck = true
+	return func() {
+		oc.planner.skipUnsafeInternalsCheck = false
+	}
 }
 
 // optView is a wrapper around catalog.TableDescriptor that implements

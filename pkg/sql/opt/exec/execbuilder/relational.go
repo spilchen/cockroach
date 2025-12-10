@@ -410,24 +410,34 @@ func (b *Builder) maybeAnnotateWithEstimates(node exec.Node, e memo.RelExpr) {
 		}
 		if scan, ok := e.(*memo.ScanExpr); ok {
 			tab := b.mem.Metadata().Table(scan.Table)
-			first := cat.FindLatestFullStat(tab, b.evalCtx.SessionData())
-			if first < tab.StatisticCount() {
-				stat := tab.Statistic(first)
-				val.TableStatsRowCount = stat.RowCount()
-				if val.TableStatsRowCount == 0 {
-					val.TableStatsRowCount = 1
+			if tab.StatisticCount() > 0 {
+				// The first stat is the most recent full one.
+				var first int
+				for first < tab.StatisticCount() &&
+					(tab.Statistic(first).IsPartial() ||
+						(tab.Statistic(first).IsMerged() && !b.evalCtx.SessionData().OptimizerUseMergedPartialStatistics) ||
+						(tab.Statistic(first).IsForecast() && !b.evalCtx.SessionData().OptimizerUseForecasts)) {
+					first++
 				}
-				val.TableStatsCreatedAt = stat.CreatedAt()
-				val.LimitHint = scan.RequiredPhysical().LimitHint
-				val.Forecast = stat.IsForecast()
-				if val.Forecast {
-					val.ForecastAt = stat.CreatedAt()
-					// Find the first non-forecast full stat.
-					for i := first + 1; i < tab.StatisticCount(); i++ {
-						nextStat := tab.Statistic(i)
-						if !nextStat.IsPartial() && !nextStat.IsForecast() {
-							val.TableStatsCreatedAt = nextStat.CreatedAt()
-							break
+
+				if first < tab.StatisticCount() {
+					stat := tab.Statistic(first)
+					val.TableStatsRowCount = stat.RowCount()
+					if val.TableStatsRowCount == 0 {
+						val.TableStatsRowCount = 1
+					}
+					val.TableStatsCreatedAt = stat.CreatedAt()
+					val.LimitHint = scan.RequiredPhysical().LimitHint
+					val.Forecast = stat.IsForecast()
+					if val.Forecast {
+						val.ForecastAt = stat.CreatedAt()
+						// Find the first non-forecast full stat.
+						for i := first + 1; i < tab.StatisticCount(); i++ {
+							nextStat := tab.Statistic(i)
+							if !nextStat.IsPartial() && !nextStat.IsForecast() {
+								val.TableStatsCreatedAt = nextStat.CreatedAt()
+								break
+							}
 						}
 					}
 				}
@@ -888,23 +898,26 @@ func (b *Builder) buildScan(scan *memo.ScanExpr) (_ execPlan, outputCols colOrdM
 		b.TotalScanRows += stats.RowCount
 		b.ScanCounts[exec.ScanWithStatsCount]++
 
-		sd := b.evalCtx.SessionData()
-		first := cat.FindLatestFullStat(tab, sd)
+		// The first stat is the most recent full one. Check if it was a forecast.
+		var first int
+		for first < tab.StatisticCount() && tab.Statistic(first).IsPartial() {
+			first++
+		}
 		if first < tab.StatisticCount() && tab.Statistic(first).IsForecast() {
-			b.ScanCounts[exec.ScanWithStatsForecastCount]++
+			if b.evalCtx.SessionData().OptimizerUseForecasts {
+				b.ScanCounts[exec.ScanWithStatsForecastCount]++
 
-			// Calculate time since the forecast (or negative time until the forecast).
-			nanosSinceStatsForecasted := timeutil.Since(tab.Statistic(first).CreatedAt())
-			if nanosSinceStatsForecasted.Abs() > b.NanosSinceStatsForecasted.Abs() {
-				b.NanosSinceStatsForecasted = nanosSinceStatsForecasted
+				// Calculate time since the forecast (or negative time until the forecast).
+				nanosSinceStatsForecasted := timeutil.Since(tab.Statistic(first).CreatedAt())
+				if nanosSinceStatsForecasted.Abs() > b.NanosSinceStatsForecasted.Abs() {
+					b.NanosSinceStatsForecasted = nanosSinceStatsForecasted
+				}
 			}
-
-			// Since currently 'first' points at the forecast, then usage of the
-			// forecasts must be enabled, so in order to find the first full
-			// non-forecast stat, we'll temporarily disable their usage.
-			sd.OptimizerUseForecasts = false
-			first = cat.FindLatestFullStat(tab, sd)
-			sd.OptimizerUseForecasts = true
+			// Find the first non-forecast full stat.
+			for first < tab.StatisticCount() &&
+				(tab.Statistic(first).IsPartial() || tab.Statistic(first).IsForecast()) {
+				first++
+			}
 		}
 
 		if first < tab.StatisticCount() {
@@ -932,9 +945,8 @@ func (b *Builder) buildScan(scan *memo.ScanExpr) (_ execPlan, outputCols colOrdM
 	}
 
 	var params exec.ScanParams
-	params, outputCols, err = b.scanParams(
-		tab, &scan.ScanPrivate, scan.Relational(), scan.RequiredPhysical(), statsCreatedAt,
-	)
+	params, outputCols, err = b.scanParams(tab, &scan.ScanPrivate,
+		scan.Relational(), scan.RequiredPhysical(), statsCreatedAt)
 	if err != nil {
 		return execPlan{}, colOrdMap{}, err
 	}
@@ -972,33 +984,6 @@ func (b *Builder) buildPlaceholderScan(
 		return execPlan{}, colOrdMap{}, errors.AssertionFailedf("PlaceholderScan cannot have constraints")
 	}
 
-	// Evaluate the scalar expressions.
-	values := make([]tree.Datum, len(scan.Span))
-	for i, expr := range scan.Span {
-		// The expression is either a placeholder or a constant.
-		var val tree.Datum
-		if p, ok := expr.(*memo.PlaceholderExpr); ok {
-			val, err = eval.Expr(b.ctx, b.evalCtx, p.Value)
-			if err != nil {
-				return execPlan{}, colOrdMap{}, err
-			}
-		} else {
-			val = memo.ExtractConstDatum(expr)
-		}
-		if val == tree.DNull {
-			// If any value is NULL, then build an empty values operator instead
-			// of a scan. No row can satisfy the equality filter that was used
-			// to build this placeholder scan, because of SQL NULL-equality
-			// semantics.
-			return b.buildValues(&memo.ValuesExpr{
-				ValuesPrivate: memo.ValuesPrivate{
-					Cols: scan.Cols.ToList(),
-				},
-			})
-		}
-		values[i] = val
-	}
-
 	md := b.mem.Metadata()
 	tab := md.Table(scan.Table)
 	idx := tab.Index(scan.Index)
@@ -1014,6 +999,20 @@ func (b *Builder) buildPlaceholderScan(
 	var columns constraint.Columns
 	columns.Init(spanColumns)
 	keyCtx := constraint.MakeKeyContext(b.ctx, &columns, b.evalCtx)
+
+	values := make([]tree.Datum, len(scan.Span))
+	for i, expr := range scan.Span {
+		// The expression is either a placeholder or a constant.
+		if p, ok := expr.(*memo.PlaceholderExpr); ok {
+			val, err := eval.Expr(b.ctx, b.evalCtx, p.Value)
+			if err != nil {
+				return execPlan{}, colOrdMap{}, err
+			}
+			values[i] = val
+		} else {
+			values[i] = memo.ExtractConstDatum(expr)
+		}
+	}
 
 	key := constraint.MakeCompositeKey(values...)
 	var span constraint.Span
@@ -1270,13 +1269,28 @@ func (b *Builder) buildApplyJoin(join memo.RelExpr) (_ execPlan, outputCols colO
 	// Note: we put o outside of the function so we allocate it only once.
 	var o xform.Optimizer
 	fromMemo := b.mem
-	planRightSideFn := func(ctx context.Context, ef exec.Factory, leftRow tree.Datums) (_ exec.Plan, retErr error) {
-		// This is the same panic-catching logic that exists in o.Optimize()
-		// below. It's required here because it's possible for factory functions
-		// to panic below, like CopyAndReplaceDefault.
-		defer errorutil.MaybeCatchPanic(&retErr, func(caughtErr error) {
-			log.VEventf(ctx, 1, "%v", caughtErr)
-		})
+	planRightSideFn := func(ctx context.Context, ef exec.Factory, leftRow tree.Datums) (_ exec.Plan, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				// This code allows us to propagate internal errors without having to add
+				// error checks everywhere throughout the code. This is only possible
+				// because the code does not update shared state and does not manipulate
+				// locks.
+				//
+				// This is the same panic-catching logic that exists in
+				// o.Optimize() below. It's required here because it's possible
+				// for factory functions to panic below, like
+				// CopyAndReplaceDefault.
+				if ok, e := errorutil.ShouldCatch(r); ok {
+					err = e
+					log.VEventf(ctx, 1, "%v", err)
+				} else {
+					// Other panic objects can't be considered "safe" and thus are
+					// propagated as crashes that terminate the session.
+					panic(r)
+				}
+			}
+		}()
 
 		o.Init(ctx, b.evalCtx, b.catalog)
 		f := o.Factory()
@@ -3505,6 +3519,9 @@ func (b *Builder) buildWith(with *memo.WithExpr) (_ execPlan, outputCols colOrdM
 		return execPlan{}, colOrdMap{}, err
 	}
 
+	// TODO(justin): if the binding here has a spoolNode at its root, we can
+	// remove it, since subquery execution also guarantees complete execution.
+
 	// Add the buffer as a subquery so it gets executed ahead of time, and is
 	// available to be referenced by other queries. Use SubqueryDiscardAllRows to
 	// avoid buffering the results in the subquery, since the bufferNode will
@@ -3717,7 +3734,6 @@ func (b *Builder) buildCall(c *memo.CallExpr) (_ execPlan, outputCols colOrdMap,
 		udf.Def.BodyProps,
 		udf.Def.BodyStmts,
 		udf.Def.BodyTags,
-		udf.Def.BodyASTs,
 		false, /* allowOuterWithRefs */
 		nil,   /* wrapRootExpr */
 		0,     /* resultBufferID */
