@@ -332,7 +332,7 @@ func registerBackup(r registry.Registry) {
 			tick, perfBuf := initBulkJobPerfArtifacts(2*time.Hour, t, exporter)
 			defer roachtestutil.CloseExporter(ctx, exporter, t, c, perfBuf, c.Node(1), "")
 
-			m := c.NewDeprecatedMonitor(ctx)
+			m := c.NewMonitor(ctx)
 			m.Go(func(ctx context.Context) error {
 				t.Status(`running backup`)
 				// Tick once before starting the backup, and once after to capture the
@@ -393,7 +393,7 @@ func registerBackup(r registry.Registry) {
 				}
 
 				conn := c.Conn(ctx, t.L(), 1)
-				m := c.NewDeprecatedMonitor(ctx)
+				m := c.NewMonitor(ctx)
 				m.Go(func(ctx context.Context) error {
 					t.Status(`running backup`)
 					_, err := conn.ExecContext(ctx, "BACKUP bank.bank INTO $1 WITH KMS=$2",
@@ -402,7 +402,7 @@ func registerBackup(r registry.Registry) {
 				})
 				m.Wait()
 
-				m = c.NewDeprecatedMonitor(ctx)
+				m = c.NewMonitor(ctx)
 				m.Go(func(ctx context.Context) error {
 					t.Status(`restoring from backup`)
 					if _, err := conn.ExecContext(ctx, "CREATE DATABASE restoreDB"); err != nil {
@@ -456,7 +456,7 @@ func registerBackup(r registry.Registry) {
 				dest := importBankData(ctx, rows, t, c)
 
 				conn := c.Conn(ctx, t.L(), 1)
-				m := c.NewDeprecatedMonitor(ctx)
+				m := c.NewMonitor(ctx)
 				m.Go(func(ctx context.Context) error {
 					_, err := conn.ExecContext(ctx, `
 					CREATE DATABASE restoreA;
@@ -469,7 +469,7 @@ func registerBackup(r registry.Registry) {
 				var err error
 				backupPath := fmt.Sprintf("nodelocal://1/kmsbackup/%s/%s", cloudProvider, dest)
 
-				m = c.NewDeprecatedMonitor(ctx)
+				m = c.NewMonitor(ctx)
 				m.Go(func(ctx context.Context) error {
 					switch cloudProvider {
 					case spec.AWS:
@@ -503,7 +503,7 @@ func registerBackup(r registry.Registry) {
 				m.Wait()
 
 				// Restore the encrypted BACKUP using each of KMS URI A and B separately.
-				m = c.NewDeprecatedMonitor(ctx)
+				m = c.NewMonitor(ctx)
 				m.Go(func(ctx context.Context) error {
 					t.Status(`restore using KMSURIA`)
 					if _, err := conn.ExecContext(ctx,
@@ -550,7 +550,7 @@ func registerBackup(r registry.Registry) {
 	}
 
 	r.Add(registry.TestSpec{
-		Name:              "backup/import-rollback",
+		Name:              "backup/mvcc-range-tombstones",
 		Owner:             registry.OwnerDisasterRecovery,
 		Timeout:           4 * time.Hour,
 		Cluster:           r.MakeClusterSpec(3, spec.CPU(8)),
@@ -562,12 +562,12 @@ func registerBackup(r registry.Registry) {
 		Suites:                    registry.Suites(registry.Nightly),
 		TestSelectionOptOutSuites: registry.Suites(registry.Nightly),
 		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
-			runBackupImportRollback(ctx, t, c, importRollbackConfig{})
+			runBackupMVCCRangeTombstones(ctx, t, c, mvccRangeTombstoneConfig{})
 		},
 	})
 }
 
-type importRollbackConfig struct {
+type mvccRangeTombstoneConfig struct {
 	tenantName       string
 	skipClusterSetup bool
 
@@ -583,15 +583,15 @@ type importRollbackConfig struct {
 	debugSkipRollback bool
 }
 
-// runBackupImportRollback tests that backup and restore works in the
-// presence of import rollback. It uses data from TPCH's order table, 16
+// runBackupMVCCRangeTombstones tests that backup and restore works in the
+// presence of MVCC range tombstones. It uses data from TPCH's order table, 16
 // GB across 8 CSV files.
 //
 //  1. Import half of the tpch.orders table (odd-numbered files).
 //  2. Take fingerprint, time 'initial'.
 //  3. Take a full database backup.
 //  4. Import the other half (even-numbered files), but cancel the import
-//     and roll the data back. Done twice.
+//     and roll the data back using MVCC range tombstones. Done twice.
 //  5. Take fingerprint, time 'canceled'.
 //  6. Successfully import the other half.
 //  7. Take fingerprint, time 'completed'.
@@ -601,8 +601,8 @@ type importRollbackConfig struct {
 // We then do point-in-time restores of the database at times 'initial',
 // 'canceled', 'completed', and the latest time, and compare the fingerprints to
 // the original data.
-func runBackupImportRollback(
-	ctx context.Context, t test.Test, c cluster.Cluster, config importRollbackConfig,
+func runBackupMVCCRangeTombstones(
+	ctx context.Context, t test.Test, c cluster.Cluster, config mvccRangeTombstoneConfig,
 ) {
 	if !config.skipClusterSetup {
 		c.Start(ctx, t.L(), option.NewStartOpts(option.NoBackupSchedule), install.MakeClusterSettings())
@@ -626,7 +626,7 @@ func runBackupImportRollback(
 	require.NoError(t, err)
 	_, err = conn.Exec(`USE tpch`)
 	require.NoError(t, err)
-	createStmt, err := readFileFromFixture(
+	createStmt, err := readCreateTableFromFixture(
 		"gs://cockroach-fixtures-us-east1/tpch-csv/schema/orders.sql?AUTH=implicit", conn)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, createStmt)
@@ -752,7 +752,7 @@ func runBackupImportRollback(
 			`IMPORT INTO orders CSV DATA ('%s') WITH delimiter='|', detached`,
 			strings.Join(files, "', '")),
 		).Scan(&jobID))
-		waitForState(jobID, jobs.StatePaused, "", time.Hour)
+		waitForState(jobID, jobs.StatePaused, "", 30*time.Minute)
 
 		t.Status("canceling import")
 		_, err = conn.ExecContext(ctx, fmt.Sprintf(`CANCEL JOB %s`, jobID))
@@ -762,6 +762,14 @@ func runBackupImportRollback(
 
 	_, err = conn.ExecContext(ctx, `SET CLUSTER SETTING jobs.debug.pausepoints = ''`)
 	require.NoError(t, err)
+
+	// Check that we actually wrote MVCC range tombstones.
+	var rangeKeys int
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT sum((crdb_internal.range_stats(raw_start_key)->'range_key_count')::INT)
+		FROM [SHOW RANGES FROM TABLE tpch.orders WITH KEYS]
+`).Scan(&rangeKeys))
+	require.NotZero(t, rangeKeys, "no MVCC range tombstones found")
 
 	// Fingerprint for restore comparison, and assert that it matches the initial
 	// import.
