@@ -100,6 +100,13 @@ func (c *Cache) Get(
 	return privDesc, nil
 }
 
+// MarkSystemPrivilegesStale forces the cache to refresh entries derived from system.privileges.
+func (c *Cache) MarkSystemPrivilegesStale(ctx context.Context, version descpb.DescriptorVersion) {
+	c.c.Lock()
+	defer c.c.Unlock()
+	c.c.ClearCacheIfStaleLocked(ctx, []descpb.DescriptorVersion{version})
+}
+
 func (c *Cache) getFromCache(
 	ctx context.Context, version descpb.DescriptorVersion, path string,
 ) (bool, catpb.PrivilegeDescriptor, error) {

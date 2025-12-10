@@ -574,7 +574,13 @@ func (p *planner) BumpPrivilegesTableVersion(ctx context.Context) error {
 		return err
 	}
 
-	return p.writeVersionBump(ctx, tableDesc.ID)
+	prevVersion := tableDesc.GetVersion()
+	if err := p.writeVersionBump(ctx, tableDesc.ID); err != nil {
+		return err
+	}
+	// Invalidate the synthetic privilege cache for prevVersion.
+	p.ExecCfg().SyntheticPrivilegeCache.MarkSystemPrivilegesStale(ctx, prevVersion+1)
+	return nil
 }
 
 func (p *planner) setRole(ctx context.Context, local bool, s username.SQLUsername) error {
