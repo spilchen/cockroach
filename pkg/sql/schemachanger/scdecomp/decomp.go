@@ -234,13 +234,22 @@ func (w *walkCtx) walkType(typ catalog.TypeDescriptor) {
 	}
 }
 
-// GetSequenceOptions returns the non-default sequence options from descriptor
-// sequence options.
 func GetSequenceOptions(
 	sequenceID descpb.ID, opts *descpb.TableDescriptor_SequenceOpts,
 ) []*scpb.SequenceOption {
 	// Compute the default sequence options.
-	defaultOpts := schemaexpr.DefaultSequenceOptions()
+	defaultOpts := descpb.TableDescriptor_SequenceOpts{
+		Increment: 1,
+	}
+	err := schemaexpr.AssignSequenceOptions(&defaultOpts,
+		nil,
+		64,
+		true,
+		nil,
+	)
+	if err != nil {
+		panic(err)
+	}
 	var sequenceOptions []*scpb.SequenceOption
 	addSequenceOption := func(key string, defaultValue, value interface{}) {
 		// Nil or empty values can be skipped. Or values which
@@ -534,6 +543,7 @@ func (w *walkCtx) walkColumn(tbl catalog.TableDescriptor, col catalog.Column) {
 	column := &scpb.Column{
 		TableID:                           tbl.GetID(),
 		ColumnID:                          col.GetID(),
+		IsHidden:                          col.IsHidden(),
 		IsInaccessible:                    col.IsInaccessible(),
 		GeneratedAsIdentityType:           col.GetGeneratedAsIdentityType(),
 		GeneratedAsIdentitySequenceOption: col.GetGeneratedAsIdentitySequenceOptionStr(),
@@ -553,6 +563,7 @@ func (w *walkCtx) walkColumn(tbl catalog.TableDescriptor, col catalog.Column) {
 		columnType := &scpb.ColumnType{
 			TableID:                 tbl.GetID(),
 			ColumnID:                col.GetID(),
+			IsNullable:              col.IsNullable(),
 			IsVirtual:               col.IsVirtual(),
 			ElementCreationMetadata: NewElementCreationMetadata(w.clusterVersion),
 		}
@@ -570,43 +581,17 @@ func (w *walkCtx) walkColumn(tbl catalog.TableDescriptor, col catalog.Column) {
 			expr, err := w.newExpression(col.GetComputeExpr())
 			onErrPanic(err)
 
-			w.ev(scpb.Status_PUBLIC, &scpb.ColumnComputeExpression{
-				TableID:    tbl.GetID(),
-				ColumnID:   col.GetID(),
-				Expression: *expr,
-			})
-		}
-
-		if columnType.ElementCreationMetadata.In_26_1OrLater {
-			if col.IsGeneratedAsIdentity() {
-				w.ev(scpb.Status_PUBLIC,
-					&scpb.ColumnGeneratedAsIdentity{
-						TableID:        tbl.GetID(),
-						ColumnID:       col.GetID(),
-						Type:           col.GetGeneratedAsIdentityType(),
-						SequenceOption: col.GetGeneratedAsIdentitySequenceOptionStr(),
-					})
-				column.GeneratedAsIdentityType = catpb.GeneratedAsIdentityType_NOT_IDENTITY_COLUMN
-				column.GeneratedAsIdentitySequenceOption = ""
+			if columnType.ElementCreationMetadata.In_24_3OrLater {
+				w.ev(scpb.Status_PUBLIC, &scpb.ColumnComputeExpression{
+					TableID:    tbl.GetID(),
+					ColumnID:   col.GetID(),
+					Expression: *expr,
+				})
+			} else {
+				columnType.ComputeExpr = expr
 			}
-		} else {
-			column.GeneratedAsIdentityType = col.GetGeneratedAsIdentityType()
-			column.GeneratedAsIdentitySequenceOption = col.GetGeneratedAsIdentitySequenceOptionStr()
 		}
 		w.ev(scpb.Status_PUBLIC, columnType)
-
-		if col.IsHidden() {
-			if columnType.ElementCreationMetadata.In_26_1OrLater {
-				columnHidden := scpb.ColumnHidden{
-					TableID:  tbl.GetID(),
-					ColumnID: col.GetID(),
-				}
-				w.ev(scpb.Status_PUBLIC, &columnHidden)
-			} else {
-				column.IsHidden = true
-			}
-		}
-
 	}
 	if !col.IsNullable() {
 		w.ev(scpb.Status_PUBLIC, &scpb.ColumnNotNull{
@@ -1043,11 +1028,10 @@ func (w *walkCtx) walkForeignKeyConstraint(
 func (w *walkCtx) walkFunction(fnDesc catalog.FunctionDescriptor) {
 	typeT := newTypeT(fnDesc.GetReturnType().Type)
 	fn := &scpb.Function{
-		FunctionID:  fnDesc.GetID(),
-		ReturnSet:   fnDesc.GetReturnType().ReturnSet,
-		ReturnType:  *typeT,
-		Params:      make([]scpb.Function_Parameter, len(fnDesc.GetParams())),
-		IsProcedure: fnDesc.IsProcedure(),
+		FunctionID: fnDesc.GetID(),
+		ReturnSet:  fnDesc.GetReturnType().ReturnSet,
+		ReturnType: *typeT,
+		Params:     make([]scpb.Function_Parameter, len(fnDesc.GetParams())),
 	}
 	for i, param := range fnDesc.GetParams() {
 		typeT := newTypeT(param.Type)

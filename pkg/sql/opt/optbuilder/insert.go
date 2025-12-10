@@ -398,10 +398,7 @@ func (b *Builder) buildInsert(ins *tree.Insert, inScope *scope) (outScope *scope
 		mb.buildUpsert(returning)
 	}
 
-	mb.trackTargetColDeps()
-
-	// Legacy path for resolving insert target column dependencies.
-	if b.trackSchemaDeps && !b.evalCtx.SessionData().UseImprovedRoutineDepsTriggersAndComputedCols {
+	if b.trackSchemaDeps {
 		dep := opt.SchemaDep{DataSource: tab}
 		// Track dependencies on insert columns.
 		for i := range mb.insertColIDs {

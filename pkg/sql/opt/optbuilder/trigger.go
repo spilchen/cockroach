@@ -38,11 +38,6 @@ import (
 func (mb *mutationBuilder) buildRowLevelBeforeTriggers(
 	eventType tree.TriggerEventType, cascade bool,
 ) bool {
-	if mb.b.evalCtx.SessionData().UseImprovedRoutineDepsTriggersAndComputedCols {
-		// Avoid adding transitive dependencies that are already tracked in the
-		// trigger object.
-		defer mb.b.DisableSchemaDepTracking()()
-	}
 	var eventsToMatch tree.TriggerEventTypeSet
 	eventsToMatch.Add(eventType)
 	triggers := cat.GetRowLevelTriggers(mb.tab, tree.TriggerActionTimeBefore, eventsToMatch)
@@ -665,13 +660,11 @@ func (tb *rowLevelAfterTriggerBuilder) Build(
 			tgLevel := tree.NewDString("ROW")
 			tgRelID := tree.NewDOid(oid.Oid(tb.mutatedTable.ID()))
 			tgTableName := tree.NewDString(string(tb.mutatedTable.Name()))
-			schema, err := b.catalog.ResolveSchemaByID(
-				b.ctx, cat.Flags{}, cat.StableID(tb.mutatedTable.GetSchemaID()),
-			)
+			fqName, err := b.catalog.FullyQualifiedName(ctx, tb.mutatedTable)
 			if err != nil {
 				panic(err)
 			}
-			tgTableSchema := tree.NewDString(schema.Name().Schema())
+			tgTableSchema := tree.NewDString(fqName.Schema())
 			var tgOp opt.ScalarExpr
 			switch tb.mutation {
 			case opt.InsertOp:
@@ -854,8 +847,6 @@ func (b *Builder) buildTriggerFunction(
 	stmtScope := plBuilder.buildRootBlock(stmt.AST, triggerFuncScope, params)
 	udfDef.Body = []memo.RelExpr{stmtScope.expr}
 	udfDef.BodyProps = []*physical.Required{stmtScope.makePhysicalProps()}
-	// Placeholder that ensure the length of BodyTags is the same as Body.
-	udfDef.BodyTags = make([]string, 1)
 
 	return f.ConstructUDFCall(args, &memo.UDFCallPrivate{Def: udfDef}), resolvedDef
 }

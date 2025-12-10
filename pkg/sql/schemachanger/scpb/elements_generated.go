@@ -306,80 +306,6 @@ func (c *ElementCollection[E]) FilterColumnFamily() *ElementCollection[*ColumnFa
 	return (*ElementCollection[*ColumnFamily])(ret)
 }
 
-func (e ColumnGeneratedAsIdentity) element() {}
-
-// Element implements ElementGetter.
-func (e * ElementProto_ColumnGeneratedAsIdentity) Element() Element {
-	return e.ColumnGeneratedAsIdentity
-}
-
-// ForEachColumnGeneratedAsIdentity iterates over elements of type ColumnGeneratedAsIdentity.
-// Deprecated
-func ForEachColumnGeneratedAsIdentity(
-	c *ElementCollection[Element], fn func(current Status, target TargetStatus, e *ColumnGeneratedAsIdentity),
-) {
-  c.FilterColumnGeneratedAsIdentity().ForEach(fn)
-}
-
-// FindColumnGeneratedAsIdentity finds the first element of type ColumnGeneratedAsIdentity.
-// Deprecated
-func FindColumnGeneratedAsIdentity(
-	c *ElementCollection[Element],
-) (current Status, target TargetStatus, element *ColumnGeneratedAsIdentity) {
-	if tc := c.FilterColumnGeneratedAsIdentity(); !tc.IsEmpty() {
-		var e Element
-		current, target, e = tc.Get(0)
-		element = e.(*ColumnGeneratedAsIdentity)
-	}
-	return current, target, element
-}
-
-// ColumnGeneratedAsIdentityElements filters elements of type ColumnGeneratedAsIdentity.
-func (c *ElementCollection[E]) FilterColumnGeneratedAsIdentity() *ElementCollection[*ColumnGeneratedAsIdentity] {
-	ret := c.genericFilter(func(_ Status, _ TargetStatus, e Element) bool {
-		_, ok := e.(*ColumnGeneratedAsIdentity)
-		return ok
-	})
-	return (*ElementCollection[*ColumnGeneratedAsIdentity])(ret)
-}
-
-func (e ColumnHidden) element() {}
-
-// Element implements ElementGetter.
-func (e * ElementProto_ColumnHidden) Element() Element {
-	return e.ColumnHidden
-}
-
-// ForEachColumnHidden iterates over elements of type ColumnHidden.
-// Deprecated
-func ForEachColumnHidden(
-	c *ElementCollection[Element], fn func(current Status, target TargetStatus, e *ColumnHidden),
-) {
-  c.FilterColumnHidden().ForEach(fn)
-}
-
-// FindColumnHidden finds the first element of type ColumnHidden.
-// Deprecated
-func FindColumnHidden(
-	c *ElementCollection[Element],
-) (current Status, target TargetStatus, element *ColumnHidden) {
-	if tc := c.FilterColumnHidden(); !tc.IsEmpty() {
-		var e Element
-		current, target, e = tc.Get(0)
-		element = e.(*ColumnHidden)
-	}
-	return current, target, element
-}
-
-// ColumnHiddenElements filters elements of type ColumnHidden.
-func (c *ElementCollection[E]) FilterColumnHidden() *ElementCollection[*ColumnHidden] {
-	ret := c.genericFilter(func(_ Status, _ TargetStatus, e Element) bool {
-		_, ok := e.(*ColumnHidden)
-		return ok
-	})
-	return (*ElementCollection[*ColumnHidden])(ret)
-}
-
 func (e ColumnName) element() {}
 
 // Element implements ElementGetter.
@@ -2415,43 +2341,6 @@ func (c *ElementCollection[E]) FilterSequenceOwner() *ElementCollection[*Sequenc
 	return (*ElementCollection[*SequenceOwner])(ret)
 }
 
-func (e SequenceValue) element() {}
-
-// Element implements ElementGetter.
-func (e * ElementProto_SequenceValue) Element() Element {
-	return e.SequenceValue
-}
-
-// ForEachSequenceValue iterates over elements of type SequenceValue.
-// Deprecated
-func ForEachSequenceValue(
-	c *ElementCollection[Element], fn func(current Status, target TargetStatus, e *SequenceValue),
-) {
-  c.FilterSequenceValue().ForEach(fn)
-}
-
-// FindSequenceValue finds the first element of type SequenceValue.
-// Deprecated
-func FindSequenceValue(
-	c *ElementCollection[Element],
-) (current Status, target TargetStatus, element *SequenceValue) {
-	if tc := c.FilterSequenceValue(); !tc.IsEmpty() {
-		var e Element
-		current, target, e = tc.Get(0)
-		element = e.(*SequenceValue)
-	}
-	return current, target, element
-}
-
-// SequenceValueElements filters elements of type SequenceValue.
-func (c *ElementCollection[E]) FilterSequenceValue() *ElementCollection[*SequenceValue] {
-	ret := c.genericFilter(func(_ Status, _ TargetStatus, e Element) bool {
-		_, ok := e.(*SequenceValue)
-		return ok
-	})
-	return (*ElementCollection[*SequenceValue])(ret)
-}
-
 func (e Table) element() {}
 
 // Element implements ElementGetter.
@@ -3435,10 +3324,6 @@ func (e* ElementProto) SetElement(element Element) {
 			e.ElementOneOf = &ElementProto_ColumnDefaultExpression{ ColumnDefaultExpression: t}
 		case *ColumnFamily:
 			e.ElementOneOf = &ElementProto_ColumnFamily{ ColumnFamily: t}
-		case *ColumnGeneratedAsIdentity:
-			e.ElementOneOf = &ElementProto_ColumnGeneratedAsIdentity{ ColumnGeneratedAsIdentity: t}
-		case *ColumnHidden:
-			e.ElementOneOf = &ElementProto_ColumnHidden{ ColumnHidden: t}
 		case *ColumnName:
 			e.ElementOneOf = &ElementProto_ColumnName{ ColumnName: t}
 		case *ColumnNotNull:
@@ -3549,8 +3434,6 @@ func (e* ElementProto) SetElement(element Element) {
 			e.ElementOneOf = &ElementProto_SequenceOption{ SequenceOption: t}
 		case *SequenceOwner:
 			e.ElementOneOf = &ElementProto_SequenceOwner{ SequenceOwner: t}
-		case *SequenceValue:
-			e.ElementOneOf = &ElementProto_SequenceValue{ SequenceValue: t}
 		case *Table:
 			e.ElementOneOf = &ElementProto_Table{ Table: t}
 		case *TableComment:
@@ -3617,8 +3500,6 @@ func GetElementOneOfProtos() []interface{} {
 	((*ElementProto_ColumnComputeExpression)(nil)),
 	((*ElementProto_ColumnDefaultExpression)(nil)),
 	((*ElementProto_ColumnFamily)(nil)),
-	((*ElementProto_ColumnGeneratedAsIdentity)(nil)),
-	((*ElementProto_ColumnHidden)(nil)),
 	((*ElementProto_ColumnName)(nil)),
 	((*ElementProto_ColumnNotNull)(nil)),
 	((*ElementProto_ColumnOnUpdateExpression)(nil)),
@@ -3674,7 +3555,6 @@ func GetElementOneOfProtos() []interface{} {
 	((*ElementProto_Sequence)(nil)),
 	((*ElementProto_SequenceOption)(nil)),
 	((*ElementProto_SequenceOwner)(nil)),
-	((*ElementProto_SequenceValue)(nil)),
 	((*ElementProto_Table)(nil)),
 	((*ElementProto_TableComment)(nil)),
 	((*ElementProto_TableData)(nil)),
@@ -3716,8 +3596,6 @@ func GetElementTypes() []interface{} {
 	((*ColumnComputeExpression)(nil)),
 	((*ColumnDefaultExpression)(nil)),
 	((*ColumnFamily)(nil)),
-	((*ColumnGeneratedAsIdentity)(nil)),
-	((*ColumnHidden)(nil)),
 	((*ColumnName)(nil)),
 	((*ColumnNotNull)(nil)),
 	((*ColumnOnUpdateExpression)(nil)),
@@ -3773,7 +3651,6 @@ func GetElementTypes() []interface{} {
 	((*Sequence)(nil)),
 	((*SequenceOption)(nil)),
 	((*SequenceOwner)(nil)),
-	((*SequenceValue)(nil)),
 	((*Table)(nil)),
 	((*TableComment)(nil)),
 	((*TableData)(nil)),

@@ -65,17 +65,6 @@ func (og *operationGenerator) columnExistsOnTable(
    )`, tableName.Schema(), tableName.Object(), columnName)
 }
 
-func (og *operationGenerator) fnExistsByName(
-	ctx context.Context, tx pgx.Tx, schemaName string, routineName string,
-) (bool, error) {
-	return og.scanBool(ctx, tx, `SELECT EXISTS (
-	SELECT routine_name
-    FROM information_schema.routines 
-   WHERE routine_schema = $1
-     AND routine_name = $2
-   )`, schemaName, routineName)
-}
-
 func (og *operationGenerator) tableHasRows(
 	ctx context.Context, tx pgx.Tx, tableName *tree.TableName,
 ) (bool, error) {
@@ -149,137 +138,143 @@ func (og *operationGenerator) tableHasDependencies(
 	return og.scanBool(ctx, tx, q, tableName.Object(), tableName.Schema(), skipSelfRef)
 }
 
-// columnDropViolatesFKIndexRequirements determines if dropping this column
-// will violate foreign key index requirements. This occurs when dropping the
-// column would leave a foreign key without a suitable backing index.
-// CockroachDB requires backing indexes to have the same number of key columns
-// as the FK in any order. Only key columns (not stored columns) count toward
-// FK backing index requirements.
-func (og *operationGenerator) columnDropViolatesFKIndexRequirements(
+// columnRemovalWillDropFKBackingIndexes determines if dropping this column
+// will lead to no indexes backing a foreign key. CockroachDB will consider
+// alternative indexes backing a foreign key if they have the same number of
+// key columns as the FK in any order.
+func (og *operationGenerator) columnRemovalWillDropFKBackingIndexes(
 	ctx context.Context, tx pgx.Tx, tableName *tree.TableName, columName tree.Name,
 ) (bool, error) {
-	return og.scanBool(ctx, tx, `
-  WITH fk AS (
-            SELECT oid,
-                   (
-                    SELECT r.relname
-                      FROM pg_class AS r
-                     WHERE r.oid = c.confrelid
-                   ) AS base_table,
-                   a.attname AS base_col,
-                   array_position(
-                    c.confkey,
-                    a.attnum
-                   ) AS base_ordinal,
-                   (
-                    SELECT r.relname
-                      FROM pg_class AS r
-                     WHERE r.oid = c.conrelid
-                   ) AS referencing_table,
-                   unnest(
-                    (
-                        SELECT array_agg(attname)
-                          FROM pg_attribute
-                         WHERE attrelid = c.conrelid
-                               AND ARRAY[attnum] <@ c.conkey
-                               AND array_position(
-                                    c.confkey,
-                                    a.attnum
-                                )
-                                = array_position(
-                                        c.conkey,
-                                        attnum
-                                    )
-                    )
-                   ) AS referencing_col
-              FROM pg_constraint AS c
-                   JOIN pg_attribute AS a ON c.confrelid
-                                                     = a.attrelid
-                                                     AND ARRAY[
-                                                            attnum
-                                                        ]
-                                                        <@ c.conkey
-             WHERE c.confrelid = $1::REGCLASS::OID
-          ),
-       all_index_columns AS (
-                            SELECT
-                                i.indexrelid::REGCLASS::STRING
-                                    AS index_name,
-                                a.attname AS col_name,
-                                NOT
-                                    i.indisunique AS non_unique,
-                                a.attnum
-                                > i.indnkeyatts AS storing,
-                                a.attnum AS index_ordinal
-                            FROM
-                                pg_index AS i
-                                JOIN pg_attribute AS a ON
-                                        a.attrelid
-                                        = i.indexrelid
-                                        AND a.attnum > 0
-                            WHERE
-                                i.indrelid
-                                = $1::REGCLASS::OID
-                         ),
-       valid_indexes AS (
-                        SELECT *
-                          FROM all_index_columns
-                         WHERE index_name
-                               NOT IN (
-                                    SELECT DISTINCT
-                                           index_name
-                                      FROM all_index_columns
-                                     WHERE col_name = $2
-                                           AND index_name
-                                            NOT LIKE '%_pkey'
-                                )
-                     ),
-       fk_col_counts AS (
-                          SELECT oid, count(*) AS num_cols
-                            FROM fk
-                        GROUP BY oid
-                     ),
-       index_column_counts AS (
-                              SELECT index_name,
-                                     count(*) AS num_cols
-                                FROM valid_indexes
- 															WHERE storing='f'
-                              GROUP BY index_name
-                           ),
-       matching_fks AS (
-                          SELECT fk.oid
-                            FROM fk
-                                 JOIN valid_indexes ON
-                                        fk.base_col
-                                        = valid_indexes.col_name
-                                 JOIN index_column_counts ON
-                                        valid_indexes.index_name
-                                        = index_column_counts.index_name
-                                 JOIN fk_col_counts ON
-                                        fk.oid
-                                        = fk_col_counts.oid
-                           WHERE valid_indexes.storing
-                                 = false
-                                 AND valid_indexes.non_unique
-                                    = false
-                                 AND index_column_counts.num_cols
-                                    = fk_col_counts.num_cols
-                        GROUP BY fk.oid,
-                                 valid_indexes.index_name,
-                                 fk_col_counts.num_cols
-                          HAVING count(DISTINCT fk.base_col)
-                                 = fk_col_counts.num_cols
-                    )
-SELECT EXISTS(
-        SELECT *
-          FROM fk
-         WHERE oid
-               NOT IN (
-                    SELECT DISTINCT oid FROM matching_fks
-                )
-       );
-`,
-		tableName.String(), columName)
+	return og.scanBool(ctx, tx, fmt.Sprintf(`
+WITH
+	fk
+		AS (
+			SELECT
+				oid,
+				(
+					SELECT
+						r.relname
+					FROM
+						pg_class AS r
+					WHERE
+						r.oid = c.confrelid
+				)
+					AS base_table,
+				a.attname AS base_col,
+				array_position(c.confkey, a.attnum)
+					AS base_ordinal,
+				(
+					SELECT
+						r.relname
+					FROM
+						pg_class AS r
+					WHERE
+						r.oid = c.conrelid
+				)
+					AS referencing_table,
+				unnest(
+					(
+						SELECT
+							array_agg(attname)
+						FROM
+							pg_attribute
+						WHERE
+							attrelid = c.conrelid
+							AND ARRAY[attnum] <@ c.conkey
+							AND array_position(
+									c.confkey,
+									a.attnum
+								)
+								= array_position(
+										c.conkey,
+										attnum
+									)
+					)
+				)
+					AS referencing_col
+			FROM
+				pg_constraint AS c
+				JOIN pg_attribute AS a ON
+						c.confrelid = a.attrelid
+						AND ARRAY[attnum] <@ c.confkey
+			WHERE
+				c.confrelid = $1::REGCLASS::OID
+		),
+	valid_indexes
+		AS (
+			SELECT
+				*
+			FROM
+				[SHOW INDEXES FROM %s]
+			WHERE
+				index_name
+				NOT IN (
+						SELECT
+							DISTINCT index_name
+						FROM
+							[SHOW INDEXES FROM %s]
+						WHERE
+							column_name = $2
+							AND index_name
+								NOT LIKE '%%_pkey' -- renames would keep the old table name
+					)
+		),
+	fk_col_counts
+		AS (
+			SELECT
+				oid, count(*) AS num_cols
+			FROM
+				fk
+			GROUP BY
+				oid
+		),
+	index_col_counts
+		AS (
+			SELECT
+				index_name, count(*) AS num_cols
+			FROM
+				valid_indexes
+			WHERE
+				storing = 'f'
+			GROUP BY
+				index_name
+		),
+	matching_fks
+		AS (
+			SELECT
+				fk.oid
+			FROM
+				fk
+				JOIN valid_indexes
+					ON
+						fk.base_col = valid_indexes.column_name
+				JOIN fk_col_counts
+					ON
+						fk.oid = fk_col_counts.oid
+				JOIN index_col_counts
+					ON
+						valid_indexes.index_name = index_col_counts.index_name
+			WHERE
+				valid_indexes.storing = 'f'
+				AND valid_indexes.non_unique = 'f'
+				AND fk_col_counts.num_cols = index_col_counts.num_cols
+			GROUP BY
+				fk.oid,
+				valid_indexes.index_name,
+				fk_col_counts.num_cols
+			HAVING
+				count(*) = fk_col_counts.num_cols
+		)
+SELECT
+	EXISTS(
+		SELECT
+			*
+		FROM
+			fk
+		WHERE
+			oid NOT IN (SELECT DISTINCT oid FROM matching_fks)
+	);
+`, tableName.String(), tableName.String()), tableName.String(), columName)
 }
 
 func (og *operationGenerator) columnIsDependedOn(
@@ -1545,39 +1540,4 @@ func (og *operationGenerator) tableHasUniqueConstraintMutation(
 			WHERE (m->>'direction')::STRING IN ('ADD', 'DROP')
 			AND (m->'index'->>'unique')::BOOL IS TRUE
 		);`, tableName)
-}
-
-// getTableForeignKeyReferences returns a list of tables that reference
-// the specified table via foreign key references.
-func (og *operationGenerator) getTableForeignKeyReferences(
-	ctx context.Context, tx pgx.Tx, tableName *tree.TableName,
-) ([]tree.TableName, error) {
-	rows, err := tx.Query(ctx,
-		`WITH fk_refs AS (
-					SELECT conrelid FROM pg_constraint WHERE
-						confrelid = $1::REGCLASS AND
-						conrelid <> $1::REGCLASS
-				)
-				SELECT
-					n.nspname as schema_name,  c.relname AS object_name
-				FROM fk_refs AS f
-					JOIN pg_class AS c ON c.oid = f.conrelid
-					JOIN pg_namespace AS n ON c.relnamespace = n.oid
-`,
-		tableName.String())
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []tree.TableName
-	for rows.Next() {
-		var table, schema string
-		err = rows.Scan(&schema, &table)
-		if err != nil {
-			return nil, err
-		}
-		name := tree.MakeTableNameWithSchema(tableName.CatalogName, tree.Name(schema), tree.Name(table))
-		result = append(result, name)
-	}
-	return result, rows.Err()
 }
