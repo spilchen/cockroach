@@ -12,4 +12,4 @@ roachprod put $cluster partition-ttl-schedule.sql partition-ttl-schedule.sql
 roachprod put $cluster row-ttl-schedule.sql row-ttl-schedule.sql
 roachprod start $cluster
 roachprod ssh $cluster:1 "./cockroach workload init movr {pgurl:1}"
-roachprod sql $cluster:1 -e "SET CLUSTER SETTING jobs.registry.interval.adopt = '500ms'"
+roachprod sql $cluster:1 -- -e "SET CLUSTER SETTING jobs.registry.interval.adopt = '500ms'"

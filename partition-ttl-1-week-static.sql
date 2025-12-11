@@ -19,9 +19,9 @@ DROP TABLE IF EXISTS rides ;
       start_time TIMESTAMPTZ NULL,
       end_time TIMESTAMPTZ NULL,
       revenue DECIMAL(10,2) NULL,
-      CONSTRAINT rides_pkey PRIMARY KEY (start_time ASC, city ASC, id ASC) -- ,
-      --INDEX rides_auto_index_fk_city_ref_users (city ASC, rider_id ASC),
-      --INDEX rides_auto_index_fk_vehicle_city_ref_vehicles (vehicle_city ASC, vehicle_id ASC)
+      CONSTRAINT rides_pkey PRIMARY KEY (start_time ASC, city ASC, id ASC),
+      INDEX rides_auto_index_fk_city_ref_users (city ASC, rider_id ASC),
+      INDEX rides_auto_index_fk_vehicle_city_ref_vehicles (vehicle_city ASC, vehicle_id ASC)
   ) PARTITION BY RANGE (start_time) (
     PARTITION p1 VALUES FROM ('2025-11-01 00:00:00+00') TO ('2025-11-02 00:00:00+00'),
     PARTITION p2 VALUES FROM ('2025-11-02 00:00:00+00') TO ('2025-11-03 00:00:00+00'),
