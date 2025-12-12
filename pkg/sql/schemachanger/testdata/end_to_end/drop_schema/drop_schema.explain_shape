@@ -1,9 +1,13 @@
 /* setup */
 CREATE DATABASE db;
+USE db;
 CREATE SCHEMA db.sc;
+CREATE TABLE db.sc.t (i INT);
+CREATE FUNCTION db.sc.f1() RETURNS INT LANGUAGE SQL AS 'SELECT 1';
+CREATE FUNCTION db.public.f2() RETURNS INT LANGUAGE SQL AS 'SELECT 2';
 
 /* test */
-EXPLAIN (DDL, SHAPE) DROP SCHEMA db.sc;
+EXPLAIN (DDL, SHAPE) DROP SCHEMA db.sc CASCADE;
 ----
-Schema change plan for DROP SCHEMA ‹db›.‹sc›;
+Schema change plan for DROP SCHEMA ‹db›.‹sc› CASCADE;
  └── execute 2 system table mutations transactions

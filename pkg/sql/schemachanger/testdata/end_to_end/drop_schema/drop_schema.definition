@@ -1,8 +1,33 @@
 setup
 CREATE DATABASE db;
+USE db;
 CREATE SCHEMA db.sc;
+CREATE TABLE db.sc.t (i INT);
+CREATE FUNCTION db.sc.f1() RETURNS INT LANGUAGE SQL AS 'SELECT 1';
+CREATE FUNCTION db.public.f2() RETURNS INT LANGUAGE SQL AS 'SELECT 2';
 ----
 
+# Test rollback scenarios to verify dependency rules for Namespace IntValue (SchemaID)
+# These rollbacks should properly restore schema descriptor state
+
+# Rollback during PreCommitPhase - should fully revert
+stage-query phase=PreCommitPhase stage=: rollback=true
+SELECT count(*) FROM db.sc.t;
+----
+0
+
+# Rollback during PostCommitPhase - tests that schema descriptor is properly restored
+stage-query phase=PostCommitPhase stage=: rollback=true
+SELECT count(*) FROM [SHOW SCHEMAS FROM db] WHERE schema_name = 'sc';
+----
+1
+
+# Rollback during PostCommitNonRevertiblePhase - schema should remain dropped
+stage-query phase=PostCommitNonRevertiblePhase stage=: rollback=true
+SELECT count(*) FROM [SHOW SCHEMAS FROM db] WHERE schema_name = 'sc';
+----
+0
+
 test
-DROP SCHEMA db.sc;
+DROP SCHEMA db.sc CASCADE;
 ----
