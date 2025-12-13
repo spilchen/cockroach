@@ -326,7 +326,7 @@ const (
 func registerSchemaChangeBulkIngest(r registry.Registry) {
 	// Allow a long running time to account for runs that use a
 	// cockroach build with runtime assertions enabled.
-	r.Add(makeSchemaChangeBulkIngestTest(r, 12, 4_000_000_000, 5*time.Hour, createIndexOp))
+	r.Add(makeSchemaChangeBulkIngestTest(r, 2, 4_000_000_000, 5*time.Hour, createIndexOp))
 	r.Add(makeSchemaChangeBulkIngestTest(r, 12, 4_000_000_000, 5*time.Hour, addColumnOp))
 }
 
@@ -382,6 +382,12 @@ func makeSchemaChangeBulkIngestTest(
 
 			settings := install.MakeClusterSettings()
 			c.Start(ctx, t.L(), option.DefaultStartOpts(), settings, c.CRDBNodes())
+
+			db := c.Conn(ctx, t.L(), 1)
+			defer db.Close()
+			if _, err := db.Exec(`SET CLUSTER SETTING bulkio.index_backfill.distributed_merge.mode = 'declarative'`); err != nil {
+				t.Fatal(err)
+			}
 
 			// Don't add another index when importing.
 			cmdWrite := fmt.Sprintf(
