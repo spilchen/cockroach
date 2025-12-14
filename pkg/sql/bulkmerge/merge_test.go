@@ -196,7 +196,11 @@ func testMergeProcessors(
 		spans,
 		func(instanceID base.SQLInstanceID) string {
 			return fmt.Sprintf("nodelocal://%d/merge/out/", instanceID)
-		})
+		},
+		0,   /* iteration */
+		2,   /* maxIterations */
+		nil, /* writeTS */
+	)
 	require.NoError(t, err)
 	defer plan.Release()
 

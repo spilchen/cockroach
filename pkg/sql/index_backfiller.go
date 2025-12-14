@@ -173,15 +173,13 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	if !useDistributedMerge {
 		return nil
 	}
-	merged, err := ib.runDistributedMerge(ctx, job, descriptor, progress, sstManifestBuf.Snapshot())
-	if err != nil {
+	if err := ib.runDistributedMerge(ctx, job, descriptor, progress, sstManifestBuf.Snapshot()); err != nil {
 		return err
 	}
-	progress.SSTManifests = merged
-	if err := tracker.SetBackfillProgress(ctx, progress); err != nil {
-		return err
-	}
-	return ib.runDistributedIngest(ctx, job, descriptor, progress, merged)
+	// SST manifests have been ingested during the final merge iteration, so
+	// clear them from progress.
+	progress.SSTManifests = nil
+	return tracker.SetBackfillProgress(ctx, progress)
 }
 
 // Index backfilling ingests SSTs that don't play nicely with running txns
@@ -302,14 +300,14 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	descriptor catalog.TableDescriptor,
 	progress scexec.BackfillProgress,
 	manifests []jobspb.IndexBackfillSSTManifest,
-) ([]jobspb.IndexBackfillSSTManifest, error) {
+) error {
 	if len(manifests) == 0 {
-		return nil, nil
+		return nil
 	}
 	ssts := make([]execinfrapb.BulkMergeSpec_SST, 0, len(manifests))
 	for _, manifest := range manifests {
 		if manifest.Span == nil {
-			return nil, errors.AssertionFailedf("manifest missing span metadata")
+			return errors.AssertionFailedf("manifest missing span metadata")
 		}
 		ssts = append(ssts, execinfrapb.BulkMergeSpec_SST{
 			URI:      manifest.URI,
@@ -323,7 +321,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 		targetSpans = append(targetSpans, span)
 	}
 	if len(targetSpans) == 0 {
-		return nil, errors.AssertionFailedf("no destination index spans provided for merge")
+		return errors.AssertionFailedf("no destination index spans provided for merge")
 	}
 
 	mem := &MemoryMetrics{}
@@ -341,62 +339,24 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 		return fmt.Sprintf("nodelocal://%d/job/%d/merge/iter-0/", instanceID, job.ID())
 	}
 
-	merged, err := invokeBulkMerge(ctx, jobExecCtx, ssts, targetSpans, outputURI)
-	if err != nil {
-		return nil, err
-	}
-
-	writeTS := progress.MinimumWriteTimestamp
-	out := make([]jobspb.IndexBackfillSSTManifest, 0, len(merged))
-	for _, sst := range merged {
-		span := roachpb.Span{
-			Key:    append([]byte(nil), sst.StartKey...),
-			EndKey: append([]byte(nil), sst.EndKey...),
+	// Two iterations: first produces merged SSTs to external storage, second
+	// ingests them directly into KV.
+	const maxIterations = 2
+	inputSSTs := ssts
+	for iter := 1; iter <= maxIterations; iter++ {
+		var writeTS *hlc.Timestamp
+		if iter == maxIterations {
+			ts := progress.MinimumWriteTimestamp
+			writeTS = &ts
 		}
-		ts := writeTS
-		out = append(out, jobspb.IndexBackfillSSTManifest{
-			URI:            sst.URI,
-			Span:           &span,
-			WriteTimestamp: &ts,
-		})
-	}
-	return out, nil
-}
-
-// runDistributedIngest runs a final ingest of the SSTs produced by
-// the runDistributedMerge call. This is only used when the distributed
-// merge pipeline is enabled for index backfills.
-// TODO(159374): we can remove this stage of the pipeline if the merge processor
-// can write directly into the KV in it's final iteration.
-func (ib *IndexBackfillPlanner) runDistributedIngest(
-	ctx context.Context,
-	job *jobs.Job,
-	descriptor catalog.TableDescriptor,
-	progress scexec.BackfillProgress,
-	outputs []jobspb.IndexBackfillSSTManifest,
-) error {
-	if len(outputs) == 0 {
-		return nil
-	}
-	spans := make([]roachpb.Span, len(progress.DestIndexIDs))
-	for i, idxID := range progress.DestIndexIDs {
-		spans[i] = descriptor.IndexSpan(ib.execCfg.Codec, idxID)
-	}
-	ssts := make([]execinfrapb.BulkMergeSpec_SST, len(outputs))
-	for i, manifest := range outputs {
-		if manifest.Span == nil {
-			return errors.AssertionFailedf("manifest missing span metadata")
+		merged, err := invokeBulkMerge(ctx, jobExecCtx, inputSSTs, targetSpans, outputURI, iter, maxIterations, writeTS)
+		if err != nil {
+			return err
 		}
-		ssts[i] = execinfrapb.BulkMergeSpec_SST{
-			URI:      manifest.URI,
-			StartKey: append([]byte(nil), manifest.Span.Key...),
-			EndKey:   append([]byte(nil), manifest.Span.EndKey...),
+		if iter == maxIterations {
+			break
 		}
+		inputSSTs = merged
 	}
-
-	mem := &MemoryMetrics{}
-	jobExecCtx, cleanup := MakeJobExecContext(ctx, "index-backfill-ingest", username.NodeUserName(), mem, ib.execCfg)
-	defer cleanup()
-
-	return invokeBulkIngest(ctx, jobExecCtx, spans, ssts)
+	return nil
 }
