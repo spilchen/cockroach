@@ -60,17 +60,14 @@ type Cloud struct {
 	BadInstances vm.List `json:"bad_instances"`
 }
 
-// BadInstanceErrors returns all bad VM instances, grouped by error message.
-// Note: errors are grouped by their string representation to handle cases
-// where errors have been serialized/deserialized and lost pointer identity.
-func (c *Cloud) BadInstanceErrors() map[string]vm.List {
-	ret := map[string]vm.List{}
+// BadInstanceErrors returns all bad VM instances, grouped by error.
+func (c *Cloud) BadInstanceErrors() map[error]vm.List {
+	ret := map[error]vm.List{}
 
 	// Expand instances and errors
-	for _, v := range c.BadInstances {
-		for _, err := range v.Errors {
-			msg := err.Error()
-			ret[msg] = append(ret[msg], v)
+	for _, vm := range c.BadInstances {
+		for _, err := range vm.Errors {
+			ret[err] = append(ret[err], vm)
 		}
 	}
 
@@ -266,11 +263,11 @@ func ListCloud(l *logger.Logger, options vm.ListOptions) (*Cloud, error) {
 			// Parse cluster/user from VM name, but only for non-local VMs
 			userName, err := v.UserName()
 			if err != nil {
-				v.Errors = append(v.Errors, vm.NewVMError(vm.ErrInvalidUserName))
+				v.Errors = append(v.Errors, vm.ErrInvalidUserName)
 			}
 			clusterName, err := v.ClusterName()
 			if err != nil {
-				v.Errors = append(v.Errors, vm.NewVMError(vm.ErrInvalidClusterName))
+				v.Errors = append(v.Errors, vm.ErrInvalidClusterName)
 			}
 
 			// Anything with an error gets tossed into the BadInstances slice, and we'll correct
@@ -537,16 +534,9 @@ func DestroyCluster(l *logger.Logger, c *Cluster) error {
 	// DNS entries are destroyed first to ensure that the GC job will not try
 	// and clean-up entries prematurely.
 	stopSpinner := ui.NewDefaultSpinner(l, "Destroying DNS entries").Start()
-	publicRecords := make([]string, 0, len(c.VMs))
-	for _, v := range c.VMs {
-		publicRecords = append(publicRecords, v.PublicDNS)
-	}
 	dnsErr := vm.FanOutDNS(c.VMs, func(p vm.DNSProvider, vms vm.List) error {
-		publicRecordsErr := p.DeletePublicRecordsByName(context.Background(), publicRecords...)
-		srvRecordsErr := p.DeleteSRVRecordsBySubdomain(context.Background(), c.Name)
-		return errors.CombineErrors(publicRecordsErr, srvRecordsErr)
+		return p.DeleteRecordsBySubdomain(context.Background(), c.Name)
 	})
-
 	stopSpinner()
 
 	stopSpinner = ui.NewDefaultSpinner(l, "Destroying VMs").Start()
