@@ -52,8 +52,6 @@ const (
 	LabelName            = "name"
 	LabelType            = "type"
 	LabelLevel           = "level"
-	LabelOrigin          = "origin"
-	LabelResult          = "result"
 )
 
 type LabelConfig uint64

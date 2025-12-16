@@ -112,9 +112,7 @@ func (m *mergeCoordinator) Next() (rowenc.EncDatumRow, *execinfrapb.ProducerMeta
 		case meta.Err != nil:
 			m.MoveToDraining(meta.Err)
 		default:
-			// If there is non-nil meta, we pass it up the processor chain. It might
-			// be something like a trace.
-			return nil, meta
+			m.MoveToDraining(errors.Newf("unexpected meta: %v", meta))
 		}
 	}
 	return nil, m.DrainHelper()
