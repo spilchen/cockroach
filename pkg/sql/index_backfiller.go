@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/admission/admissionpb"
 	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/errors"
 	gogotypes "github.com/gogo/protobuf/types"
@@ -173,7 +174,8 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	if !useDistributedMerge {
 		return nil
 	}
-	merged, err := ib.runDistributedMerge(ctx, job, descriptor, progress, sstManifestBuf.Snapshot())
+	mapManifests := sstManifestBuf.Snapshot()
+	merged, err := ib.runDistributedMerge(ctx, job, descriptor, progress, mapManifests)
 	if err != nil {
 		return err
 	}
@@ -181,7 +183,7 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	if err := tracker.SetBackfillProgress(ctx, progress); err != nil {
 		return err
 	}
-	return ib.runDistributedIngest(ctx, job, descriptor, progress, merged)
+	return ib.runDistributedIngest(ctx, job, descriptor, progress, mapManifests, merged)
 }
 
 // Index backfilling ingests SSTs that don't play nicely with running txns
@@ -345,6 +347,11 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	if err != nil {
 		return nil, err
 	}
+	cleaner := backfill.NewDistributedMergeCleaner(ib.execCfg.DistSQLSrv.ExternalStorageFromURI, username.NodeUserName())
+	defer cleaner.Close()
+	if err := cleaner.CleanupManifests(ctx, manifests); err != nil {
+		log.Dev.Warningf(ctx, "distributed merge: failed cleaning map SSTs: %v", err)
+	}
 
 	writeTS := progress.MinimumWriteTimestamp
 	out := make([]jobspb.IndexBackfillSSTManifest, 0, len(merged))
@@ -373,6 +380,7 @@ func (ib *IndexBackfillPlanner) runDistributedIngest(
 	job *jobs.Job,
 	descriptor catalog.TableDescriptor,
 	progress scexec.BackfillProgress,
+	mapInputs []jobspb.IndexBackfillSSTManifest,
 	outputs []jobspb.IndexBackfillSSTManifest,
 ) error {
 	if len(outputs) == 0 {
@@ -398,5 +406,29 @@ func (ib *IndexBackfillPlanner) runDistributedIngest(
 	jobExecCtx, cleanup := MakeJobExecContext(ctx, "index-backfill-ingest", username.NodeUserName(), mem, ib.execCfg)
 	defer cleanup()
 
-	return invokeBulkIngest(ctx, jobExecCtx, spans, ssts)
+	if err := invokeBulkIngest(ctx, jobExecCtx, spans, ssts); err != nil {
+		return err
+	}
+
+	cleaner := backfill.NewDistributedMergeCleaner(ib.execCfg.DistSQLSrv.ExternalStorageFromURI, username.NodeUserName())
+	defer cleaner.Close()
+	if err := cleaner.CleanupManifests(ctx, outputs); err != nil {
+		log.Dev.Warningf(ctx, "distributed merge: failed cleaning merged SSTs: %v", err)
+	}
+
+	var prefixSources []string
+	for _, m := range mapInputs {
+		if m.URI != "" {
+			prefixSources = append(prefixSources, m.URI)
+		}
+	}
+	for _, m := range outputs {
+		if m.URI != "" {
+			prefixSources = append(prefixSources, m.URI)
+		}
+	}
+	if err := cleaner.CleanupJobDirectories(ctx, job.ID(), prefixSources); err != nil {
+		log.Dev.Warningf(ctx, "distributed merge: failed sweeping job directory prefixes: %v", err)
+	}
+	return nil
 }

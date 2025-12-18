@@ -11,8 +11,10 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
+	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
+	"github.com/cockroachdb/cockroach/pkg/sql/backfill"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/descmetadata"
@@ -76,7 +78,16 @@ func (n *newSchemaChangeResumer) OnFailOrCancel(
 	if err := execCfg.ProtectedTimestampManager.Unprotect(ctx, n.job); err != nil {
 		log.Dev.Warningf(ctx, "unable to revert protected timestamp %v", err)
 	}
-	return n.run(ctx, execCtx)
+	runErr := n.run(ctx, execCtx)
+	if cleanupErr := backfill.CleanupDistributedMergeJob(
+		ctx,
+		execCfg.DistSQLSrv.ExternalStorageFromURI,
+		username.NodeUserName(),
+		n.job,
+	); cleanupErr != nil {
+		log.Dev.Warningf(ctx, "distributed merge cleanup for job %d: %v", n.job.ID(), cleanupErr)
+	}
+	return runErr
 }
 
 // CollectProfile writes the current phase's explain output, captured earlier,
@@ -171,6 +182,14 @@ func (n *newSchemaChangeResumer) run(ctx context.Context, execCtxI interface{}) 
 	}
 	if err != nil {
 		return jobs.MarkAsRetryJobError(err)
+	}
+	if err := backfill.CleanupDistributedMergeJob(
+		ctx,
+		execCfg.DistSQLSrv.ExternalStorageFromURI,
+		username.NodeUserName(),
+		n.job,
+	); err != nil {
+		log.Dev.Warningf(ctx, "distributed merge cleanup for job %d: %v", n.job.ID(), err)
 	}
 	return nil
 }
