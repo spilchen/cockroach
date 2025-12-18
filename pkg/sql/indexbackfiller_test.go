@@ -791,3 +791,465 @@ func TestIndexBackfillerResumePreservesProgress(t *testing.T) {
 		}
 	}
 }
+
+func TestMultiMergeIndexBackfill(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	ctx := context.Background()
+
+	// Create a temp directory for nodelocal storage used by distributed merge.
+	tempDir := t.TempDir()
+
+	// Track manifests from each iteration using the testing knob.
+	manifestCountByIteration := make(map[int]int, 0)
+
+	srv, db, _ := serverutils.StartServer(t, base.TestServerArgs{
+		ExternalIODir: tempDir,
+		Knobs: base.TestingKnobs{
+			JobsTestingKnobs: jobs.NewTestingKnobsWithShortIntervals(),
+			DistSQL: &execinfra.TestingKnobs{
+				AfterDistributedMergeIteration: func(ctx context.Context, iteration int, manifests []jobspb.IndexBackfillSSTManifest) {
+					manifestCountByIteration[iteration] = len(manifests)
+				},
+			},
+		},
+	})
+	defer srv.Stopper().Stop(ctx)
+
+	tdb := sqlutils.MakeSQLRunner(db)
+
+	tdb.Exec(t, `SET CLUSTER SETTING bulkio.index_backfill.distributed_merge.mode = 'declarative'`)
+	tdb.Exec(t, `SET CLUSTER SETTING bulkio.index_backfill.distributed_merge.iterations = 4`)
+	tdb.Exec(t, `SET CLUSTER SETTING bulkio.merge.file_size = '50KiB'`)
+
+	tdb.Exec(t, `CREATE TABLE t (k INT PRIMARY KEY, v TEXT)`)
+	tdb.Exec(t, `INSERT INTO t SELECT i, repeat('x', 100) || i::text FROM generate_series(1, 5000) AS g(i)`)
+
+	// Trigger the distributed merge index backfill. It validates the final rows
+	// itself, so a successful run implies the new pipeline produced correct
+	// results. The remaining validation checks that intermediate files were
+	// created and recorded in job progress for each iteration.
+	tdb.Exec(t, `CREATE INDEX idx ON t (v)`)
+
+	// Verify that we saw all intermediate iterations (1, 2, 3) via the testing knob.
+	// Iteration 4 is the final one that ingests to KV, so it doesn't generate manifests.
+	require.GreaterOrEqual(t, manifestCountByIteration[1], 12)
+	require.GreaterOrEqual(t, manifestCountByIteration[2], 12)
+	require.GreaterOrEqual(t, manifestCountByIteration[3], 12)
+}
+
+// pauseResumeTestState encapsulates shared state used by testing hooks
+// during pause/resume tests. This state is reset for each subtest variant.
+type pauseResumeTestState struct {
+	backfillProgressCompletedCh chan []roachpb.Span
+	isBlockingBackfillProgress  atomic.Bool
+	manifestCountByIteration    map[int]int
+	currentIteration            atomic.Int32
+	finalIterationCompleted     atomic.Bool
+	iterationContinueCh         chan struct{}
+	currentTestName             string
+	pauseDuringMapPhase         bool
+	pauseAfterIteration         int
+}
+
+// reset initializes the state for a new subtest run.
+func (s *pauseResumeTestState) reset(testName string, pauseDuringMap bool, pauseAfterIter int) {
+	s.currentTestName = testName
+	s.pauseDuringMapPhase = pauseDuringMap
+	s.pauseAfterIteration = pauseAfterIter
+	s.backfillProgressCompletedCh = make(chan []roachpb.Span)
+	s.manifestCountByIteration = make(map[int]int, 0)
+	s.currentIteration.Store(0)
+	s.finalIterationCompleted.Store(false)
+	s.iterationContinueCh = make(chan struct{})
+	s.isBlockingBackfillProgress.Store(true)
+}
+
+// waitForCheckpointPersisted waits for checkpoint data to be persisted to the job payload.
+// For map phase pauses, it verifies that expectedSpans are checkpointed.
+// For iteration pauses, it verifies that SST manifests are checkpointed.
+func waitForCheckpointPersisted(
+	t *testing.T,
+	ctx context.Context,
+	db *gosql.DB,
+	jobID int,
+	expectedSpans []roachpb.Span,
+) {
+	testutils.SucceedsWithin(t, func() error {
+		stmt := `SELECT payload FROM crdb_internal.system_jobs WHERE id = $1`
+		var payloadBytes []byte
+		if err := db.QueryRowContext(ctx, stmt, jobID).Scan(&payloadBytes); err != nil {
+			return err
+		}
+
+		payload := &jobspb.Payload{}
+		if err := protoutil.Unmarshal(payloadBytes, payload); err != nil {
+			return err
+		}
+
+		schemaChangeDetails := payload.Details.(*jobspb.Payload_NewSchemaChange).NewSchemaChange
+		if len(schemaChangeDetails.BackfillProgress) == 0 {
+			return errors.Errorf("no backfill progress found")
+		}
+
+		// If expectedSpans is provided, verify completed spans are checkpointed.
+		if len(expectedSpans) > 0 {
+			checkpointedSpans := schemaChangeDetails.BackfillProgress[0].CompletedSpans
+			var checkpointedGroup roachpb.SpanGroup
+			checkpointedGroup.Add(checkpointedSpans...)
+
+			var expectedGroup roachpb.SpanGroup
+			expectedGroup.Add(expectedSpans...)
+
+			if !checkpointedGroup.Encloses(expectedGroup.Slice()...) {
+				return errors.Errorf("checkpoint doesn't contain all observed spans yet")
+			}
+			return nil
+		}
+
+		// Otherwise, verify SST manifests are checkpointed (iteration pause case).
+		ssts := schemaChangeDetails.BackfillProgress[0].SSTManifests
+		if len(ssts) == 0 {
+			return errors.Errorf("no SST manifests checkpointed yet")
+		}
+		t.Logf("checkpoint contains %d SST manifests", len(ssts))
+		return nil
+	}, 5*time.Second)
+}
+
+// TestDistributedMergeResumePreservesProgress tests that spans completed during
+// a distributed merge backfill are properly preserved during PAUSE/RESUMEs.
+// The test has multiple variants controlled by anonymous struct test options:
+// - pauseDuringMapPhase: Pauses during the map phase after receiving progress updates.
+// - pauseAfterMapPhase: Pauses after the map phase completes (during merge phase).
+// - checkpointInterval: Fast (10ms) vs slow (5s) checkpoint interval.
+// - waitForCheckpoint: Whether to wait for checkpoint to persist before pausing.
+//
+// When waitForCheckpoint is true, the test validates that no span is processed
+// twice. When false, it accepts duplicate work but validates the final index is correct.
+func TestDistributedMergeResumePreservesProgress(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	skip.UnderDeadlock(t, "slow timing sensitive test")
+	skip.UnderRace(t, "slow timing sensitive test")
+
+	ctx := context.Background()
+	const numRows = 500
+	const numSpans = 10
+
+	// Shared state for testing hooks - reset for each subtest.
+	var state pauseResumeTestState
+	var codec keys.SQLCodec
+
+	// Create temp directory and server once for all subtests.
+	tempDir := t.TempDir()
+	srv, db, _ := serverutils.StartServer(t, base.TestServerArgs{
+		ExternalIODir: tempDir,
+		Knobs: base.TestingKnobs{
+			JobsTestingKnobs: jobs.NewTestingKnobsWithShortIntervals(),
+			DistSQL: &execinfra.TestingKnobs{
+				BulkAdderFlushesEveryBatch: true,
+				RunBeforeIndexBackfillProgressUpdate: func(ctx context.Context, completed []roachpb.Span) {
+					if state.isBlockingBackfillProgress.Load() && state.pauseDuringMapPhase {
+						if toRemove := len(codec.TenantPrefix()); toRemove > 0 {
+							updated := make([]roachpb.Span, len(completed))
+							for i := range updated {
+								sp := completed[i]
+								updated[i] = roachpb.Span{
+									Key:    append(roachpb.Key(nil), sp.Key[toRemove:]...),
+									EndKey: append(roachpb.Key(nil), sp.EndKey[toRemove:]...),
+								}
+							}
+							completed = updated
+						}
+						select {
+						case <-ctx.Done():
+						case state.backfillProgressCompletedCh <- completed:
+							t.Logf("[%s] before index backfill progress update, completed spans: %v", state.currentTestName, completed)
+						}
+					}
+				},
+				AfterDistributedMergeIteration: func(ctx context.Context, iteration int, manifests []jobspb.IndexBackfillSSTManifest) {
+					state.currentIteration.Store(int32(iteration))
+					state.manifestCountByIteration[iteration] = len(manifests)
+					t.Logf("[%s] after distributed merge iteration %d, manifests count: %d", state.currentTestName, iteration, len(manifests))
+
+					if len(manifests) == 0 {
+						t.Logf("[%s] final iteration %d completed (direct KV ingest)", state.currentTestName, iteration)
+						state.finalIterationCompleted.Store(true)
+					}
+
+					// Only block if this is NOT the final iteration (len(manifests) > 0).
+					// On resume, the final iteration will have len(manifests)==0, and we don't want to block.
+					if state.pauseAfterIteration > 0 && iteration == state.pauseAfterIteration && len(manifests) > 0 {
+						t.Logf("[%s] iteration %d complete, blocking to allow test to pause job", state.currentTestName, iteration)
+						select {
+						case <-state.iterationContinueCh:
+							t.Logf("[%s] unblocked by test, continuing with remaining iterations", state.currentTestName)
+						case <-ctx.Done():
+							t.Logf("[%s] context cancelled (job paused), exiting hook", state.currentTestName)
+							return
+						}
+					}
+				},
+			},
+			SQLDeclarativeSchemaChanger: &scexec.TestingKnobs{
+				RunBeforeBackfill: func(progresses []scexec.BackfillProgress) error {
+					if progresses != nil && state.pauseDuringMapPhase {
+						t.Logf("[%s] before resuming backfill, checkpointed spans: %v", state.currentTestName, progresses[0].CompletedSpans)
+					}
+					return nil
+				},
+				AfterStage: func(p scplan.Plan, stageIdx int) error {
+					if p.Stages[stageIdx].Type() != scop.BackfillType || !state.isBlockingBackfillProgress.Load() {
+						return nil
+					}
+					if state.pauseDuringMapPhase {
+						state.isBlockingBackfillProgress.Store(false)
+						close(state.backfillProgressCompletedCh)
+					}
+					return nil
+				},
+			},
+		},
+	})
+	defer srv.Stopper().Stop(ctx)
+	s := srv.ApplicationLayer()
+	codec = s.Codec()
+
+	// Set cluster settings once for all tests.
+	_, err := db.Exec(`SET CLUSTER SETTING bulkio.index_backfill.distributed_merge.mode = 'declarative'`)
+	require.NoError(t, err)
+	_, err = db.Exec(`SET CLUSTER SETTING bulkio.index_backfill.distributed_merge.iterations = 4`)
+	require.NoError(t, err)
+	_, err = db.Exec(`SET CLUSTER SETTING bulkio.merge.file_size = '50KiB'`)
+	require.NoError(t, err)
+	_, err = db.Exec(`SET CLUSTER SETTING bulkio.index_backfill.batch_size = 500`)
+	require.NoError(t, err)
+	_, err = db.Exec(`SET CLUSTER SETTING bulkio.index_backfill.ingest_concurrency=4`)
+	require.NoError(t, err)
+
+	// Create table once with padding to ensure larger rows that generate multiple SSTs.
+	_, err = db.Exec(`CREATE TABLE t(i INT PRIMARY KEY, v TEXT)`)
+	require.NoError(t, err)
+	// Insert rows with padding to increase row size.
+	_, err = db.Exec(`INSERT INTO t SELECT i, repeat('x', 100) || i::text FROM generate_series(1, $1) AS g(i)`, (numRows*numSpans)+1)
+	require.NoError(t, err)
+	// Create splits to ensure multiple spans.
+	for split := 0; split < numSpans; split++ {
+		_, err = db.Exec(`ALTER TABLE t SPLIT AT VALUES ($1)`, numRows*split)
+	}
+	require.NoError(t, err)
+
+	testIdx := 0
+	for _, tc := range []struct {
+		name                string
+		pauseDuringMapPhase bool
+		pauseAfterIteration int // 0 means don't pause after iteration, >0 means pause after that iteration
+		checkpointInterval  string
+		waitForCheckpoint   bool
+	}{
+		{
+			name:                "fast checkpoint pause during map",
+			pauseDuringMapPhase: true,
+			checkpointInterval:  "10ms",
+			waitForCheckpoint:   true,
+		},
+		{
+			name:                "slow checkpoint pause during map",
+			pauseDuringMapPhase: true,
+			checkpointInterval:  "5s",
+			waitForCheckpoint:   false,
+		},
+		{
+			name:                "pause after iteration 1 with checkpoint",
+			pauseAfterIteration: 1,
+			checkpointInterval:  "10ms",
+			waitForCheckpoint:   true,
+		},
+		{
+			name:                "pause after iteration 2 with checkpoint",
+			pauseAfterIteration: 2,
+			checkpointInterval:  "10ms",
+			waitForCheckpoint:   true,
+		},
+		{
+			name:                "pause after iteration 3 with checkpoint",
+			pauseAfterIteration: 3,
+			checkpointInterval:  "10ms",
+			waitForCheckpoint:   true,
+		},
+	} {
+		// Use unique index name per subtest to avoid job ID confusion.
+		testIdx++
+		indexName := fmt.Sprintf("idx%d", testIdx)
+
+		t.Run(tc.name, func(t *testing.T) {
+			// Reset state for this subtest.
+			state.reset(tc.name, tc.pauseDuringMapPhase, tc.pauseAfterIteration)
+
+			// Set checkpoint interval based on test variant.
+			_, err = db.Exec(`SET CLUSTER SETTING bulkio.index_backfill.checkpoint_interval = $1`, tc.checkpointInterval)
+			require.NoError(t, err)
+			t.Logf("checkpoint interval set to %s, waitForCheckpoint=%v", tc.checkpointInterval, tc.waitForCheckpoint)
+
+			var jobID int
+			g := ctxgroup.WithContext(ctx)
+			g.GoCtx(func(ctx context.Context) error {
+				_, err := db.ExecContext(ctx, fmt.Sprintf(`CREATE INDEX %s ON t (v)`, indexName))
+				if err != nil && err.Error() != fmt.Sprintf("pq: job %d was paused before it completed", jobID) {
+					return err
+				}
+				return nil
+			})
+
+			testutils.SucceedsWithin(t, func() error {
+				jobIDRow := db.QueryRow(`
+					SELECT job_id FROM [SHOW JOBS]
+					WHERE job_type = 'NEW SCHEMA CHANGE' AND description ILIKE $1
+					ORDER BY created DESC LIMIT 1`,
+					fmt.Sprintf("%%CREATE INDEX %s%%", indexName),
+				)
+				if err := jobIDRow.Scan(&jobID); err != nil {
+					return err
+				}
+				return nil
+			}, 30*time.Second)
+
+			ensureJobState := func(targetState string) {
+				testutils.SucceedsWithin(t, func() error {
+					var jobState string
+					statusRow := db.QueryRow(`SELECT status FROM [SHOW JOB $1]`, jobID)
+					if err := statusRow.Scan(&jobState); err != nil {
+						return err
+					}
+					if jobState != targetState {
+						return errors.Errorf("expected job to be %s, but found status: %s",
+							targetState, jobState)
+					}
+					return nil
+				}, 30*time.Second)
+			}
+
+			var observedSpansBeforePause []roachpb.Span
+			var observedSpansAfterResume []roachpb.Span
+
+			if tc.pauseDuringMapPhase {
+				// Wait for some progress updates to accumulate.
+				t.Logf("waiting for progress updates before pausing")
+				updateCount := 3
+				for updateCount > 0 {
+					progressUpdate := <-state.backfillProgressCompletedCh
+					t.Logf("received progress update: %v", progressUpdate)
+					observedSpansBeforePause = append(observedSpansBeforePause, progressUpdate...)
+					updateCount--
+				}
+
+				if tc.waitForCheckpoint {
+					// Wait for checkpoint to persist to disk.
+					t.Logf("waiting for checkpoint to persist")
+					waitForCheckpointPersisted(t, ctx, db, jobID, observedSpansBeforePause)
+					t.Logf("pausing job after checkpoint persisted (%d spans)", len(observedSpansBeforePause))
+				} else {
+					t.Logf("pausing job before checkpoint persists (%d spans observed in memory)", len(observedSpansBeforePause))
+				}
+
+				_, err = db.Exec(`PAUSE JOB $1`, jobID)
+				require.NoError(t, err)
+				ensureJobState("paused")
+
+				t.Logf("resuming job")
+				_, err = db.Exec(`RESUME JOB $1`, jobID)
+				require.NoError(t, err)
+				ensureJobState("running")
+
+				// Collect all remaining progress updates after resume.
+				for state.isBlockingBackfillProgress.Load() {
+					progressUpdate := <-state.backfillProgressCompletedCh
+					t.Logf("received progress update after resume: %v", progressUpdate)
+					observedSpansAfterResume = append(observedSpansAfterResume, progressUpdate...)
+				}
+
+				if tc.waitForCheckpoint {
+					// Check for duplicate work: verify no span observed after resume was already seen before pause.
+					for _, afterSpan := range observedSpansAfterResume {
+						for _, beforeSpan := range observedSpansBeforePause {
+							if afterSpan.Equal(beforeSpan) {
+								t.Fatalf("DUPLICATE WORK DETECTED: span %s was completed before pause and again after resume.\n"+
+									"This means the checkpoint didn't persist progress and work was redone.\n"+
+									"Spans before pause: %v\n"+
+									"Spans after resume: %v",
+									afterSpan, observedSpansBeforePause, observedSpansAfterResume)
+							}
+						}
+					}
+					t.Logf("no duplicate work detected - all spans processed exactly once")
+				}
+
+				t.Logf("observed %d span updates before pause, %d after resume",
+					len(observedSpansBeforePause), len(observedSpansAfterResume))
+
+			} else if tc.pauseAfterIteration > 0 {
+				// Wait for the specified iteration to complete.
+				// The hook will block after that iteration waiting for iterationContinueCh.
+				testutils.SucceedsWithin(t, func() error {
+					if state.currentIteration.Load() >= int32(tc.pauseAfterIteration) {
+						return nil
+					}
+					return errors.Errorf("waiting for iteration %d to complete, current: %d",
+						tc.pauseAfterIteration, state.currentIteration.Load())
+				}, 30*time.Second)
+
+				t.Logf("iteration %d completed", tc.pauseAfterIteration)
+
+				if tc.waitForCheckpoint {
+					// Wait for checkpoint to persist the SST manifests from this iteration.
+					t.Logf("waiting for checkpoint to persist SST manifests from iteration %d", tc.pauseAfterIteration)
+					waitForCheckpointPersisted(t, ctx, db, jobID, nil)
+					t.Logf("pausing job after checkpoint persisted SST manifests")
+				} else {
+					t.Logf("pausing job before checkpoint persists (5s checkpoint interval)")
+				}
+
+				// Pause the job after the iteration completes (hook is blocked).
+				_, err := db.Exec(`PAUSE JOB $1`, jobID)
+				require.NoError(t, err)
+				ensureJobState("paused")
+
+				t.Logf("job paused after iteration %d, now resuming to complete remaining iterations", tc.pauseAfterIteration)
+
+				// Resume the job - it should restart from BackfillIndexes() with checkpointed progress.
+				// The resumed job will detect DistributedMergePhase >= 1 and run a single merge to KV.
+				_, err = db.Exec(`RESUME JOB $1`, jobID)
+				require.NoError(t, err)
+			}
+
+			// Now we can wait for the job to succeed.
+			ensureJobState("succeeded")
+			if err = g.Wait(); err != nil {
+				require.NoError(t, err)
+			}
+
+			// Verify the final index is correct by checking row count.
+			var indexRowCount int
+			err = db.QueryRow(fmt.Sprintf(`SELECT count(*) FROM t@%s`, indexName)).Scan(&indexRowCount)
+			require.NoError(t, err)
+			require.Equal(t, (numRows*numSpans)+1, indexRowCount, "index should contain all rows")
+
+			if tc.pauseAfterIteration > 0 {
+				// Verify that resumption runs a single merge iteration directly to KV.
+				// When checkpoint is persisted, the system detects DistributedMergePhase >= 1
+				// and runs one final merge iteration to KV rather than restarting the pipeline.
+				require.True(t, state.finalIterationCompleted.Load(),
+					"expected final iteration (KV ingest) to complete after pause/resume at iteration %d",
+					tc.pauseAfterIteration)
+				t.Logf("resumption from iteration %d completed with final KV ingest (total iterations: %d)",
+					tc.pauseAfterIteration, state.currentIteration.Load())
+			}
+
+			// Log the manifest counts for debugging.
+			t.Logf("manifest counts by iteration: %v", state.manifestCountByIteration)
+		})
+	}
+}
