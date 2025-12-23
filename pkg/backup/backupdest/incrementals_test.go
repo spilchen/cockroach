@@ -15,7 +15,6 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/backup/backupbase"
 	"github.com/cockroachdb/cockroach/pkg/backup/backupdest"
-	"github.com/cockroachdb/cockroach/pkg/backup/backupinfo"
 	"github.com/cockroachdb/cockroach/pkg/backup/backuptestutils"
 	"github.com/cockroachdb/cockroach/pkg/backup/backuputils"
 	"github.com/cockroachdb/cockroach/pkg/cloud"
@@ -251,7 +250,7 @@ func TestFindAllIncrementalPaths(t *testing.T) {
 
 			var expectedPaths []string
 			for _, b := range targetChain[1:] {
-				expectedPaths = append(expectedPaths, backupinfo.ConstructDateBasedIncrementalFolderName(
+				expectedPaths = append(expectedPaths, backupdest.ConstructDateBasedIncrementalFolderName(
 					toTime(b.start), toTime(b.end),
 				))
 			}
@@ -440,7 +439,7 @@ func writeEmptyBackupManifest(
 		}
 		backupPath = backuputils.JoinURLPath(
 			subdir,
-			backupinfo.ConstructDateBasedIncrementalFolderName(start, end),
+			backupdest.ConstructDateBasedIncrementalFolderName(start, end),
 		)
 	}
 
@@ -487,7 +486,7 @@ func writeEmptyBackupManifest(
 
 	require.NoError(
 		t,
-		backupinfo.WriteBackupIndexMetadata(
+		backupdest.WriteBackupIndexMetadata(
 			context.Background(), execCfg, username.RootUserName(),
 			execCfg.DistSQLSrv.ExternalStorageFromURI, backupDetails, hlc.Timestamp{},
 		),
@@ -593,4 +592,70 @@ func TestLegacyFindPriorBackups(t *testing.T) {
 			require.Equal(t, tc.expectedPaths, prev)
 		})
 	}
+}
+
+func TestCleanupMakeBackupDestinationStores(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	// This test ensures that in the event that MakeBackupDestinationStores
+	// encounters an error either during store creation or during cleanup that all
+	// stores that were opened have Close called.
+	ctx := context.Background()
+
+	const maxStores = 10
+	failAfterN := rand.Intn(maxStores + 1)
+
+	stores := make([]*fakeStore, 0, maxStores)
+	mkStore := func(
+		_ context.Context,
+		_ string,
+		_ username.SQLUsername,
+		_ ...cloud.ExternalStorageOption,
+	) (cloud.ExternalStorage, error) {
+		if len(stores) == failAfterN {
+			return nil, fmt.Errorf("simulated failure after %d stores", failAfterN)
+		}
+		s := &fakeStore{closeErrProbability: 0.1}
+		stores = append(stores, s)
+		return s, nil
+	}
+
+	destinations := make([]string, maxStores)
+	_, cleanup, err := backupdest.MakeBackupDestinationStores(
+		ctx, username.RootUserName(), mkStore, destinations,
+	)
+
+	countOpenStores := func() int {
+		count := 0
+		for _, s := range stores {
+			if !s.calledClose {
+				count++
+			}
+		}
+		return count
+	}
+
+	if failAfterN < maxStores {
+		require.Error(t, err)
+		require.Equal(t, 0, countOpenStores())
+	} else {
+		require.NoError(t, err)
+		require.Equal(t, maxStores, countOpenStores())
+		_ = cleanup()
+		require.Equal(t, 0, countOpenStores())
+	}
+}
+
+type fakeStore struct {
+	cloud.ExternalStorage
+	calledClose         bool
+	closeErrProbability float32
+}
+
+// Close() simulates closing the store and probabilistically returns an error.
+func (s *fakeStore) Close() error {
+	s.calledClose = true
+	if rand.Float32() < s.closeErrProbability {
+		return fmt.Errorf("simulated close error")
+	}
+	return nil
 }

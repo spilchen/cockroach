@@ -55,7 +55,7 @@ func DialDRPC(
 			_ struct{}) (drpcpool.Conn, error) {
 
 			netConn, err := func(ctx context.Context) (net.Conn, error) {
-				if rpcCtx.ContextOptions.AdvertiseAddr == target && rpcCtx.canLoopbackDial() {
+				if rpcCtx.ContextOptions.AdvertiseAddr == target && !rpcCtx.ClientOnly {
 					return rpcCtx.loopbackDRPCDialFn(ctx)
 				}
 				return drpcmigrate.DialWithHeader(ctx, "tcp", target, drpcmigrate.DRPCHeader)
@@ -220,13 +220,7 @@ func NewDRPCServer(_ context.Context, rpcCtx *Context, opts ...ServerOption) (DR
 	streamInterceptors = append(streamInterceptors, stopStream)
 
 	// Recover from any uncaught panics caused by DB Console requests.
-	unaryInterceptors = append(unaryInterceptors, drpcGatewayRequestRecoveryInterceptor)
-
-	// If the metrics interceptor is set, it should be registered second so
-	// that all other interceptors are included in the response time durations.
-	if o.drpcRequestMetricsInterceptor != nil {
-		unaryInterceptors = append(unaryInterceptors, drpcmux.UnaryServerInterceptor(o.drpcRequestMetricsInterceptor))
-	}
+	unaryInterceptors = append(unaryInterceptors, DRPCGatewayRequestRecoveryInterceptor)
 
 	if !rpcCtx.ContextOptions.Insecure {
 		a := kvAuth{

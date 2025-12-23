@@ -244,21 +244,6 @@ func (mr *MetricsRecorder) AppRegistry() *metric.Registry {
 	return mr.mu.appRegistry
 }
 
-// NodeRegistry returns the metric registry for node-level metrics.
-func (mr *MetricsRecorder) NodeRegistry() *metric.Registry {
-	mr.mu.Lock()
-	defer mr.mu.Unlock()
-	return mr.mu.logRegistry
-}
-
-// StoreRegistry returns the metric registry for store-level metrics
-// corresponding to the provided store ID.
-func (mr *MetricsRecorder) StoreRegistry(id roachpb.StoreID) *metric.Registry {
-	mr.mu.Lock()
-	defer mr.mu.Unlock()
-	return mr.mu.storeRegistries[id]
-}
-
 // AddNode adds various metric registries an initialized server, along
 // with its descriptor and start time.
 // The registries are:
@@ -327,6 +312,14 @@ func (mr *MetricsRecorder) AddStore(store storeMetrics) {
 	defer mr.mu.Unlock()
 	storeID := store.StoreID()
 	store.Registry().AddLabel("store", strconv.Itoa(int(storeID)))
+	// If AddNode has already been called, we need to add the node_id label here.
+	// This can happen when stores are initialized asynchronously after node start.
+	// There's no risk of duplicate labels: either the store is added before AddNode
+	// runs (in which case desc.NodeID is 0 here, and AddNode adds the label), or it's
+	// added after (in which case we add it here, and AddNode never saw this store).
+	if !disableNodeAndTenantLabels && mr.mu.desc.NodeID != 0 {
+		store.Registry().AddLabel("node_id", strconv.Itoa(int(mr.mu.desc.NodeID)))
+	}
 	mr.mu.storeRegistries[storeID] = store.Registry()
 	mr.mu.stores[storeID] = store
 }

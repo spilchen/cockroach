@@ -100,8 +100,8 @@ func newTestHelper(t *testing.T, testKnobs ...func(*base.TestingKnobs)) (*testHe
 		Settings:      cluster.MakeClusterSettings(),
 		ExternalIODir: dir,
 		// Some scheduled backup tests fail when run within a tenant. More
-		// investigation is required.
-		DefaultTestTenant: base.TestDoesNotWorkWithSecondaryTenantsButWeDontKnowWhyYet(142798),
+		// investigation is required. Tracked with #76378.
+		DefaultTestTenant: base.TODOTestTenantDisabled,
 		Knobs:             knobs,
 	}
 	jobs.PollJobsMetricsInterval.Override(context.Background(), &args.Settings.SV, 250*time.Millisecond)
@@ -151,6 +151,7 @@ func (h *testHelper) clearSchedules(t *testing.T) {
 func (h *testHelper) waitForScheduledJobState(
 	t *testing.T, scheduleID jobspb.ScheduleID, state jobs.State,
 ) {
+	t.Helper()
 	query := "SELECT status FROM " + h.env.SystemJobsTableName() +
 		" WHERE created_by_type=$1 AND created_by_id=$2 ORDER BY created DESC LIMIT 1"
 

@@ -95,7 +95,7 @@ var automaticStatsJobAutoCleanup = settings.RegisterBoolSetting(
 	settings.ApplicationLevel,
 	"sql.stats.automatic_stats_job_auto_cleanup.enabled",
 	"set to true to enable automatic cleanup of completed AUTO CREATE STATISTICS jobs",
-	true)
+	false)
 
 const nonIndexColHistogramBuckets = 2
 
