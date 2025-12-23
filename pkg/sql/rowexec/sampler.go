@@ -275,7 +275,7 @@ func (s *samplerProcessor) mainLoop(
 							(cpuUsageMaxThrottle - cpuUsageMinThrottle)
 					}
 					if log.V(1) {
-						log.Dev.Infof(
+						log.Infof(
 							ctx, "throttling to fraction idle %.2f (based on usage %.2f)", fractionIdle, usage,
 						)
 					}
@@ -303,13 +303,13 @@ func (s *samplerProcessor) mainLoop(
 			}
 		}
 
+		if earlyExit, err = s.sampleRow(ctx, output, &s.sr, row, rng); earlyExit || err != nil {
+			return earlyExit, err
+		}
 		for i := range s.sketches {
 			if err := s.sketches[i].addRow(ctx, row, s.outTypes, &buf); err != nil {
 				return false, err
 			}
-		}
-		if earlyExit, err = s.sampleRow(ctx, output, &s.sr, row, rng); earlyExit || err != nil {
-			return earlyExit, err
 		}
 
 		for col, invSr := range s.invSr {
@@ -335,11 +335,11 @@ func (s *samplerProcessor) mainLoop(
 			for _, key := range invKeys {
 				d := tree.DBytes(key)
 				invRow[0].Datum = &d
-				if err := s.invSketch[col].addRow(ctx, invRow, bytesRowType, &buf); err != nil {
-					return false, err
-				}
 				if earlyExit, err = s.sampleRow(ctx, output, invSr, invRow, rng); earlyExit || err != nil {
 					return earlyExit, err
+				}
+				if err := s.invSketch[col].addRow(ctx, invRow, bytesRowType, &buf); err != nil {
+					return false, err
 				}
 			}
 		}
@@ -448,7 +448,7 @@ func (s *samplerProcessor) sampleRow(
 		// We hit an out of memory error. Clear the sample reservoir and
 		// disable histogram sample collection.
 		sr.Disable()
-		log.Dev.Info(ctx, "disabling histogram collection due to excessive memory utilization")
+		log.Info(ctx, "disabling histogram collection due to excessive memory utilization")
 		telemetry.Inc(sqltelemetry.StatsHistogramOOMCounter)
 
 		// Send a metadata record so the sample aggregator will also disable
@@ -460,7 +460,7 @@ func (s *samplerProcessor) sampleRow(
 			return true, nil
 		}
 	} else if sr.Cap() != prevCapacity {
-		log.Dev.Infof(
+		log.Infof(
 			ctx, "histogram samples reduced from %d to %d due to excessive memory utilization",
 			prevCapacity, sr.Cap(),
 		)

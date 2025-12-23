@@ -200,7 +200,7 @@ func (b *Builder) tryBuildFastPathInsert(
 	insInput := ins.Input
 	values, ok := insInput.(*memo.ValuesExpr)
 	// Values expressions containing subqueries or UDFs, or having a size larger
-	// than the max mutation SQL-level batch size are disallowed.
+	// than the max mutation batch size are disallowed.
 	if !ok || !memo.ValuesLegalForInsertFastPath(values) {
 		return execPlan{}, colOrdMap{}, false, nil
 	}
@@ -742,7 +742,7 @@ func (b *Builder) buildDeleteRange(del *memo.DeleteExpr) (execPlan, error) {
 		// Mutations only allow auto-commit if there are no FK checks or cascades.
 
 		if maxRows, ok := b.indexConstraintMaxResults(&scan.ScanPrivate, scan.Relational()); ok {
-			if maxKeys := maxRows * uint64(tab.FamilyCount()); maxKeys <= uint64(row.DeleteRangeChunkSize(b.evalCtx.TestingKnobs.ForceProductionValues)) {
+			if maxKeys := maxRows * uint64(tab.FamilyCount()); maxKeys <= row.TableTruncateChunkSize {
 				autoCommit = true
 			}
 		}
@@ -1233,7 +1233,7 @@ func shouldApplyImplicitLockingToUpdateOrDeleteInput(
 	var toLockIndexes intsets.Fast
 	// Try to match the mutation's input expression against the pattern:
 	//
-	//   [Project]* [IndexJoin] (Scan | PlaceholderScan | LookupJoin [LookupJoin] Values)
+	//   [Project]* [IndexJoin] (Scan | LookupJoin [LookupJoin] Values)
 	//
 	// The IndexJoin will only be present if the base expression is a Scan, but
 	// making it an optional prefix to the LookupJoins makes the logic simpler.
@@ -1245,9 +1245,6 @@ func shouldApplyImplicitLockingToUpdateOrDeleteInput(
 	var toLock opt.TableID
 	switch t := input.(type) {
 	case *memo.ScanExpr:
-		toLockIndexes.Add(t.Index)
-		toLock = t.Table
-	case *memo.PlaceholderScanExpr:
 		toLockIndexes.Add(t.Index)
 		toLock = t.Table
 	case *memo.LookupJoinExpr:

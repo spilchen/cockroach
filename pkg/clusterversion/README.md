@@ -30,7 +30,7 @@ graph TD;
         Latest = 23.2-x 
         PreviousRelease = 23.1
         MinSupported = 23.1
-        developmentBranch = false
+        DevelopmentBranch = false
         version.txt = v24.1.0-beta.1")
   
   rel1 --> rel2
@@ -39,7 +39,7 @@ graph TD;
         Latest = 24.1
         PreviousRelease = 23.1
         MinSupported = 23.1
-        developmentBranch = false
+        DevelopmentBranch = false
         finalVersion = V24_1
         version.txt = v24.1.0")
 
@@ -92,20 +92,18 @@ first beta is special because starting with this version we allow production
 clusters from the previous version to be upgraded to the beta version; and,
 consequently, we allow and support upgrading from the beta cluster version to
 the final release cluster version. This transition is achieved by setting
-`developmentBranch` to `false`; see `developmentBranch` and `DevOffset` in the
+`DevelopmentBranch` to `false`; see `DevelopmentBranch` and `DevOffset` in the
 code for more details.
 
 **When**: When we are ready to select the first beta candidate.
 
-**Claude Prompt**: "Please create a PR to prepare the release-25.4 branch for beta.1 following the R.1 checklist in pkg/clusterversion/README.md and the detailed runbook in pkg/clusterversion/CLAUDE.md"
-
 **Checklist**:
- - [ ] Set `developmentBranch` constant to `false`
+ - [ ] Set `DevelopmentBranch` constant to `false`
  - [ ] Update `version.txt` to the beta version, e.g. `24.1.0-beta.1`
  - [ ] Regenerate docs (`./dev gen docs`)
- - [ ] Regenerate expected test data results as needed
+ - [ ] Regenerate expected test data results as needed (`./dev test pkg/sql/catalog/bootstrap --rewrite -f TestInitialValuesToString`)
 
-**Example PR:** [#153906](https://github.com/cockroachdb/cockroach/pull/153906)
+**Example PR:** [#113912](https://github.com/cockroachdb/cockroach/pull/113912)
 
 ### R.2: Mint release
 
@@ -113,8 +111,6 @@ code for more details.
 
 **When**: When we are absolutely sure that we no longer need additional version
 gates - right before the final RC at the latest.
-
-**Claude Prompt**: "Please create a PR to mint the 25.4 release following the R.2 checklist in pkg/clusterversion/README.md and the detailed runbook in pkg/clusterversion/CLAUDE.md. We're preparing rc.1."
 
 **Checklist**:
 - [ ] Replace temporary constant for current release (e.g. `V24_1`) with a
@@ -142,8 +138,6 @@ any mixed-cluster or upgrade tests with the forked release.
 Technically this step can happen right after forking, but if there are changes
 to the gates or upgrades in the forked release it might cause issues with
 master-to-master upgrades.
-
-**Claude Prompt**: "Please create a PR to bump master to 26.1 following the M.1 checklist in pkg/clusterversion/README.md and the detailed runbook in pkg/clusterversion/CLAUDE.md"
 
 **Checklist**:
 
@@ -196,8 +190,6 @@ respective logictest config.
 of the forked release is cut. It can happen earlier, but we don't want it to
 happen while there is a high chance of in-progress changes that affect the
 bootstrap data in a meaningful way.
-
-**Claude Prompt**: "Please create a PR to enable mixed-cluster logic tests for 25.4 following the M.2 checklist in pkg/clusterversion/README.md and the detailed runbook in pkg/clusterversion/CLAUDE.md. Base this on top of the M.1 PR."
 
 **Checklist**:
 

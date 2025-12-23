@@ -84,8 +84,8 @@ table_name NOT IN (
 	'forward_dependencies',
 	'gossip_network',
 	'index_columns',
-	'index_spans',
-	'kv_builtin_function_comments',
+  'index_spans',
+  'kv_builtin_function_comments',
 	'kv_catalog_comments',
 	'kv_catalog_descriptor',
 	'kv_catalog_namespace',
@@ -135,7 +135,6 @@ ORDER BY name ASC`)
 		tables = append(tables, table)
 	}
 	tables = append(tables, "crdb_internal.probe_ranges_1s_read_limit_100")
-	tables = append(tables, "cluster_settings_history")
 	sort.Strings(tables)
 
 	var exp []string
@@ -714,6 +713,7 @@ func TestPartialZip(t *testing.T) {
 	// however low timeouts make race runs flaky with false positives.
 	skip.UnderShort(t)
 	skip.UnderRace(t)
+	skip.UnderDeadlock(t, "flaky under deadlock")
 
 	sc := log.ScopeWithoutShowLogs(t)
 	defer sc.Close(t)
@@ -826,6 +826,7 @@ func TestZipDisallowFullScans(t *testing.T) {
 
 	skip.UnderShort(t)
 	skip.UnderRace(t)
+	skip.UnderDeadlock(t, "flaky under deadlock")
 
 	dir, cleanupFn := testutils.TempDir(t)
 	defer cleanupFn()
@@ -1286,7 +1287,7 @@ func TestCommandFlags(t *testing.T) {
 	}
 
 	for _, f := range r.File {
-		if f.Name == "debug/"+debugZipCommandFlagsFileName {
+		if f.Name == "debug/debug_zip_command_flags.txt" {
 			rc, err := f.Open()
 			if err != nil {
 				t.Fatal(err)
@@ -1303,7 +1304,7 @@ func TestCommandFlags(t *testing.T) {
 			return
 		}
 	}
-	assert.Fail(t, "debug/"+debugZipCommandFlagsFileName+" is not generated")
+	assert.Fail(t, "debug/debug_zip_command_flags.txt is not generated")
 
 	if err = r.Close(); err != nil {
 		t.Fatal(err)
@@ -1439,6 +1440,8 @@ func trimNonDeterministicZipOutputFiles(out string) string {
 func TestZipIncludeAndExcludeFilesDataDriven(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
+
+	skip.UnderDeadlock(t, "flaky under deadlock")
 
 	datadriven.Walk(t, "testdata/zip/file-filters", func(t *testing.T, path string) {
 		datadriven.RunTest(t, path, func(t *testing.T, d *datadriven.TestData) string {

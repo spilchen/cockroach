@@ -51,11 +51,6 @@ func (b *Builder) buildUDF(
 		))
 	}
 
-	// builtins should have access to unsafe internals
-	if o.Type == tree.BuiltinRoutine {
-		defer b.DisableUnsafeInternalCheck()()
-	}
-
 	// Check for execution privileges for user-defined overloads. Built-in
 	// overloads do not need to be checked.
 	if o.Type == tree.UDFRoutine {
@@ -419,7 +414,6 @@ func (b *Builder) buildRoutine(
 	var body []memo.RelExpr
 	var bodyProps []*physical.Required
 	var bodyStmts []string
-	var bodyTags []string
 	switch o.Language {
 	case tree.RoutineLangSQL:
 		// Parse the function body.
@@ -427,8 +421,6 @@ func (b *Builder) buildRoutine(
 		if err != nil {
 			panic(err)
 		}
-
-		var appendedNullForVoidReturn bool
 		// Add a VALUES (NULL) statement if the return type of the function is
 		// VOID. We cannot simply project NULL from the last statement because
 		// all columns would be pruned and the contents of last statement would
@@ -443,15 +435,11 @@ func (b *Builder) buildRoutine(
 					},
 				},
 			})
-			appendedNullForVoidReturn = true
 		}
 		body = make([]memo.RelExpr, len(stmts))
 		bodyProps = make([]*physical.Required, len(stmts))
-		bodyTags = make([]string, len(stmts))
 
 		for i := range stmts {
-			// TODO(michae2): We should be checking the statement hints cache here to
-			// find any external statement hints that could apply to this statement.
 			stmtScope := b.buildStmtAtRootWithScope(stmts[i].AST, nil /* desiredTypes */, bodyScope)
 
 			// The last statement produces the output of the UDF.
@@ -461,14 +449,6 @@ func (b *Builder) buildRoutine(
 			}
 			body[i] = stmtScope.expr
 			bodyProps[i] = stmtScope.makePhysicalProps()
-			// We don't need a statement tag for the artificial appended `SELECT NULL`
-			// statement.
-			if appendedNullForVoidReturn && i == len(stmts)-1 {
-				bodyTags[i] = ""
-			} else {
-				bodyTags[i] = stmts[i].AST.StatementTag()
-			}
-
 		}
 
 		if b.verboseTracing {
@@ -514,7 +494,6 @@ func (b *Builder) buildRoutine(
 		}
 		body = []memo.RelExpr{stmtScope.expr}
 		bodyProps = []*physical.Required{stmtScope.makePhysicalProps()}
-		bodyTags = []string{stmt.AST.Label}
 		if b.verboseTracing {
 			bodyStmts = []string{stmt.String()}
 		}
@@ -538,7 +517,6 @@ func (b *Builder) buildRoutine(
 				Body:               body,
 				BodyProps:          bodyProps,
 				BodyStmts:          bodyStmts,
-				BodyTags:           bodyTags,
 				Params:             params,
 				ResultBufferID:     resultBufferID,
 			},

@@ -46,12 +46,6 @@ const (
 	remoteUser   = "ubuntu"
 	tagComment   = "comment"
 	tagSubnet    = "subnetPrefix"
-
-	// UserManagedIdentity expected to exist in the subscription.
-	// This identity will be associated to the VMs and will grant permissions
-	// for roachprod testing.
-	userManagedIdentityName          = "rp-roachtest"
-	userManagedIdentityResourceGroup = "rp-roachtest"
 )
 
 // providerInstance is the instance to be registered into vm.Providers by Init.
@@ -210,49 +204,10 @@ func (p *Provider) GetLiveMigrationVMs(
 	return liveMigrationVMs, nil
 }
 
-// GetVMSpecs implements the vm.GetVMSpecs interface method which returns a
-// map from VM.Name to a map of VM attributes
 func (p *Provider) GetVMSpecs(
 	l *logger.Logger, vms vm.List,
 ) (map[string]map[string]interface{}, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), p.OperationTimeout)
-	defer cancel()
-	sub, err := p.getSubscription(ctx)
-	if err != nil {
-		return nil, err
-	}
-	client := compute.NewVirtualMachinesClient(sub)
-	if client.Authorizer, err = p.getAuthorizer(); err != nil {
-		return nil, err
-	}
-
-	// Extract the spec of all VMs and create a map from VM name to spec.
-	vmSpecs := make(map[string]map[string]interface{})
-	for _, vmInstance := range vms {
-		if vmInstance.ProviderID == "" {
-			return nil, errors.Errorf("provider id not found for vm: %s", vmInstance.Name)
-		}
-		azureVmId, err := parseAzureID(vmInstance.ProviderID)
-		if err != nil {
-			return nil, err
-		}
-		l.Printf("Getting VM Specs for VM: %s", vmInstance.Name)
-		azureVm, err := client.Get(ctx, azureVmId.resourceGroup, azureVmId.resourceName, "")
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to get vm information for vm %s", vmInstance.Name)
-		}
-		// Marshaling & unmarshalling struct to match interface method return type
-		rawJSON, err := azureVm.MarshalJSON()
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to marshal vm information for vm %s", vmInstance.Name)
-		}
-		var vmSpec map[string]interface{}
-		if err := json.Unmarshal(rawJSON, &vmSpec); err != nil {
-			return nil, errors.Wrapf(err, "failed to parse raw json")
-		}
-		vmSpecs[vmInstance.Name] = vmSpec
-	}
-	return vmSpecs, nil
+	return nil, nil
 }
 
 func (p *Provider) CreateVolumeSnapshot(
@@ -970,9 +925,6 @@ func (p *Provider) createVM(
 		startupArgs.AttachedDiskLun = &lun
 	}
 
-	// Check if we only require a boot disk (workload only machines).
-	startupArgs.BootDiskOnly = providerOpts.BootDiskOnly
-
 	startupScript, err := evalStartupTemplate(startupArgs)
 	if err != nil {
 		return machine, err
@@ -1031,17 +983,6 @@ func (p *Provider) createVM(
 		Location: group.Location,
 		Zones:    to.StringSlicePtr([]string{zone.AvailabilityZone}),
 		Tags:     tags,
-		Identity: &compute.VirtualMachineIdentity{
-			Type: compute.ResourceIdentityTypeUserAssigned,
-			UserAssignedIdentities: map[string]*compute.UserAssignedIdentitiesValue{
-				fmt.Sprintf(
-					"/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ManagedIdentity/userAssignedIdentities/%s",
-					sub,
-					userManagedIdentityResourceGroup,
-					userManagedIdentityName,
-				): {},
-			},
-		},
 		VirtualMachineProperties: &compute.VirtualMachineProperties{
 			HardwareProfile: &compute.HardwareProfile{
 				VMSize: compute.VirtualMachineSizeTypes(providerOpts.MachineType),
@@ -1100,7 +1041,7 @@ func (p *Provider) createVM(
 		machine.VirtualMachineProperties.StorageProfile.DiskControllerType = compute.NVMe
 	}
 
-	if !opts.SSDOpts.UseLocalSSD && !providerOpts.BootDiskOnly {
+	if !opts.SSDOpts.UseLocalSSD {
 		caching := compute.CachingTypesNone
 
 		switch providerOpts.DiskCaching {
@@ -1161,7 +1102,6 @@ func (p *Provider) createVM(
 	if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
 		return
 	}
-
 	return future.Result(client)
 }
 

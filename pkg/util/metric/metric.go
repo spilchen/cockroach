@@ -48,7 +48,6 @@ const (
 	LabelCertificateType = "certificate_type"
 	LabelName            = "name"
 	LabelType            = "type"
-	LabelLevel           = "level"
 )
 
 type LabelConfig uint64
@@ -132,17 +131,6 @@ type PrometheusReinitialisable interface {
 	PrometheusIterable
 
 	ReinitialiseChildMetrics(labelConfig LabelConfig)
-}
-
-// PrometheusEvictable is an extension of PrometheusIterable to indicate that
-// this metric uses cache as a storage and children metric can be evicted
-// based on eviction policy.
-// The InitializeMetrics method accepts a reference of LabelSliceCache which is
-// initialised at metric registry and settings values for configurable eviction policy.
-type PrometheusEvictable interface {
-	PrometheusIterable
-
-	InitializeMetrics(*LabelSliceCache)
 }
 
 // WindowedHistogram represents a histogram with data over recent window of
@@ -1580,7 +1568,7 @@ func (hv *HistogramVec) ToPrometheusMetrics() []*prometheusgo.Metric {
 		o := hv.promVec.WithLabelValues(labels...)
 		histogram, ok := o.(prometheus.Histogram)
 		if !ok {
-			log.Dev.Errorf(context.TODO(), "Unable to convert Observer to prometheus.Histogram. Metric name=%s", hv.Name)
+			log.Errorf(context.TODO(), "Unable to convert Observer to prometheus.Histogram. Metric name=%s", hv.Name)
 			continue
 		}
 		if err := histogram.Write(m); err != nil {

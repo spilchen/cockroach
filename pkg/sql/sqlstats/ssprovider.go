@@ -68,10 +68,10 @@ type RecordedStmtStats struct {
 	TransactionFingerprintID appstatspb.TransactionFingerprintID
 	SessionID                clusterunique.ID
 	StatementID              clusterunique.ID
+	TransactionID            uuid.UUID
 	AutoRetryCount           int
 	Failed                   bool
 	Generic                  bool
-	AppliedStmtHints         bool
 	AutoRetryReason          error
 	RowsAffected             int
 	IdleLatencySec           float64
@@ -95,7 +95,6 @@ type RecordedStmtStats struct {
 	ExecStats                *execstats.QueryLevelStats
 	Indexes                  []string
 	QueryTags                []sqlcommenter.QueryTag
-	UnderOuterTxn            bool
 }
 
 // RecordedTxnStats stores the statistics of a transaction to be recorded.
@@ -125,8 +124,7 @@ type RecordedTxnStats struct {
 	TxnErr                  error
 	Application             string
 	// Normalized user name.
-	UserNormalized   string
-	InternalExecutor bool
+	UserNormalized string
 }
 
 // SSDrainer is the interface for draining or resetting sql stats.

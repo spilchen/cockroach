@@ -16,7 +16,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/delegate"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
-	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/norm"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/optgen/exprgen"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
@@ -202,10 +201,6 @@ type Builder struct {
 	// built, and can be safely reused across different call-sites within the same
 	// memo.
 	builtTriggerFuncs map[cat.StableID][]cachedTriggerFunc
-
-	// skipUnsafeInternalsCheck is used to skip the check that the
-	// planner is not used for unsafe internal statements.
-	skipUnsafeInternalsCheck bool
 }
 
 // New creates a new Builder structure initialized with the given
@@ -304,12 +299,7 @@ func (b *Builder) buildStmtAtRoot(stmt tree.Statement, desiredTypes []*types.T) 
 	// A "root" statement cannot refer to anything from an enclosing query, so
 	// we always start with an empty scope.
 	inScope := b.allocScope()
-	outScope = b.buildStmtAtRootWithScope(stmt, desiredTypes, inScope)
-	if b, ok := outScope.expr.(*memo.BarrierExpr); ok {
-		// Eliminate a barrier that has been pulled up to the root of the tree.
-		outScope.expr = b.Input
-	}
-	return outScope
+	return b.buildStmtAtRootWithScope(stmt, desiredTypes, inScope)
 }
 
 // buildStmtAtRootWithScope is similar to buildStmtAtRoot, but allows a scope to
@@ -503,8 +493,6 @@ func (b *Builder) buildStmt(
 			// register all those dependencies with the metadata (for cache
 			// invalidation). We don't care about caching plans for these statements.
 			b.DisableMemoReuse = true
-			// It's considered acceptable when we delegate to unsafe internals.
-			defer b.DisableUnsafeInternalCheck()()
 			return b.buildStmt(newStmt, desiredTypes, inScope)
 		}
 
@@ -590,25 +578,24 @@ func (b *Builder) maybeTrackUserDefinedTypeDepsForViews(texpr tree.TypedExpr) {
 	}
 }
 
-// DisableUnsafeInternalCheck is used to disable the check that the
-// prevents external users from accessing unsafe internals.
-func (b *Builder) DisableUnsafeInternalCheck() func() {
-	// Already in the middle of a disabled section.
-	if b.skipUnsafeInternalsCheck {
+// DisableSchemaDepTracking is used to disable dependency tracking for views and
+// routines, so that users don't have to face unnecessary restrictions during
+// schema changes.
+//
+// For example, we must prevent dropping a column that is referenced in the
+// WHERE clause or SET clause of an UPDATE statement. However, adding or
+// dropping columns that are synthesized with default or computed values is
+// perfectly safe, because those columns are determined from the table schema
+// rather than being user specified. If such a column is dropped, its value will
+// simply not be synthesized in mutation statements going forward.
+func (b *Builder) DisableSchemaDepTracking() func() {
+	if !b.trackSchemaDeps {
 		return func() {}
 	}
-
-	b.skipUnsafeInternalsCheck = true
-	var cleanup func()
-	if b.catalog != nil {
-		cleanup = b.catalog.DisableUnsafeInternalCheck()
-	}
-
+	originalTrackSchemaDeps := b.trackSchemaDeps
+	b.trackSchemaDeps = false
 	return func() {
-		b.skipUnsafeInternalsCheck = false
-		if cleanup != nil {
-			cleanup()
-		}
+		b.trackSchemaDeps = originalTrackSchemaDeps
 	}
 }
 

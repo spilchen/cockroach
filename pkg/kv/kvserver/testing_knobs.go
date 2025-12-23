@@ -89,7 +89,7 @@ type StoreTestingKnobs struct {
 	//
 	// TODO(pavelkalinnikov): have a more stable and less nuanced way of blocking
 	// the commands application flow for the entire store.
-	TestingAfterRaftLogSync func(roachpb.FullReplicaID)
+	TestingAfterRaftLogSync func(storage.FullReplicaID)
 
 	// TestingApplyCalledTwiceFilter is called before applying the results of a command on
 	// each replica assuming the command was cleared for application (i.e. no
@@ -482,12 +482,6 @@ type StoreTestingKnobs struct {
 
 	// EnqueueReplicaInterceptor intercepts calls to `store.Enqueue()`.
 	EnqueueReplicaInterceptor func(queueName string, replica *Replica)
-
-	// AllocatorCheckRangeInterceptor intercepts calls to
-	// `Store.AllocatorCheckRange()` and can be used to inject errors for testing.
-	// If returns non-nil error, the error is returned instead of calling the
-	// actual AllocatorCheckRange logic.
-	AllocatorCheckRangeInterceptor func() error
 
 	// GlobalMVCCRangeTombstone will write a global MVCC range tombstone across
 	// the entire user keyspace during cluster bootstrapping. This will be written

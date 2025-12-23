@@ -11,12 +11,12 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/concurrency/isolation"
 	"github.com/cockroachdb/cockroach/pkg/server/telemetry"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/cat"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/constraint"
@@ -541,6 +541,7 @@ func (b *Builder) buildValuesRows(values *memo.ValuesExpr) ([][]tree.TypedExpr, 
 	numCols := len(values.Cols)
 
 	rows := makeTypedExprMatrix(len(values.Rows), numCols)
+	scalarCtx := buildScalarCtx{}
 	for i := range rows {
 		tup := values.Rows[i].(*memo.TupleExpr)
 		if len(tup.Elems) != numCols {
@@ -548,7 +549,7 @@ func (b *Builder) buildValuesRows(values *memo.ValuesExpr) ([][]tree.TypedExpr, 
 		}
 		var err error
 		for j := 0; j < numCols; j++ {
-			rows[i][j], err = b.buildScalar(&emptyBuildScalarCtx, tup.Elems[j])
+			rows[i][j], err = b.buildScalar(&scalarCtx, tup.Elems[j])
 			if err != nil {
 				return nil, err
 			}
@@ -663,11 +664,7 @@ func (b *Builder) indexConstraintMaxResults(
 
 // scanParams populates ScanParams and the output column mapping.
 func (b *Builder) scanParams(
-	tab cat.Table,
-	scan *memo.ScanPrivate,
-	relProps *props.Relational,
-	reqProps *physical.Required,
-	statsCreatedAt time.Time,
+	tab cat.Table, scan *memo.ScanPrivate, relProps *props.Relational, reqProps *physical.Required,
 ) (exec.ScanParams, colOrdMap, error) {
 	// Check if we tried to force a specific index but there was no Scan with that
 	// index in the memo.
@@ -742,7 +739,7 @@ func (b *Builder) scanParams(
 		sqltelemetry.IncrementPartitioningCounter(sqltelemetry.PartitionConstrainedScan)
 	}
 
-	softLimit := uint64(reqProps.LimitHintInt64())
+	softLimit := reqProps.LimitHintInt64()
 	hardLimit := scan.HardLimit.RowCount()
 	maxResults, maxResultsOk := b.indexConstraintMaxResults(scan, relProps)
 
@@ -819,7 +816,6 @@ func (b *Builder) scanParams(
 		Parallelize:        parallelize,
 		Locking:            locking,
 		EstimatedRowCount:  rowCount,
-		StatsCreatedAt:     statsCreatedAt,
 		LocalityOptimized:  scan.LocalityOptimized,
 	}, outputMap, nil
 }
@@ -891,7 +887,6 @@ func (b *Builder) buildScan(scan *memo.ScanExpr) (_ execPlan, outputCols colOrdM
 		}
 	}
 
-	var statsCreatedAt time.Time
 	// Save some instrumentation info.
 	b.ScanCounts[exec.ScanCount]++
 	if stats.Available {
@@ -940,13 +935,11 @@ func (b *Builder) buildScan(scan *memo.ScanExpr) (_ execPlan, outputCols colOrdM
 				rowCountWithoutForecast = float64(minCardinality)
 			}
 			b.TotalScanRowsWithoutForecasts += rowCountWithoutForecast
-			statsCreatedAt = tabStat.CreatedAt()
 		}
 	}
 
 	var params exec.ScanParams
-	params, outputCols, err = b.scanParams(tab, &scan.ScanPrivate,
-		scan.Relational(), scan.RequiredPhysical(), statsCreatedAt)
+	params, outputCols, err = b.scanParams(tab, &scan.ScanPrivate, scan.Relational(), scan.RequiredPhysical())
 	if err != nil {
 		return execPlan{}, colOrdMap{}, err
 	}
@@ -1003,15 +996,27 @@ func (b *Builder) buildPlaceholderScan(
 	values := make([]tree.Datum, len(scan.Span))
 	for i, expr := range scan.Span {
 		// The expression is either a placeholder or a constant.
+		var val tree.Datum
 		if p, ok := expr.(*memo.PlaceholderExpr); ok {
-			val, err := eval.Expr(b.ctx, b.evalCtx, p.Value)
+			val, err = eval.Expr(b.ctx, b.evalCtx, p.Value)
 			if err != nil {
 				return execPlan{}, colOrdMap{}, err
 			}
-			values[i] = val
 		} else {
-			values[i] = memo.ExtractConstDatum(expr)
+			val = memo.ExtractConstDatum(expr)
 		}
+		if val == tree.DNull {
+			// If any value is NULL, then build an empty values operator instead
+			// of a scan. No row can satisfy the equality filter that was used
+			// to build this placeholder scan, because of SQL NULL-equality
+			// semantics.
+			return b.buildValues(&memo.ValuesExpr{
+				ValuesPrivate: memo.ValuesPrivate{
+					Cols: scan.Cols.ToList(),
+				},
+			})
+		}
+		values[i] = val
 	}
 
 	key := constraint.MakeCompositeKey(values...)
@@ -1027,8 +1032,7 @@ func (b *Builder) buildPlaceholderScan(
 	private.SetConstraint(b.ctx, b.evalCtx, &c)
 
 	var params exec.ScanParams
-	params, outputCols, err = b.scanParams(tab, &private, scan.Relational(),
-		scan.RequiredPhysical(), time.Time{} /* statsCreatedAt */)
+	params, outputCols, err = b.scanParams(tab, &private, scan.Relational(), scan.RequiredPhysical())
 	if err != nil {
 		return execPlan{}, colOrdMap{}, err
 	}
@@ -1359,16 +1363,6 @@ func (b *Builder) buildApplyJoin(join memo.RelExpr) (_ execPlan, outputCols colO
 		return plan, nil
 	}
 
-	// Build the stringified representation of the unoptimized right side for
-	// EXPLAIN purposes on demand.
-	rightSideForExplainFn := func(redactableValues bool) string {
-		f := memo.MakeExprFmtCtx(
-			b.ctx, memo.ExprFmtHideAll, redactableValues, b.mem, b.catalog,
-		)
-		f.FormatExpr(rightExpr)
-		return f.Buffer.String()
-	}
-
 	// The right plan will always produce the columns in the presentation, in
 	// the same order. This map is only used for the lifetime of this function,
 	// so free the map afterward.
@@ -1411,7 +1405,6 @@ func (b *Builder) buildApplyJoin(join memo.RelExpr) (_ execPlan, outputCols colO
 		b.presentationToResultColumns(rightRequiredProps.Presentation),
 		onExpr,
 		planRightSideFn,
-		rightSideForExplainFn,
 	)
 	if err != nil {
 		return execPlan{}, colOrdMap{}, err
@@ -2349,7 +2342,7 @@ func (b *Builder) enforceScanWithHomeRegion(skipID cat.StableID) error {
 			} else if gatewayRegion != homeRegion {
 				return pgerror.Newf(pgcode.QueryNotRunningInHomeRegion,
 					`%s. Try running the query from region '%s'. %s`,
-					sqlerrors.QueryNotRunningInHomeRegionMessagePrefix,
+					execinfra.QueryNotRunningInHomeRegionMessagePrefix,
 					homeRegion,
 					sqlerrors.EnforceHomeRegionFurtherInfo,
 				)
@@ -2418,7 +2411,7 @@ func (b *Builder) buildDistribute(
 		var errCode pgcode.Code
 		if ok {
 			errCode = pgcode.QueryNotRunningInHomeRegion
-			errorStringBuilder.WriteString(sqlerrors.QueryNotRunningInHomeRegionMessagePrefix)
+			errorStringBuilder.WriteString(execinfra.QueryNotRunningInHomeRegionMessagePrefix)
 			errorStringBuilder.WriteString(fmt.Sprintf(`. Try running the query from region '%s'. %s`, homeRegion, sqlerrors.EnforceHomeRegionFurtherInfo))
 		} else if distribute.Input.Op() != opt.LookupJoinOp {
 			// More detailed error message handling for lookup join occurs in the
@@ -2709,7 +2702,7 @@ func (b *Builder) handleRemoteLookupJoinError(join *memo.LookupJoinExpr) (err er
 				} else if gatewayRegion != homeRegion {
 					return pgerror.Newf(pgcode.QueryNotRunningInHomeRegion,
 						`%s. Try running the query from region '%s'. %s`,
-						sqlerrors.QueryNotRunningInHomeRegionMessagePrefix,
+						execinfra.QueryNotRunningInHomeRegionMessagePrefix,
 						homeRegion,
 						sqlerrors.EnforceHomeRegionFurtherInfo,
 					)
@@ -3149,7 +3142,7 @@ func (b *Builder) handleRemoteInvertedJoinError(join *memo.InvertedJoinExpr) (er
 				} else if gatewayRegion != homeRegion {
 					return pgerror.Newf(pgcode.QueryNotRunningInHomeRegion,
 						`%s. Try running the query from region '%s'. %s`,
-						sqlerrors.QueryNotRunningInHomeRegionMessagePrefix,
+						execinfra.QueryNotRunningInHomeRegionMessagePrefix,
 						homeRegion,
 						sqlerrors.EnforceHomeRegionFurtherInfo,
 					)
@@ -3519,6 +3512,9 @@ func (b *Builder) buildWith(with *memo.WithExpr) (_ execPlan, outputCols colOrdM
 		return execPlan{}, colOrdMap{}, err
 	}
 
+	// TODO(justin): if the binding here has a spoolNode at its root, we can
+	// remove it, since subquery execution also guarantees complete execution.
+
 	// Add the buffer as a subquery so it gets executed ahead of time, and is
 	// available to be referenced by other queries. Use SubqueryDiscardAllRows to
 	// avoid buffering the results in the subquery, since the bufferNode will
@@ -3708,10 +3704,11 @@ func (b *Builder) buildCall(c *memo.CallExpr) (_ execPlan, outputCols colOrdMap,
 
 	// Build the argument expressions.
 	var args tree.TypedExprs
+	ctx := buildScalarCtx{}
 	if len(udf.Args) > 0 {
 		args = make(tree.TypedExprs, len(udf.Args))
 		for i := range udf.Args {
-			args[i], err = b.buildScalar(&emptyBuildScalarCtx, udf.Args[i])
+			args[i], err = b.buildScalar(&ctx, udf.Args[i])
 			if err != nil {
 				return execPlan{}, colOrdMap{}, err
 			}
@@ -3730,7 +3727,6 @@ func (b *Builder) buildCall(c *memo.CallExpr) (_ execPlan, outputCols colOrdMap,
 		udf.Def.Body,
 		udf.Def.BodyProps,
 		udf.Def.BodyStmts,
-		udf.Def.BodyTags,
 		false, /* allowOuterWithRefs */
 		nil,   /* wrapRootExpr */
 		0,     /* resultBufferID */
@@ -4136,7 +4132,8 @@ func (b *Builder) buildVectorSearch(
 		}
 	}
 	outColOrds, outColMap := b.getColumns(search.Cols, search.Table)
-	queryVector, err := b.buildScalar(&emptyBuildScalarCtx, search.QueryVector)
+	ctx := buildScalarCtx{}
+	queryVector, err := b.buildScalar(&ctx, search.QueryVector)
 	if err != nil {
 		return execPlan{}, colOrdMap{}, err
 	}

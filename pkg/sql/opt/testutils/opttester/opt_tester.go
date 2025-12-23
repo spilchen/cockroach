@@ -568,13 +568,6 @@ func New(catalog cat.Catalog, sqlStr string) *OptTester {
 //   - max-stack: sets the maximum stack size for the goroutine that optimizes
 //     the query. See debug.SetMaxStack.
 func (ot *OptTester) RunCommand(tb testing.TB, d *datadriven.TestData) string {
-	// Apply "session" defaults.
-	ot.catalog.(*testcat.Catalog).ForEachSessionVar(func(name string, value string) {
-		if err := sql.TestingSetSessionVariable(ot.ctx, ot.evalCtx, name, value); err != nil {
-			panic(err)
-		}
-	})
-
 	// Allow testcases to override the flags.
 	for _, a := range d.CmdArgs {
 		if err := ot.Flags.Set(a); err != nil {
@@ -593,6 +586,7 @@ func (ot *OptTester) RunCommand(tb testing.TB, d *datadriven.TestData) string {
 
 	ot.evalCtx.TestingKnobs.OptimizerCostPerturbation = ot.Flags.PerturbCost
 	ot.evalCtx.Locality = ot.Flags.Locality
+	ot.evalCtx.OriginalLocality = ot.Flags.Locality
 	ot.evalCtx.Placeholders = nil
 	ot.evalCtx.TxnIsoLevel = ot.Flags.TxnIsoLevel
 
@@ -2323,7 +2317,6 @@ func (ot *OptTester) buildExpr(factory *norm.Factory) error {
 	ot.semaCtx.Placeholders.Init(stmt.NumPlaceholders, nil /* typeHints */)
 	ot.semaCtx.Annotations = tree.MakeAnnotations(stmt.NumAnnotations)
 	ot.semaCtx.TypeResolver = ot.catalog
-	ot.evalCtx.Annotations = &ot.semaCtx.Annotations
 	b := optbuilder.New(ot.ctx, &ot.semaCtx, &ot.evalCtx, ot.catalog, factory, stmt.AST)
 	return b.Build()
 }

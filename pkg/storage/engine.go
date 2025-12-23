@@ -26,7 +26,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/pebble"
-	"github.com/cockroachdb/pebble/metrics"
 	"github.com/cockroachdb/pebble/rangekey"
 	"github.com/cockroachdb/pebble/vfs"
 	"github.com/cockroachdb/redact"
@@ -927,9 +926,6 @@ type Engine interface {
 	Capacity() (roachpb.StoreCapacity, error)
 	// Properties returns the low-level properties for the engine's underlying storage.
 	Properties() roachpb.StoreProperties
-	// ProfileSeparatedValueRetrievals collects a profile of the engine's
-	// separated value retrievals. It stops when the context is done.
-	ProfileSeparatedValueRetrievals(ctx context.Context) (*metrics.ValueRetrievalProfile, error)
 	// Compact forces compaction over the entire database.
 	Compact(ctx context.Context) error
 	// Env returns the filesystem environment used by the Engine.
@@ -1138,17 +1134,6 @@ type Engine interface {
 	// GetPebbleOptions returns the options used when creating the engine. The
 	// caller must not modify these.
 	GetPebbleOptions() *pebble.Options
-
-	// GetDiskUnhealthy returns true if the engine has determined that the
-	// underlying disk is transiently unhealthy. This can change from false to
-	// true and back to false. The engine has mechanisms to mask disk unhealth
-	// (e.g. if WAL failover is configured), but in some cases the unhealth is
-	// longer than what the engine may be able to successfully mask, but not yet
-	// long enough to crash the node (see
-	// COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT). This method returns true in
-	// this intermediate case. Currently, this mainly feeds into allocation
-	// decisions by the caller (such as shedding leases).
-	GetDiskUnhealthy() bool
 }
 
 // Batch is the interface for batch specific operations.
@@ -1265,9 +1250,6 @@ type Metrics struct {
 	// distinguished in the pebble logs.
 	WriteStallCount    int64
 	WriteStallDuration time.Duration
-	// DiskUnhealthyDuration is the duration for which Engine.GetUnhealthyDisk
-	// has returned true.
-	DiskUnhealthyDuration time.Duration
 
 	// BlockLoadConcurrencyLimit is the current limit on the number of concurrent
 	// sstable block reads.
@@ -1321,9 +1303,6 @@ type AggregatedIteratorStats struct {
 	// ExternalSteps, it's a good indication that there's an accumulation of
 	// garbage within the LSM (NOT MVCC garbage).
 	InternalSteps int
-	// ValueRetrievalCount is the total count of value retrievals of values
-	// separated into blob files.
-	ValueRetrievalCount uint64
 }
 
 // AggregatedBatchCommitStats hold cumulative stats summed over all the
@@ -1348,11 +1327,11 @@ type MetricsForInterval struct {
 // NumSSTables returns the total number of SSTables in the LSM, aggregated
 // across levels.
 func (m *Metrics) NumSSTables() int64 {
-	var num uint64
+	var num int64
 	for _, lm := range m.Metrics.Levels {
-		num += lm.Tables.Count
+		num += lm.TablesCount
 	}
-	return int64(num)
+	return num
 }
 
 // IngestedBytes returns the sum of all ingested tables, aggregated across all
@@ -1360,7 +1339,7 @@ func (m *Metrics) NumSSTables() int64 {
 func (m *Metrics) IngestedBytes() uint64 {
 	var ingestedBytes uint64
 	for _, lm := range m.Metrics.Levels {
-		ingestedBytes += lm.TablesIngested.Bytes
+		ingestedBytes += lm.TableBytesIngested
 	}
 	return ingestedBytes
 }
@@ -1369,11 +1348,9 @@ func (m *Metrics) IngestedBytes() uint64 {
 // compactions across all levels of the LSM.
 func (m *Metrics) CompactedBytes() (read, written uint64) {
 	for _, lm := range m.Metrics.Levels {
-		read += lm.TableBytesRead + lm.BlobBytesRead
-		written += lm.TablesCompacted.Bytes + lm.BlobBytesCompacted
+		read += lm.TableBytesRead + lm.BlobBytesReadEstimate
+		written += lm.TableBytesCompacted + lm.BlobBytesCompacted
 	}
-	read += uint64(m.Metrics.Compact.BlobFileRewrite.BytesRead)
-	written += uint64(m.Metrics.Compact.BlobFileRewrite.BytesWritten)
 	return read, written
 }
 
@@ -1383,6 +1360,8 @@ func (m *Metrics) AsStoreStatsEvent() eventpb.StoreStats {
 	e := eventpb.StoreStats{
 		CacheSize:                  m.BlockCache.Size,
 		CacheCount:                 m.BlockCache.Count,
+		CacheHits:                  m.BlockCache.Hits,
+		CacheMisses:                m.BlockCache.Misses,
 		CompactionCountDefault:     m.Compact.DefaultCount,
 		CompactionCountDeleteOnly:  m.Compact.DeleteOnlyCount,
 		CompactionCountElisionOnly: m.Compact.ElisionOnlyCount,
@@ -1407,32 +1386,31 @@ func (m *Metrics) AsStoreStatsEvent() eventpb.StoreStats {
 		WalPhysicalSize:            m.WAL.PhysicalSize,
 		WalBytesIn:                 m.WAL.BytesIn,
 		WalBytesWritten:            m.WAL.BytesWritten,
-		TableObsoleteCount:         int64(m.Table.Physical.Obsolete.Total().Count),
-		TableObsoleteSize:          m.Table.Physical.Obsolete.Total().Bytes,
-		TableZombieCount:           int64(m.Table.Physical.Zombie.Total().Count),
-		TableZombieSize:            m.Table.Physical.Zombie.Total().Bytes,
+		TableObsoleteCount:         m.Table.ObsoleteCount,
+		TableObsoleteSize:          m.Table.ObsoleteSize,
+		TableZombieCount:           m.Table.ZombieCount,
+		TableZombieSize:            m.Table.ZombieSize,
 		RangeKeySetsCount:          m.Keys.RangeKeySetsCount,
 	}
-	e.CacheHits, e.CacheMisses = m.BlockCache.HitsAndMisses.Aggregate()
 	for i, l := range m.Levels {
-		if l.Tables.Count == 0 {
+		if l.TablesCount == 0 {
 			continue
 		}
 		e.Levels = append(e.Levels, eventpb.LevelStats{
 			Level:           uint32(i),
-			NumFiles:        int64(l.Tables.Count),
-			SizeBytes:       int64(l.Tables.Bytes),
+			NumFiles:        l.TablesCount,
+			SizeBytes:       l.TablesSize,
 			Score:           float32(l.Score),
 			BytesIn:         l.TableBytesIn,
-			BytesIngested:   l.TablesIngested.Bytes,
-			BytesMoved:      l.TablesMoved.Bytes,
-			BytesRead:       l.TableBytesRead + l.BlobBytesRead,
-			BytesCompacted:  l.TablesCompacted.Bytes + l.BlobBytesCompacted,
-			BytesFlushed:    l.TablesFlushed.Bytes + l.BlobBytesFlushed,
-			TablesCompacted: l.TablesCompacted.Count,
-			TablesFlushed:   l.TablesFlushed.Count,
-			TablesIngested:  l.TablesIngested.Count,
-			TablesMoved:     l.TablesMoved.Count,
+			BytesIngested:   l.TableBytesIngested,
+			BytesMoved:      l.TableBytesMoved,
+			BytesRead:       l.TableBytesRead + l.BlobBytesReadEstimate,
+			BytesCompacted:  l.TableBytesCompacted + l.BlobBytesCompacted,
+			BytesFlushed:    l.TableBytesFlushed + l.BlobBytesFlushed,
+			TablesCompacted: l.TablesCompacted,
+			TablesFlushed:   l.TablesFlushed,
+			TablesIngested:  l.TablesIngested,
+			TablesMoved:     l.TablesMoved,
 			NumSublevels:    l.Sublevels,
 		})
 	}
@@ -1449,10 +1427,6 @@ func GetIntent(ctx context.Context, reader Reader, key roachpb.Key) (*roachpb.In
 		Prefix: true,
 		// Ignore Exclusive and Shared locks. We only care about intents.
 		MatchMinStr: lock.Intent,
-		// This is eventually called from the QueryIntent request, so this isn't
-		// quite "intent resolution", but we don't want too many categories, and
-		// this does relate to intents, so we use this existing category.
-		ReadCategory: fs.IntentResolutionReadCategory,
 	}
 	iter, err := NewLockTableIterator(ctx, reader, opts)
 	if err != nil {
@@ -1762,7 +1736,7 @@ func preIngestDelay(ctx context.Context, eng Engine, settings *cluster.Settings)
 		return
 	}
 	log.VEventf(ctx, 2, "delaying SST ingestion %s. %d L0 files, %d L0 Sublevels",
-		targetDelay, metrics.Levels[0].Tables.Count, metrics.Levels[0].Sublevels)
+		targetDelay, metrics.Levels[0].TablesCount, metrics.Levels[0].Sublevels)
 
 	select {
 	case <-time.After(targetDelay):
@@ -1775,7 +1749,7 @@ func calculatePreIngestDelay(settings *cluster.Settings, metrics *pebble.Metrics
 	l0ReadAmpLimit := ingestDelayL0Threshold.Get(&settings.SV)
 
 	const ramp = 10
-	l0ReadAmp := int64(metrics.Levels[0].Tables.Count)
+	l0ReadAmp := metrics.Levels[0].TablesCount
 	if metrics.Levels[0].Sublevels >= 0 {
 		l0ReadAmp = int64(metrics.Levels[0].Sublevels)
 	}

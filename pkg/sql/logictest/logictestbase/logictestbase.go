@@ -93,11 +93,6 @@ type TestClusterConfig struct {
 	// DisableSchemaLockedByDefault prevents tables from being created
 	// with schema_locked by default.
 	DisableSchemaLockedByDefault bool
-	// PrepareQueries executes queries and statements with Prepare and Execute.
-	PrepareQueries bool
-	// EnableLeasedDescriptorSupport enables leased descriptors for pg_catalog /
-	// crdb_internal and locked leasing behavior.
-	EnableLeasedDescriptorSupport bool
 }
 
 // TenantMode is the type of the UseSecondaryTenant field in TestClusterConfig.
@@ -287,7 +282,7 @@ var LogicTestConfigs = []TestClusterConfig{
 		// local is the configuration where we run all tests which have bad
 		// interactions with the default test tenant.
 		//
-		// TODO(#156124): We should review this choice. Why can't we use "Random"
+		// TODO(#76378): We should review this choice. Why can't we use "Random"
 		// here? If there are specific tests that are incompatible, we can
 		// flag them to run only in a separate config.
 		UseSecondaryTenant:          Never,
@@ -321,12 +316,6 @@ var LogicTestConfigs = []TestClusterConfig{
 		EnableDefaultIsolationLevel: tree.RepeatableReadIsolation,
 	},
 	{
-		Name:                "local-prepared",
-		NumNodes:            1,
-		OverrideDistSQLMode: "off",
-		PrepareQueries:      true,
-	},
-	{
 		Name:                "fakedist",
 		NumNodes:            3,
 		UseFakeSpanResolver: true,
@@ -356,7 +345,7 @@ var LogicTestConfigs = []TestClusterConfig{
 		// restrictive in the way we allow zone configs to be modified by
 		// secondary tenants. See #100787 for more info.
 		//
-		// TODO(#156124): We should review this choice. Zone configs have
+		// TODO(#76378): We should review this choice. Zone configs have
 		// been supported for secondary tenants since v22.2.
 		// Should this config use "Random" instead?
 		UseSecondaryTenant: Never,
@@ -468,7 +457,7 @@ var LogicTestConfigs = []TestClusterConfig{
 		// locality optimized search working in multi-tenant configurations.
 		// Tracked with #80678.
 		//
-		// TODO(#156124): We've fixed that issue. Review this choice. Can
+		// TODO(#76378): We've fixed that issue. Review this choice. Can
 		// it be "Random" instead? Then we can merge it with the next
 		// config below.
 		UseSecondaryTenant:          Never,
@@ -514,60 +503,11 @@ var LogicTestConfigs = []TestClusterConfig{
 		DisableSchemaLockedByDefault: true,
 	},
 	{
-		// This config runs tests using 25.3 cluster version, simulating a node that
-		// is operating in a mixed-version cluster.
-		Name:                        "local-mixed-25.3",
-		NumNodes:                    1,
-		OverrideDistSQLMode:         "off",
-		BootstrapVersion:            clusterversion.V25_3,
-		DisableUpgrade:              true,
-		DeclarativeCorpusCollection: true,
-	},
-	{
-		// This config runs tests using 25.4 cluster version, simulating a node that
-		// is operating in a mixed-version cluster.
-		Name:                        "local-mixed-25.4",
-		NumNodes:                    1,
-		OverrideDistSQLMode:         "off",
-		BootstrapVersion:            clusterversion.V25_4,
-		DisableUpgrade:              true,
-		DeclarativeCorpusCollection: true,
-	},
-	{
 		// This config runs a cluster with 3 nodes, with a separate process per
 		// node. The nodes initially start on v25.2.
 		Name:                     "cockroach-go-testserver-25.2",
 		UseCockroachGoTestserver: true,
 		BootstrapVersion:         clusterversion.V25_2,
-		NumNodes:                 3,
-	},
-	{
-		// This config runs a cluster with 3 nodes, with a separate process per
-		// node. The nodes initially start on v25.3.
-		Name:                     "cockroach-go-testserver-25.3",
-		UseCockroachGoTestserver: true,
-		BootstrapVersion:         clusterversion.V25_3,
-		NumNodes:                 3,
-	},
-	{
-		Name:                "local-leased-descriptors",
-		NumNodes:            1,
-		OverrideDistSQLMode: "off",
-		// local is the configuration where we run all tests which have bad
-		// interactions with the default test tenant.
-		//
-		// TODO(#156124): We should review this choice. Why can't we use "Random"
-		// here? If there are specific tests that are incompatible, we can
-		// flag them to run only in a separate config.
-		UseSecondaryTenant:            Never,
-		EnableLeasedDescriptorSupport: true,
-	},
-	{
-		// This config runs a cluster with 3 nodes, with a separate process per
-		// node. The nodes initially start on v25.4.
-		Name:                     "cockroach-go-testserver-25.4",
-		UseCockroachGoTestserver: true,
-		BootstrapVersion:         clusterversion.V25_4,
 		NumNodes:                 3,
 	},
 }
@@ -653,13 +593,10 @@ var DefaultConfigSets = map[string]ConfigSet{
 		"local-vec-off",
 		"local-read-committed",
 		"local-repeatable-read",
-		"local-prepared",
 		"fakedist",
 		"fakedist-vec-off",
 		"fakedist-disk",
 		"local-mixed-25.2",
-		"local-mixed-25.3",
-		"local-mixed-25.4",
 	),
 
 	// Special alias for all 5 node configs.
@@ -692,8 +629,6 @@ var DefaultConfigSets = map[string]ConfigSet{
 	// Special alias for all testserver configs (for mixed-version testing).
 	"cockroach-go-testserver-configs": makeConfigSet(
 		"cockroach-go-testserver-25.2",
-		"cockroach-go-testserver-25.3",
-		"cockroach-go-testserver-25.4",
 	),
 
 	// Special alias for configs where schema locked is disabled.
