@@ -107,9 +107,11 @@ define ScanPrivate {
 }
 
 # PlaceholderScan is a special variant of Scan. It scans exactly one span of a
-# non-inverted index, and the span has the same start and end key. The values
-# for the span key are child scalar operators which are either constants or
-# placeholders. This operator evaluates the placeholders at execbuild time.
+# non-inverted index, and the span has the same start and end key. The span key
+# is built at execbuild-time. Each scalar expression in the Span list
+# corresponds to a column in the index's key prefix, assuming SQL-equality
+# semantics (e.g., NULL is not equal to NULL). The scalar expressions are either
+# constants or placeholders. Placeholders are evaluated at execbuild-time.
 #
 # PlaceholderScan cannot have a Constraint or InvertedConstraint.
 [Relational]
@@ -454,10 +456,6 @@ define LookupJoinPrivate {
     # LookupColsAreTableKey is true if the lookup columns form a key in the
     # table (and thus each left row matches with at most one table row).
     LookupColsAreTableKey bool
-
-    # EqualityLookupCols indicates the ColumnIDs of index columns that were
-    # constrained via equality conditions. It'll only be set if LookupExpr is.
-    EqualityLookupCols ColSet
 
     # At most one of Is{First,Second}JoinInPairedJoiner can be true.
     #
@@ -1544,12 +1542,6 @@ define VectorMutationSearchPrivate {
 [Relational]
 define Barrier {
     Input RelExpr
-
-    # LeakproofPermeable indicates that leakproof expressions are allowed to
-    # move across this barrier. This enables the optimizer to reorder or push
-    # leakproof filters and projections past the barrier, while still
-    # preserving it to block unsafe (non-leakproof) expressions.
-    LeakproofPermeable bool
 }
 
 # FakeRel is a mock relational operator used for testing and as a dummy binding

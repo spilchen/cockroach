@@ -46,8 +46,6 @@ type ImmediateMutationVisitor interface {
 	UpsertColumnType(context.Context, UpsertColumnType) error
 	AddColumnComputeExpression(context.Context, AddColumnComputeExpression) error
 	RemoveColumnComputeExpression(context.Context, RemoveColumnComputeExpression) error
-	AddColumnGeneratedAsIdentity(context.Context, AddColumnGeneratedAsIdentity) error
-	RemoveColumnGeneratedAsIdentity(context.Context, RemoveColumnGeneratedAsIdentity) error
 	MakeWriteOnlyColumnPublic(context.Context, MakeWriteOnlyColumnPublic) error
 	MakePublicColumnWriteOnly(context.Context, MakePublicColumnWriteOnly) error
 	MakeWriteOnlyColumnDeleteOnly(context.Context, MakeWriteOnlyColumnDeleteOnly) error
@@ -111,8 +109,6 @@ type ImmediateMutationVisitor interface {
 	RemoveTableConstraintBackReferencesFromFunctions(context.Context, RemoveTableConstraintBackReferencesFromFunctions) error
 	AddTableColumnBackReferencesInFunctions(context.Context, AddTableColumnBackReferencesInFunctions) error
 	RemoveTableColumnBackReferencesInFunctions(context.Context, RemoveTableColumnBackReferencesInFunctions) error
-	AddTableIndexBackReferencesInFunctions(context.Context, AddTableIndexBackReferencesInFunctions) error
-	RemoveTableIndexBackReferencesInFunctions(context.Context, RemoveTableIndexBackReferencesInFunctions) error
 	AddTriggerBackReferencesInRoutines(context.Context, AddTriggerBackReferencesInRoutines) error
 	RemoveTriggerBackReferencesInRoutines(context.Context, RemoveTriggerBackReferencesInRoutines) error
 	AddPolicyBackReferenceInFunctions(context.Context, AddPolicyBackReferenceInFunctions) error
@@ -172,7 +168,6 @@ type ImmediateMutationVisitor interface {
 	ForcedRowLevelSecurityMode(context.Context, ForcedRowLevelSecurityMode) error
 	MarkRecreatedIndexAsInvisible(context.Context, MarkRecreatedIndexAsInvisible) error
 	MarkRecreatedIndexesAsVisible(context.Context, MarkRecreatedIndexesAsVisible) error
-	MarkRecreatedIndexAsVisible(context.Context, MarkRecreatedIndexAsVisible) error
 	SetTableSchemaLocked(context.Context, SetTableSchemaLocked) error
 }
 
@@ -319,16 +314,6 @@ func (op AddColumnComputeExpression) Visit(ctx context.Context, v ImmediateMutat
 // Visit is part of the ImmediateMutationOp interface.
 func (op RemoveColumnComputeExpression) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
 	return v.RemoveColumnComputeExpression(ctx, op)
-}
-
-// Visit is part of the ImmediateMutationOp interface.
-func (op AddColumnGeneratedAsIdentity) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
-	return v.AddColumnGeneratedAsIdentity(ctx, op)
-}
-
-// Visit is part of the ImmediateMutationOp interface.
-func (op RemoveColumnGeneratedAsIdentity) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
-	return v.RemoveColumnGeneratedAsIdentity(ctx, op)
 }
 
 // Visit is part of the ImmediateMutationOp interface.
@@ -647,16 +632,6 @@ func (op RemoveTableColumnBackReferencesInFunctions) Visit(ctx context.Context, 
 }
 
 // Visit is part of the ImmediateMutationOp interface.
-func (op AddTableIndexBackReferencesInFunctions) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
-	return v.AddTableIndexBackReferencesInFunctions(ctx, op)
-}
-
-// Visit is part of the ImmediateMutationOp interface.
-func (op RemoveTableIndexBackReferencesInFunctions) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
-	return v.RemoveTableIndexBackReferencesInFunctions(ctx, op)
-}
-
-// Visit is part of the ImmediateMutationOp interface.
 func (op AddTriggerBackReferencesInRoutines) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
 	return v.AddTriggerBackReferencesInRoutines(ctx, op)
 }
@@ -949,11 +924,6 @@ func (op MarkRecreatedIndexAsInvisible) Visit(ctx context.Context, v ImmediateMu
 // Visit is part of the ImmediateMutationOp interface.
 func (op MarkRecreatedIndexesAsVisible) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
 	return v.MarkRecreatedIndexesAsVisible(ctx, op)
-}
-
-// Visit is part of the ImmediateMutationOp interface.
-func (op MarkRecreatedIndexAsVisible) Visit(ctx context.Context, v ImmediateMutationVisitor) error {
-	return v.MarkRecreatedIndexAsVisible(ctx, op)
 }
 
 // Visit is part of the ImmediateMutationOp interface.

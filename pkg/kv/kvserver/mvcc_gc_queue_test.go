@@ -36,7 +36,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/redact"
 	"github.com/kr/pretty"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -117,7 +116,7 @@ func TestMVCCGCQueueMakeGCScoreInvariantQuick(t *testing.T) {
 		wouldHaveToDeleteSomething := gcBytes*int64(ttlSec) < ms.GCByteAge(now.WallTime)
 		result := !r.ShouldQueue || wouldHaveToDeleteSomething
 		if !result {
-			log.KvExec.Warningf(ctx, "failing on ttl=%d, timePassed=%s, gcBytes=%d, gcByteAge=%d:\n%s",
+			log.Warningf(ctx, "failing on ttl=%d, timePassed=%s, gcBytes=%d, gcByteAge=%d:\n%s",
 				ttlSec, timePassed, gcBytes, gcByteAge, r)
 		}
 		return result
@@ -1511,7 +1510,7 @@ func TestMVCCGCQueueGroupsRangeDeletions(t *testing.T) {
 	store := createTestStoreWithConfig(ctx, t, stopper, testStoreOpts{createSystemRanges: false}, &cfg)
 	r, err := store.GetReplica(roachpb.RangeID(1))
 	require.NoError(t, err)
-	require.NoError(t, store.RemoveReplica(ctx, r, r.Desc().NextReplicaID, redact.SafeString(t.Name())))
+	require.NoError(t, store.RemoveReplica(ctx, r, r.Desc().NextReplicaID, RemoveOptions{DestroyData: true}))
 	// Add replica without hint.
 	r1 := createReplica(store, roachpb.RangeID(100), key("a"), key("b"))
 	require.NoError(t, store.AddReplica(r1))

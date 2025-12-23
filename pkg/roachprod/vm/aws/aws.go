@@ -141,7 +141,7 @@ type ebsDisk struct {
 // ebsVolume represents a mounted volume: name + ebsDisk
 type ebsVolume struct {
 	DeviceName string  `json:"DeviceName"`
-	Disk       ebsDisk `json:"Ebs"`
+	Disk       ebsDisk `json:"Ebs,omitempty"`
 }
 
 const ebsDefaultVolumeSizeGB = 500
@@ -239,6 +239,7 @@ func DefaultProviderOpts() *ProviderOpts {
 		SSDMachineType:   defaultSSDMachineType,
 		RemoteUserName:   "ubuntu",
 		DefaultEBSVolume: defaultEBSVolumeValue,
+		EBSVolumeCount:   1,
 		CreateRateLimit:  2,
 		IAMProfile:       "roachprod-testing",
 	}
@@ -258,6 +259,10 @@ type ProviderOpts struct {
 	DefaultEBSVolume ebsVolume
 	EBSVolumes       ebsVolumeList
 	UseMultipleDisks bool
+
+	// EBSVolumeCount is the number of additional EBS volumes to attach.
+	// Only used if local-ssd=false, and is superseded by EBSVolumes.
+	EBSVolumeCount int
 
 	// IAMProfile designates the name of the instance profile to use for created
 	// EC2 instances if non-empty.
@@ -279,9 +284,6 @@ type ProviderOpts struct {
 	// use spot vms, spot vms are significantly cheaper, but can be preempted AWS.
 	// see https://aws.amazon.com/ec2/spot/ for more details.
 	UseSpot bool
-	// BootDiskOnly ensures that no additional disks will be attached, other than
-	// the boot disk.
-	BootDiskOnly bool
 }
 
 // Provider implements the vm.Provider interface for AWS.
@@ -366,12 +368,6 @@ func (p *Provider) GetHostErrorVMs(
 	return nil, nil
 }
 
-func (p *Provider) GetLiveMigrationVMs(
-	l *logger.Logger, vms vm.List, since time.Time,
-) ([]string, error) {
-	return nil, nil
-}
-
 // GetVMSpecs returns a map from VM.Name to a map of VM attributes, provided by AWS
 func (p *Provider) GetVMSpecs(
 	l *logger.Logger, vms vm.List,
@@ -451,7 +447,7 @@ var DefaultConfig = func() (cfg *awsConfig) {
 // doesn't support multi-regional buckets, thus resulting in material
 // egress cost if the test loads from a different region. See
 // https://github.com/cockroachdb/cockroach/issues/105968.
-var defaultZones = []string{
+var DefaultZones = []string{
 	"us-east-2a",
 	"us-west-2b",
 	"eu-west-2b",
@@ -521,6 +517,9 @@ func (o *ProviderOpts) ConfigureCreateFlags(flags *pflag.FlagSet) {
 	flags.IntVar(&o.DefaultEBSVolume.Disk.Throughput, ProviderName+"-ebs-throughput",
 		o.DefaultEBSVolume.Disk.Throughput, "Additional throughput to provision, in MiB/s")
 
+	flags.IntVar(&o.EBSVolumeCount, ProviderName+"-ebs-volume-count", 1,
+		"Number of EBS volumes to create, only used if local-ssd=false and superseded by --aws-ebs-volume")
+
 	flags.VarP(&o.EBSVolumes, ProviderName+"-ebs-volume", "",
 		`Additional EBS disk to attached, repeated for extra disks; specified as JSON: {"VolumeType":"io2","VolumeSize":213,"Iops":321}`)
 
@@ -528,7 +527,7 @@ func (o *ProviderOpts) ConfigureCreateFlags(flags *pflag.FlagSet) {
 		fmt.Sprintf("aws availability zones to use for cluster creation. If zones are formatted\n"+
 			"as AZ:N where N is an integer, the zone will be repeated N times. If > 1\n"+
 			"zone specified, the cluster will be spread out evenly by zone regardless\n"+
-			"of geo (default [%s])", strings.Join(defaultZones, ",")))
+			"of geo (default [%s])", strings.Join(DefaultZones, ",")))
 	flags.StringVar(&o.ImageAMI, ProviderName+"-image-ami",
 		o.ImageAMI, "Override image AMI to use.  See https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/describe-images.html")
 	flags.BoolVar(&o.UseMultipleDisks, ProviderName+"-enable-multiple-stores",
@@ -543,8 +542,6 @@ func (o *ProviderOpts) ConfigureCreateFlags(flags *pflag.FlagSet) {
 		false, "use AWS Spot VMs, which are significantly cheaper, but can be preempted by AWS.")
 	flags.StringVar(&o.IAMProfile, ProviderName+"-iam-profile", o.IAMProfile,
 		"the IAM instance profile to associate with created VMs if non-empty")
-	flags.BoolVar(&o.BootDiskOnly, ProviderName+"-boot-disk-only", o.BootDiskOnly,
-		"Only attach the boot disk. No additional volumes will be provisioned even if specified.")
 }
 
 // ConfigureClusterCleanupFlags implements ProviderOpts.
@@ -703,7 +700,11 @@ func (p *Provider) Create(
 	}
 
 	if len(expandedZones) == 0 {
-		expandedZones = DefaultZones(opts.GeoDistributed)
+		if opts.GeoDistributed {
+			expandedZones = DefaultZones
+		} else {
+			expandedZones = DefaultZones[:1]
+		}
 	}
 
 	// We need to make sure that the SSH keys have been distributed to all regions.
@@ -756,13 +757,6 @@ func (p *Provider) Create(
 	}
 
 	return vmList, nil
-}
-
-func DefaultZones(geoDistributed bool) []string {
-	if geoDistributed {
-		return defaultZones
-	}
-	return []string{defaultZones[0]}
 }
 
 func (p *Provider) Grow(*logger.Logger, vm.List, string, []string) (vm.List, error) {
@@ -1349,11 +1343,11 @@ func (p *Provider) runInstance(
 	extraMountOpts := ""
 	// Dynamic args.
 	if opts.SSDOpts.UseLocalSSD {
-		if opts.SSDOpts.NoExt4Barrier {
+		// Disable ext4 barriers if specified and using ext4.
+		if opts.SSDOpts.NoExt4Barrier && opts.SSDOpts.FileSystem == vm.Ext4 {
 			extraMountOpts = "nobarrier"
 		}
 	}
-
 	filename, err := writeStartupScript(
 		name,
 		extraMountOpts,
@@ -1361,7 +1355,6 @@ func (p *Provider) runInstance(
 		providerOpts.UseMultipleDisks,
 		opts.Arch == string(vm.ArchFIPS),
 		providerOpts.RemoteUserName,
-		providerOpts.BootDiskOnly,
 	)
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not write AWS startup script to temp file")
@@ -1588,6 +1581,56 @@ func getSpotInstanceRequestId(
 	return spotInstanceRequestId, nil
 }
 
+// calculateProvisionedIOPS calculates the appropriate IOPS for io1/io2 volumes
+// based on volume size, respecting AWS constraints.
+//
+// AWS enforces maximum IOPS-to-size ratios:
+// - io1: 50 IOPS/GB (max 64,000 IOPS)
+// - io2: 500 IOPS/GB for standard, 1000 IOPS/GB for Block Express (max 256,000 IOPS)
+//
+// We use 10 IOPS/GB as a baseline to match Azure's ultra-disk default ratio,
+// with a minimum of 3,000 IOPS (matching gp3 baseline), but we must respect
+// AWS's IOPS-to-size ratio constraints.
+func calculateProvisionedIOPS(volumeType string, volumeSize int) int {
+	if volumeType != "io1" && volumeType != "io2" {
+		return 0
+	}
+
+	// Calculate baseline: 10 IOPS/GB
+	iops := volumeSize * 10
+
+	// Determine AWS constraints for this volume type
+	var maxIOPSPerGB int
+	var absoluteMaxIOPS int
+	switch volumeType {
+	case "io1":
+		maxIOPSPerGB = 50
+		absoluteMaxIOPS = 64000
+	case "io2":
+		// As of April 2025, all io2 volumes are Block Express with 1000 IOPS/GB.
+		// We use the more conservative 500 IOPS/GB for compatibility.
+		maxIOPSPerGB = 500
+		absoluteMaxIOPS = 64000 // Use 64k for compatibility; Block Express supports 256k
+	}
+
+	// Apply constraint-aware minimum
+	if iops < 3000 {
+		// Set a minimum of 3,000 IOPS (matching gp3 baseline)
+		iops = 3000
+
+		// But if that exceeds the maximum allowed IOPS for this volume size,
+		// set to the maximum allowed instead.
+		maxAllowedIOPS := volumeSize * maxIOPSPerGB
+		if iops > maxAllowedIOPS {
+			iops = maxAllowedIOPS
+		}
+	} else if iops > absoluteMaxIOPS {
+		iops = absoluteMaxIOPS
+	}
+
+	return iops
+}
+
 func genDeviceMapping(ebsVolumes ebsVolumeList, args []string) ([]string, error) {
 	mapping, err := json.Marshal(ebsVolumes)
 	if err != nil {
@@ -1611,21 +1654,6 @@ func genDeviceMapping(ebsVolumes ebsVolumeList, args []string) ([]string, error)
 func assignEBSVolumes(opts *vm.CreateOpts, providerOpts *ProviderOpts) ebsVolumeList {
 	// Make a local copy of providerOpts.EBSVolumes to prevent data races
 	ebsVolumes := providerOpts.EBSVolumes
-	// The local NVMe devices are automatically mapped.  Otherwise, we need to map an EBS data volume.
-	if !opts.SSDOpts.UseLocalSSD && !providerOpts.BootDiskOnly {
-		if len(ebsVolumes) == 0 && providerOpts.DefaultEBSVolume.Disk.VolumeType == "" {
-			providerOpts.DefaultEBSVolume.Disk.VolumeType = defaultEBSVolumeType
-			providerOpts.DefaultEBSVolume.Disk.DeleteOnTermination = true
-		}
-
-		if providerOpts.DefaultEBSVolume.Disk.VolumeType != "" {
-			// Add default volume to the list of volumes we'll setup.
-			v := ebsVolumes.newVolume()
-			v.Disk = providerOpts.DefaultEBSVolume.Disk
-			v.Disk.DeleteOnTermination = true
-			ebsVolumes = append(ebsVolumes, v)
-		}
-	}
 
 	osDiskVolume := &ebsVolume{
 		DeviceName: "/dev/sda1",
@@ -1635,7 +1663,36 @@ func assignEBSVolumes(opts *vm.CreateOpts, providerOpts *ProviderOpts) ebsVolume
 			DeleteOnTermination: true,
 		},
 	}
-	return append(ebsVolumes, osDiskVolume)
+
+	// If local SSD or boot disk only is requested, return that immediately.
+	// Local SSDs cannot be configured and will be automatically mapped by AWS
+	// depending on the instance type.
+	if opts.SSDOpts.UseLocalSSD {
+		return ebsVolumeList{osDiskVolume}
+	}
+
+	// aws-ebs-volume supersedes other volume settings, if none are provided,
+	// we build a list based on count and provided settings.
+	if len(ebsVolumes) == 0 {
+		for range providerOpts.EBSVolumeCount {
+			v := ebsVolumes.newVolume()
+			v.Disk = providerOpts.DefaultEBSVolume.Disk
+			v.Disk.DeleteOnTermination = true
+
+			// io2/io1 volumes require IOPS to be specified. If not already set,
+			// calculate based on volume size using AWS-compliant logic.
+			if v.Disk.IOPs == 0 {
+				v.Disk.IOPs = calculateProvisionedIOPS(v.Disk.VolumeType, v.Disk.VolumeSize)
+			}
+
+			ebsVolumes = append(ebsVolumes, v)
+		}
+	}
+
+	// Add the OS disk to the list of volumes to be created.
+	ebsVolumes = append(ebsVolumes, osDiskVolume)
+
+	return ebsVolumes
 }
 
 // Active is part of the vm.Provider interface.

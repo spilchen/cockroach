@@ -5,20 +5,24 @@
 
 package spec
 
-import "time"
+import (
+	"time"
+
+	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
+)
 
 // Option for MakeClusterSpec.
 type Option func(spec *ClusterSpec)
 
-// Arch requests specific CPU architecture(s).
+// Arch requests a specific CPU architecture.
 //
 // Note that it is not guaranteed that this architecture will be used (e.g. if
 // the requested machine size isn't available in this architecture).
 //
 // TODO(radu): add a flag to indicate whether it's a preference or a requirement.
-func Arch(as ArchSet) Option {
+func Arch(arch vm.CPUArch) Option {
 	return func(spec *ClusterSpec) {
-		spec.CompatibleArchs = as
+		spec.Arch = arch
 	}
 }
 
@@ -53,15 +57,6 @@ func WorkloadNodeCPU(n int) Option {
 	}
 }
 
-// WorkloadRequiresDisk should be used if the workload nodes should have the
-// exact same disk configuration as the rest of the cluster. Otherwise, all
-// workload nodes only have a boot disk.
-func WorkloadRequiresDisk() Option {
-	return func(spec *ClusterSpec) {
-		spec.WorkloadRequiresDisk = true
-	}
-}
-
 // Mem requests nodes with low/standard/high ratio of memory per CPU.
 func Mem(level MemPerCPU) Option {
 	return func(spec *ClusterSpec) {
@@ -73,6 +68,20 @@ func Mem(level MemPerCPU) Option {
 func VolumeSize(n int) Option {
 	return func(spec *ClusterSpec) {
 		spec.VolumeSize = n
+	}
+}
+
+// VolumeType sets the volume type.
+func VolumeType(volumeType string) Option {
+	return func(spec *ClusterSpec) {
+		spec.VolumeType = volumeType
+	}
+}
+
+// VolumeCount sets the volume count.
+func VolumeCount(volumeCount int) Option {
+	return func(spec *ClusterSpec) {
+		spec.VolumeCount = volumeCount
 	}
 }
 
@@ -195,6 +204,21 @@ func DisableLocalSSD() Option {
 	}
 }
 
+// RandomizeVolumeType is an Option which randomly picks the volume type
+// to be used. Unless SSD is forced, the volume type is picked randomly
+// between the available types for a provider:
+// - GCE: pd-ssd, local-ssd
+// - AWS: gp3, io2, local-ssd
+// - Azure: premium-ssd, premium-ssd-v2, ultra-disk, local-ssd
+// - IBM: 10iops-tier
+// Note: this option has no effect if VolumeType is explicitly set
+// or PreferLocalSSD/DisableLocalSSD is used.
+func RandomizeVolumeType() Option {
+	return func(spec *ClusterSpec) {
+		spec.RandomizeVolumeType = true
+	}
+}
+
 // TerminateOnMigration ensures VM is terminated in case GCE triggers a live migration.
 func TerminateOnMigration() Option {
 	return func(spec *ClusterSpec) {
@@ -226,10 +250,18 @@ func SetFileSystem(fs fileSystemType) Option {
 // RandomlyUseZfs is an Option which randomly picks
 // the file system to be used, and sets it to zfs,
 // about 20% of the time.
-// Zfs is only picked if the cloud is gce.
 func RandomlyUseZfs() Option {
 	return func(spec *ClusterSpec) {
 		spec.RandomlyUseZfs = true
+	}
+}
+
+// RandomlyUseXfs is an Option which randomly picks
+// the file system to be used, and sets it to xfs,
+// about 20% of the time.
+func RandomlyUseXfs() Option {
+	return func(spec *ClusterSpec) {
+		spec.RandomlyUseXfs = true
 	}
 }
 
@@ -244,20 +276,6 @@ func GCEMachineType(machineType string) Option {
 func GCEMinCPUPlatform(platform string) Option {
 	return func(spec *ClusterSpec) {
 		spec.GCE.MinCPUPlatform = platform
-	}
-}
-
-// GCEVolumeType sets the volume type when the cluster is on GCE.
-func GCEVolumeType(volumeType string) Option {
-	return func(spec *ClusterSpec) {
-		spec.GCE.VolumeType = volumeType
-	}
-}
-
-// GCEVolumeCount sets the volume count when the cluster is on GCE.
-func GCEVolumeCount(volumeCount int) Option {
-	return func(spec *ClusterSpec) {
-		spec.GCE.VolumeCount = volumeCount
 	}
 }
 
@@ -321,41 +339,10 @@ func AzureZones(zones string) Option {
 	}
 }
 
-// IBMMachineType sets the machine (instance) type when the cluster is on IBM.
-func IBMMachineType(machineType string) Option {
+// AzureVolumeIOPS sets the provisioned IOPS for ultra-disk volumes
+// when the cluster is on Azure.
+func AzureVolumeIOPS(iops int) Option {
 	return func(spec *ClusterSpec) {
-		spec.IBM.MachineType = machineType
-	}
-}
-
-// IBMVolumeType sets the volume type when the cluster is on IBM.
-func IBMVolumeType(volumeType string) Option {
-	return func(spec *ClusterSpec) {
-		spec.IBM.VolumeType = volumeType
-	}
-}
-
-// IBMVolumeIOPS sets the IOPS when the cluster is on IBM.
-func IBMVolumeIOPS(iops int) Option {
-	return func(spec *ClusterSpec) {
-		spec.IBM.VolumeIOPS = iops
-	}
-}
-
-// IBMVolumeCount sets the volume count when the cluster is on IBM.
-func IBMVolumeCount(count int) Option {
-	return func(spec *ClusterSpec) {
-		spec.IBM.VolumeCount = count
-	}
-}
-
-// IBMZones is a node option which requests Geo-distributed nodes; only applies
-// when the test runs on IBM.
-//
-// Note that this overrides the --zones flag and is useful for tests that
-// require running on specific zones.
-func IBMZones(zones string) Option {
-	return func(spec *ClusterSpec) {
-		spec.IBM.Zones = zones
+		spec.Azure.VolumeIOPS = iops
 	}
 }

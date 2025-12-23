@@ -14,6 +14,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvadmission"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvflowcontrol/rac2"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/rangefeed"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/storage"
@@ -44,6 +45,7 @@ type Stores struct {
 		biLatestTS hlc.Timestamp         // Timestamp of gossip bootstrap info
 		latestBI   *gossip.BootstrapInfo // Latest cached bootstrap info
 	}
+	sendQueueLogger *rac2.SendQueueLogger
 }
 
 var _ kv.Sender = &Stores{}      // Stores implements the client.Sender interface
@@ -52,9 +54,11 @@ var _ gossip.Storage = &Stores{} // Stores implements the gossip.Storage interfa
 // NewStores returns a local-only sender which directly accesses
 // a collection of stores.
 func NewStores(ambient log.AmbientContext, clock *hlc.Clock) *Stores {
+	const numStreamsToLog = 20
 	return &Stores{
-		AmbientContext: ambient,
-		clock:          clock,
+		AmbientContext:  ambient,
+		clock:           clock,
+		sendQueueLogger: rac2.NewSendQueueLogger(numStreamsToLog),
 	}
 }
 
@@ -108,7 +112,7 @@ func (ls *Stores) AddStore(s *Store) {
 	if !ls.mu.biLatestTS.IsEmpty() {
 		if err := ls.updateBootstrapInfoLocked(ls.mu.latestBI); err != nil {
 			ctx := ls.AnnotateCtx(context.TODO())
-			log.KvDistribution.Errorf(ctx, "failed to update bootstrap info on newly added store: %+v", err)
+			log.Errorf(ctx, "failed to update bootstrap info on newly added store: %+v", err)
 		}
 	}
 }
@@ -130,7 +134,7 @@ func (ls *Stores) ForwardSideTransportClosedTimestampForRange(
 		}
 		return nil
 	}); err != nil {
-		log.KvDistribution.Fatalf(ctx, "unexpected error: %s", err)
+		log.Fatalf(ctx, "unexpected error: %s", err)
 	}
 }
 
@@ -164,7 +168,7 @@ func (ls *Stores) GetReplicaForRangeID(
 		}
 		return nil
 	}); err != nil {
-		log.KvExec.Fatalf(ctx, "unexpected error: %s", err)
+		log.Fatalf(ctx, "unexpected error: %s", err)
 	}
 	if replica == nil {
 		return nil, nil, kvpb.NewRangeNotFoundError(rangeID, 0)
@@ -213,9 +217,9 @@ func (ls *Stores) RangeFeed(
 	perConsumerCatchupLimiter *limit.ConcurrentRequestLimiter,
 ) (rangefeed.Disconnector, error) {
 	if args.RangeID == 0 {
-		log.KvDistribution.Fatal(streamCtx, "rangefeed request missing range ID")
+		log.Fatal(streamCtx, "rangefeed request missing range ID")
 	} else if args.Replica.StoreID == 0 {
-		log.KvDistribution.Fatal(streamCtx, "rangefeed request missing store ID")
+		log.Fatal(streamCtx, "rangefeed request missing store ID")
 	}
 
 	store, err := ls.GetStore(args.Replica.StoreID)
@@ -258,7 +262,7 @@ func (ls *Stores) ReadBootstrapInfo(bi *gossip.BootstrapInfo) error {
 	if err != nil {
 		return err
 	}
-	log.KvDistribution.Infof(ctx, "read %d node addresses from persistent storage", len(bi.Addresses))
+	log.Infof(ctx, "read %d node addresses from persistent storage", len(bi.Addresses))
 
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
@@ -277,7 +281,7 @@ func (ls *Stores) WriteBootstrapInfo(bi *gossip.BootstrapInfo) error {
 		return err
 	}
 	ctx := ls.AnnotateCtx(context.TODO())
-	log.KvDistribution.Infof(ctx, "wrote %d node addresses to persistent storage", len(bi.Addresses))
+	log.Infof(ctx, "wrote %d node addresses to persistent storage", len(bi.Addresses))
 	return nil
 }
 
@@ -336,21 +340,20 @@ func (ls *Stores) GetStoreMetricRegistry(storeID roachpb.StoreID) *metric.Regist
 	return nil
 }
 
-// GetAggregatedStoreStats returns the aggregated cpu usage across all stores and
-// the count of stores.
-func (ls *Stores) GetAggregatedStoreStats(
-	useCached bool,
-) (storesCPURate int64, numStores int32, _ error) {
-	if err := ls.VisitStores(func(s *Store) error {
-		c, err := s.Capacity(context.Background(), useCached)
-		if err != nil {
-			return err
-		}
-		storesCPURate += int64(c.CPUPerSecond)
-		numStores++
-		return nil
-	}); err != nil {
-		return 0, 0, err
+func (ls *Stores) TryLogFlowControlSendQueues(ctx context.Context) {
+	coll, ok := ls.sendQueueLogger.TryStartLog()
+	if !ok {
+		return
 	}
-	return storesCPURate, numStores, nil
+	rangeSendStats := rac2.RangeSendStreamStats{}
+	_ = ls.VisitStores(func(s *Store) error {
+		newStoreReplicaVisitor(s).Visit(func(rep *Replica) bool {
+			rangeSendStats.Clear()
+			rep.SendStreamStats(&rangeSendStats)
+			coll.ObserveRangeStats(&rangeSendStats)
+			return true
+		})
+		return nil
+	})
+	ls.sendQueueLogger.FinishLog(ctx, coll)
 }
