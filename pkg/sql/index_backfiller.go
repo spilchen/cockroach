@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/backfill"
+	"github.com/cockroachdb/cockroach/pkg/sql/bulksst"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
@@ -302,12 +303,7 @@ func (ib *IndexBackfillPlanner) plan(
 			indexesToBackfill, sourceIndexID,
 		)
 		if useDistributedMerge {
-			// Record the storage prefix before any SSTs are written.
-			storagePrefix := fmt.Sprintf("nodelocal://%d/", ib.execCfg.NodeInfo.NodeID.SQLInstanceID())
-			backfill.EnableDistributedMergeIndexBackfillSink(storagePrefix, jobID, &spec)
-			if err := addStoragePrefix(ctx, storagePrefix); err != nil {
-				return err
-			}
+			backfill.EnableDistributedMergeIndexBackfillSink(jobID, &spec)
 		}
 		var err error
 		p, err = ib.execCfg.DistSQLPlanner.createBackfillerPhysicalPlan(ctx, planCtx, spec, sourceSpans)
@@ -368,17 +364,28 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	if len(manifests) == 0 {
 		return nil
 	}
-	ssts := make([]execinfrapb.BulkMergeSpec_SST, 0, len(manifests))
+
+	// Convert manifests to the SSTFiles format expected by CombineFileInfo.
+	// This includes the row samples collected during the map phase, which are
+	// used to split the merge work across multiple processors.
+	files := make([]bulksst.SSTFiles, 1)
 	for _, manifest := range manifests {
 		if manifest.Span == nil {
 			return errors.AssertionFailedf("manifest missing span metadata")
 		}
-		ssts = append(ssts, execinfrapb.BulkMergeSpec_SST{
-			URI:      manifest.URI,
-			StartKey: append([]byte(nil), manifest.Span.Key...),
-			EndKey:   append([]byte(nil), manifest.Span.EndKey...),
+		files[0].SST = append(files[0].SST, &bulksst.SSTFileInfo{
+			URI:       manifest.URI,
+			StartKey:  append([]byte(nil), manifest.Span.Key...),
+			EndKey:    append([]byte(nil), manifest.Span.EndKey...),
+			FileSize:  manifest.FileSize,
+			RowSample: append(roachpb.Key(nil), manifest.RowSample...),
 		})
+		files[0].TotalSize += manifest.FileSize
+		if len(manifest.RowSample) > 0 {
+			files[0].RowSamples = append(files[0].RowSamples, string(manifest.RowSample))
+		}
 	}
+
 	targetSpans := make([]roachpb.Span, 0, len(progress.DestIndexIDs))
 	for _, idxID := range progress.DestIndexIDs {
 		span := descriptor.IndexSpan(ib.execCfg.Codec, idxID)
@@ -386,6 +393,12 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	}
 	if len(targetSpans) == 0 {
 		return errors.AssertionFailedf("no destination index spans provided for merge")
+	}
+
+	// Use CombineFileInfo to convert manifests to SST format.
+	ssts, _, err := bulksst.CombineFileInfo(files, targetSpans)
+	if err != nil {
+		return errors.Wrap(err, "failed to combine file info for distributed merge")
 	}
 
 	mem := &MemoryMetrics{}
