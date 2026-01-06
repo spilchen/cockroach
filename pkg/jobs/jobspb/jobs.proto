@@ -875,6 +875,15 @@ message BackfillProgress {
   // As those SSTs are consumed by the first merge iteration, they are replaced
   // by the outputs of that iteration.
   repeated IndexBackfillSSTManifest sst_manifests = 6 [(gogoproto.nullable) = false, (gogoproto.customname) = "SSTManifests"];
+
+  // DistributedMergePhase tracks backfill progress through the distributed merge
+  // pipeline. This field is only meaningful when the job is using the pipeline,
+  // which is stored separately in DistributedMergeMode.
+  //
+  // Values:
+  //   0: Map phase - reading from source index, generating SSTs.
+  //   1+: Map phase complete, merge in progress or pending.
+  int32 distributed_merge_phase = 7;
 }
 
 // IndexBackfillSSTManifest describes an SST produced by the backfill map stage.

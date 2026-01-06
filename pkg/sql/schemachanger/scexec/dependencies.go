@@ -280,6 +280,11 @@ type BackfillProgress struct {
 	// SSTManifests captures SST metadata emitted by the distributed merge
 	// backfill pipeline.
 	SSTManifests []jobspb.IndexBackfillSSTManifest
+
+	// DistributedMergePhase tracks which phase of the distributed merge
+	// pipeline we are in. 0 = map phase, 1+ = merge phase.
+	// See jobspb.BackfillProgress.DistributedMergePhase for full semantics.
+	DistributedMergePhase int32
 }
 
 // Backfill corresponds to a definition of a backfill from a source
