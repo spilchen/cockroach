@@ -127,7 +127,7 @@ func TestDistributedMergeProcessorFailurePropagates(t *testing.T) {
 	writeTS := hlc.Timestamp{WallTime: 1}
 	_, err := Merge(ctx, jobExecCtx, ssts, spans, func(instanceID base.SQLInstanceID) (string, error) {
 		return fmt.Sprintf("nodelocal://%d/merge/out/", instanceID), nil
-	}, 1 /* iteration */, 1 /* maxIterations */, &writeTS)
+	}, 1 /* iteration */, 1 /* maxIterations */, &writeTS, 3 /* expectedKeyCount */)
 	require.ErrorIs(t, err, injectedErr)
 }
 
@@ -195,6 +195,7 @@ func TestDistributedMergeMultiPassIngestsIntoKV(t *testing.T) {
 		1, /* iteration */
 		2, /* maxIterations */
 		nil,
+		keyCount, /* expectedKeyCount */
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, iter1Out)
@@ -212,6 +213,7 @@ func TestDistributedMergeMultiPassIngestsIntoKV(t *testing.T) {
 		2, /* iteration */
 		2, /* maxIterations */
 		&writeTS,
+		keyCount, /* expectedKeyCount */
 	)
 	require.NoError(t, err)
 	require.Nil(t, iter2Out, "final iteration should not produce SST outputs")
@@ -282,6 +284,7 @@ func importToMerge(mapFiles *bulksst.SSTFiles) []execinfrapb.BulkMergeSpec_SST {
 			URI:      mapFiles.SST[i].URI,
 			StartKey: []byte(mapFiles.SST[i].StartKey),
 			EndKey:   []byte(mapFiles.SST[i].EndKey),
+			KeyCount: mapFiles.SST[i].KeyCount,
 		})
 	}
 	return ssts

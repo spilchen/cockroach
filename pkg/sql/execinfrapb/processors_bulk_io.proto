@@ -620,6 +620,8 @@ message BulkMergeSpec {
     optional bytes start_key = 2 [(gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/roachpb.Key"];
     // end_key is the last key in the SST.
     optional bytes end_key = 3 [(gogoproto.casttype) = "github.com/cockroachdb/cockroach/pkg/roachpb.Key"];
+    // key_count is the number of keys in this SST file.
+    optional uint64 key_count = 4 [(gogoproto.nullable) = false];
   };
 
   // ssts is the list of input SSTs to merge.
@@ -644,11 +646,16 @@ message BulkMergeSpec {
   // directly into KV.
   optional util.hlc.Timestamp write_timestamp = 6 [(gogoproto.nullable) = false, (gogoproto.customname) = "WriteTimestamp"];
 
+  // expected_key_count is the expected total number of keys across all output SSTs.
+  // If set (non-zero), the merge processor will validate that the actual output
+  // key count matches this value. Set to 0 to skip validation.
+  optional uint64 expected_key_count = 7 [(gogoproto.nullable) = false];
+
   message Output {
     // output_ssts is the list of output SSTs.
     repeated SST ssts = 1 [(gogoproto.nullable) = false, (gogoproto.customname) = "SSTs"];
   }
-  // NEXT ID: 7.
+  // NEXT ID: 8.
 }
 
 // IndexBackfillMapProgress is emitted by map-stage processors to describe newly

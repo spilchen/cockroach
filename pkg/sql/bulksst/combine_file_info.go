@@ -47,6 +47,7 @@ func CombineFileInfo(
 				StartKey: sst.StartKey,
 				EndKey:   sst.EndKey,
 				URI:      sst.URI,
+				KeyCount: sst.KeyCount,
 			})
 		}
 		for _, sample := range file.RowSamples {
@@ -69,6 +70,16 @@ func CombineFileInfo(
 	}
 
 	return result, mergeSpans, nil
+}
+
+// SumKeyCount computes the total key count across all SSTs.
+// This is useful for validation when passing SSTs to distributed merge.
+func SumKeyCount(ssts []execinfrapb.BulkMergeSpec_SST) uint64 {
+	var total uint64
+	for _, sst := range ssts {
+		total += sst.KeyCount
+	}
+	return total
 }
 
 // getMergeSpans determines which spans should be used as merge tasks. The

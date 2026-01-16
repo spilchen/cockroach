@@ -374,6 +374,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	// single SSTFiles entry containing all manifest data.
 	sstFileInfos := make([]*bulksst.SSTFileInfo, 0, len(manifests))
 	rowSamples := make([]string, 0, len(manifests))
+	var expectedKeyCount uint64
 	for _, manifest := range manifests {
 		if manifest.Span == nil {
 			return errors.AssertionFailedf("manifest missing span metadata")
@@ -384,10 +385,12 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 			EndKey:    append(roachpb.Key(nil), manifest.Span.EndKey...),
 			FileSize:  manifest.FileSize,
 			RowSample: append(roachpb.Key(nil), manifest.RowSample...),
+			KeyCount:  manifest.KeyCount,
 		})
 		if len(manifest.RowSample) > 0 {
 			rowSamples = append(rowSamples, string(manifest.RowSample))
 		}
+		expectedKeyCount += manifest.KeyCount
 	}
 	sstFiles := []bulksst.SSTFiles{{SST: sstFileInfos, RowSamples: rowSamples}}
 
@@ -452,6 +455,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 			iteration,
 			maxIterations,
 			writeTS,
+			expectedKeyCount,
 		)
 		if err != nil {
 			return err
@@ -486,8 +490,9 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 				EndKey: append([]byte(nil), sst.EndKey...),
 			}
 			newManifests = append(newManifests, jobspb.IndexBackfillSSTManifest{
-				URI:  sst.URI,
-				Span: &span,
+				URI:      sst.URI,
+				Span:     &span,
+				KeyCount: sst.KeyCount,
 			})
 		}
 		progress.SSTManifests = newManifests
