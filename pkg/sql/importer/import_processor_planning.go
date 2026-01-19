@@ -361,7 +361,13 @@ func distImport(
 				return "", err
 			}
 			return fmt.Sprintf("%sjob/%d/merge/", prefix, job.ID()), nil
-		}, 1 /* iteration */, 1 /* maxIterations */, writeTS)
+		}, bulkmerge.MergeOptions{
+			Iteration:      1,
+			MaxIterations:  1,
+			WriteTimestamp: writeTS,
+			// TODO(156934): uniqueness is currently never enforced
+			EnforceUniqueness: false,
+		})
 
 		return err
 	})

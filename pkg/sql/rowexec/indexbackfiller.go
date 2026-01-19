@@ -321,8 +321,9 @@ func (ib *indexBackfiller) makeIndexBackfillSink(ctx context.Context) (indexBack
 		nodeID := ib.flowCtx.NodeID.SQLInstanceID()
 		prefix := fmt.Sprintf("nodelocal://%d/%s", nodeID, ib.spec.DistributedMergeFilePrefix)
 
+		checkDuplicates := ib.ContainsUniqueIndex()
 		return newSSTIndexBackfillSink(
-			ctx, ib.flowCtx, prefix, ib.spec.WriteAsOf, ib.processorID)
+			ctx, ib.flowCtx, prefix, ib.spec.WriteAsOf, ib.processorID, checkDuplicates)
 	}
 
 	minBufferSize := backfillerBufferSize.Get(&ib.flowCtx.Cfg.Settings.SV)
@@ -609,17 +610,32 @@ func (ib *indexBackfiller) wrapDupError(ctx context.Context, orig error) error {
 	if orig == nil {
 		return nil
 	}
-	var typed *kvserverbase.DuplicateKeyError
-	if !errors.As(orig, &typed) {
-		return orig
+
+	// Handle DuplicateKeyError from within-batch duplicate detection.
+	var dupErr *kvserverbase.DuplicateKeyError
+	if errors.As(orig, &dupErr) {
+		desc, err := ib.desc.MakeFirstMutationPublic()
+		if err != nil {
+			return err
+		}
+		v := &roachpb.Value{RawBytes: dupErr.Value}
+		return row.NewUniquenessConstraintViolationError(ctx, desc, dupErr.Key, v)
 	}
 
-	desc, err := ib.desc.MakeFirstMutationPublic()
-	if err != nil {
-		return err
+	// Handle KeyCollisionError from cross-batch duplicate detection during SST
+	// ingestion. This occurs when disallowShadowingBelow is set in SSTBatcher
+	// for unique index enforcement.
+	var collErr *kvpb.KeyCollisionError
+	if errors.As(orig, &collErr) {
+		desc, err := ib.desc.MakeFirstMutationPublic()
+		if err != nil {
+			return err
+		}
+		v := &roachpb.Value{RawBytes: collErr.Value}
+		return row.NewUniquenessConstraintViolationError(ctx, desc, collErr.Key, v)
 	}
-	v := &roachpb.Value{RawBytes: typed.Value}
-	return row.NewUniquenessConstraintViolationError(ctx, desc, typed.Key, v)
+
+	return orig
 }
 
 const indexBackfillProgressReportInterval = 10 * time.Second

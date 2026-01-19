@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/backfill"
+	"github.com/cockroachdb/cockroach/pkg/sql/bulkmerge"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catenumpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
@@ -1641,4 +1643,179 @@ func TestDistributedMergeResumePreservesProgress(t *testing.T) {
 			t.Logf("manifest counts by iteration: %v", state.manifestCountByIteration)
 		})
 	}
+}
+
+// TestDistributedMergeDuplicateKeyDetection verifies that duplicate keys in the
+// same SST are detected during merge iterations.
+func TestDistributedMergeDuplicateKeyDetection(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	skip.UnderDuress(t)
+
+	const maxMergeIterations int32 = 10
+
+	testCases := []struct {
+		name            string
+		injectIteration int32 // which iteration to inject
+		expErrRegex     string
+	}{
+		{
+			name:            "non-final merge iteration duplicate",
+			injectIteration: 2,
+			// TODO(156934): have this emit a duplicate key error instead.
+			expErrRegex: `pebble: keys must be added in strictly increasing order`,
+		},
+		{
+			name:            "final merge iteration duplicate",
+			injectIteration: maxMergeIterations,
+			expErrRegex:     `duplicate key:`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			const numNodes = 3
+			const numRows = 500
+
+			var duplicateInjected atomic.Bool
+
+			bulkMergeKnobs := &bulkmerge.TestingKnobs{
+				InjectDuplicateKey: func(iteration, maxIteration int32) bool {
+					if iteration == tc.injectIteration && !duplicateInjected.Swap(true) {
+						return true
+					}
+					return false
+				},
+			}
+
+			testingKnobs := base.TestingKnobs{
+				JobsTestingKnobs: jobs.NewTestingKnobsWithShortIntervals(),
+				DistSQL: &execinfra.TestingKnobs{
+					BulkAdderFlushesEveryBatch: true,
+					BulkMergeTestingKnobs:      bulkMergeKnobs,
+				},
+			}
+
+			// Create separate temp directories for each node.
+			tempDirs := make([]string, numNodes)
+			for i := 0; i < numNodes; i++ {
+				tempDirs[i] = t.TempDir()
+			}
+
+			// Multi-node cluster setup.
+			serverArgsPerNode := make(map[int]base.TestServerArgs)
+			for i := 0; i < numNodes; i++ {
+				serverArgsPerNode[i] = base.TestServerArgs{
+					ExternalIODir: tempDirs[i],
+					Knobs:         testingKnobs,
+				}
+			}
+
+			cluster := serverutils.StartCluster(t, numNodes, base.TestClusterArgs{
+				ServerArgsPerNode: serverArgsPerNode,
+			})
+			defer cluster.Stopper().Stop(ctx)
+
+			tdb := sqlutils.MakeSQLRunner(cluster.ServerConn(0))
+
+			// Configure merge settings.
+			tdb.Exec(t, `SET CLUSTER SETTING bulkio.index_backfill.distributed_merge.mode = 'declarative'`)
+			tdb.Exec(t, fmt.Sprintf(`SET CLUSTER SETTING bulkio.index_backfill.distributed_merge.iterations = %d`, maxMergeIterations))
+			tdb.Exec(t, `SET CLUSTER SETTING bulkio.merge.file_size = '50KiB'`)
+
+			// Create table with data.
+			tdb.Exec(t, `CREATE TABLE t (k INT PRIMARY KEY, v INT)`)
+			tdb.Exec(t, fmt.Sprintf(`INSERT INTO t SELECT i, i*10 FROM generate_series(1, %d) AS g(i)`, numRows))
+
+			// Split and scatter ranges across nodes.
+			const numRanges = 10
+			for i := 1; i < numRanges; i++ {
+				splitPoint := (numRows / numRanges) * i
+				tdb.Exec(t, fmt.Sprintf(`ALTER TABLE t SPLIT AT VALUES (%d)`, splitPoint))
+			}
+			tdb.Exec(t, `ALTER TABLE t SCATTER`)
+
+			// Create unique index - this should trigger duplicate detection.
+			_, err := tdb.DB.ExecContext(ctx, `CREATE UNIQUE INDEX idx ON t(v)`)
+
+			// Verify injection happened.
+			require.Truef(t, duplicateInjected.Load(), "duplicate key was not injected for %s", tc.name)
+
+			require.Errorf(t, err, "expected error for %s", tc.name)
+			require.Regexp(t, tc.expErrRegex, err.Error(),
+				"error should match expected pattern for %s", tc.name)
+		})
+	}
+}
+
+// TestDistributedMergeCrossSSTDuplicateKeyDetection verifies that duplicate
+// keys spanning different SST files are detected during the distributed merge
+// process. This tests the case where the merge pipeline must detect duplicates
+// across SSTs rather than just within a single SST.
+//
+// The test creates a table with duplicate values in a column, then attempts to
+// create a unique index on that column. With very small SST file sizes, each
+// index entry lands in its own SST file, forcing cross-SST duplicate detection.
+func TestDistributedMergeCrossSSTDuplicateKeyDetection(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	skip.UnderDuress(t)
+
+	ctx := context.Background()
+	const numNodes = 3
+
+	testingKnobs := base.TestingKnobs{
+		JobsTestingKnobs: jobs.NewTestingKnobsWithShortIntervals(),
+	}
+
+	tempDirs := make([]string, numNodes)
+	for i := 0; i < numNodes; i++ {
+		tempDirs[i] = t.TempDir()
+	}
+
+	serverArgsPerNode := make(map[int]base.TestServerArgs)
+	for i := 0; i < numNodes; i++ {
+		serverArgsPerNode[i] = base.TestServerArgs{
+			ExternalIODir: tempDirs[i],
+			Knobs:         testingKnobs,
+		}
+	}
+
+	cluster := serverutils.StartCluster(t, numNodes, base.TestClusterArgs{
+		ServerArgsPerNode: serverArgsPerNode,
+	})
+	defer cluster.Stopper().Stop(ctx)
+
+	tdb := sqlutils.MakeSQLRunner(cluster.ServerConn(0))
+
+	// Configure distributed merge with very small SST file size.
+	// Each index entry goes to its own SST file.
+	tdb.Exec(t, `SET CLUSTER SETTING bulkio.index_backfill.distributed_merge.mode = 'declarative'`)
+	tdb.Exec(t, `SET CLUSTER SETTING bulkio.index_backfill.distributed_merge.iterations = 10`)
+
+	// Two settings control SST size in different phases:
+	// - bulkio.merge.file_size: Controls intermediate merge SST size.
+	// - kv.bulk_ingest.batch_size: Controls final KV ingestion SST size.
+	tdb.Exec(t, `SET CLUSTER SETTING bulkio.merge.file_size = '1B'`)
+	tdb.Exec(t, `SET CLUSTER SETTING kv.bulk_ingest.batch_size = '1B'`)
+
+	// Create table with duplicate value in column v.
+	// When we create a unique index on v, this should fail.
+	tdb.Exec(t, `CREATE TABLE t (k INT PRIMARY KEY, v INT)`)
+	tdb.Exec(t, `INSERT INTO t VALUES (1, 100), (2, 200), (3, 100)`) // v=100 appears twice
+
+	// Create unique index - should fail due to duplicate key v=100.
+	_, err := tdb.DB.ExecContext(ctx, `CREATE UNIQUE INDEX idx ON t(v)`)
+
+	require.Error(t, err, "expected duplicate key error for cross-SST duplicates")
+
+	// Verify the error indicates a duplicate key violation.
+	// The duplicate can be detected at various stages of the merge pipeline,
+	// so we check for any duplicate key error message.
+	errStr := err.Error()
+	hasDupError := strings.Contains(errStr, "duplicate key") ||
+		strings.Contains(errStr, "violates unique constraint")
+	require.True(t, hasDupError,
+		"expected error indicating duplicate key for cross-SST duplicate, got: %v", err)
 }
