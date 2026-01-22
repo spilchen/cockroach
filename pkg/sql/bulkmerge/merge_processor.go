@@ -45,6 +45,18 @@ var (
 		"target size for individual data files produced during merge phase",
 		60<<20,
 		settings.WithPublic)
+
+	// lazySSTLoading controls whether the merge processor loads SSTs lazily
+	// on a per-task basis instead of loading all SSTs upfront. When enabled,
+	// only the SSTs that overlap with a task's key span are opened, reducing
+	// memory usage from gRPC streaming buffers.
+	lazySSTLoading = settings.RegisterBoolSetting(
+		settings.ApplicationLevel,
+		"bulkio.merge.lazy_sst_loading.enabled",
+		"when enabled, merge processors load SSTs lazily per-task based on key range overlap, "+
+			"reducing memory usage from gRPC streaming buffers",
+		true,
+		settings.WithPublic)
 )
 
 // Output row format for the bulk merge processor. The third column contains
@@ -69,7 +81,19 @@ type bulkMergeProcessor struct {
 	input      execinfra.RowSource
 	flowCtx    *execinfra.FlowCtx
 	storageMux *bulkutil.ExternalStorageMux
-	iter       storage.SimpleMVCCIterator
+
+	// iter is the iterator over all SSTs, used when lazy loading is disabled.
+	// When lazy loading is enabled, this is nil and per-task iterators are
+	// created in mergeSSTs.
+	iter storage.SimpleMVCCIterator
+
+	// lazySSTLoadingEnabled indicates whether lazy SST loading is enabled.
+	// When true, SSTs are loaded per-task based on key range overlap.
+	lazySSTLoadingEnabled bool
+
+	// sstIndex maps taskID to the indices of SSTs that overlap with that task's
+	// span. This is only populated when lazy SST loading is enabled.
+	sstIndex sstOverlapIndex
 }
 
 type mergeProcessorInput struct {
@@ -191,11 +215,21 @@ func (m *bulkMergeProcessor) Start(ctx context.Context) {
 	ctx = m.StartInternal(ctx, "bulkMergeProcessor")
 	m.input.Start(ctx)
 
-	var err error
-	m.iter, err = m.createIter(ctx)
-	if err != nil {
-		m.MoveToDraining(err)
-		return
+	// Check if lazy SST loading is enabled.
+	m.lazySSTLoadingEnabled = lazySSTLoading.Get(&m.flowCtx.EvalCtx.Settings.SV)
+
+	if m.lazySSTLoadingEnabled {
+		// Build the SST overlap index. This is a cheap operation since it only
+		// involves key comparisons, not actual SST file access.
+		m.sstIndex = buildSSTOverlapIndex(m.spec.SSTs, m.spec.Spans)
+	} else {
+		// Legacy path: create a single iterator over all SSTs upfront.
+		var err error
+		m.iter, err = m.createIter(ctx)
+		if err != nil {
+			m.MoveToDraining(err)
+			return
+		}
 	}
 }
 
@@ -213,12 +247,56 @@ func (m *bulkMergeProcessor) Close(ctx context.Context) {
 func (m *bulkMergeProcessor) mergeSSTs(
 	ctx context.Context, taskID taskset.TaskID,
 ) (execinfrapb.BulkMergeSpec_Output, error) {
+	mergeSpan := m.spec.Spans[taskID]
+
+	if m.lazySSTLoadingEnabled {
+		return m.mergeSSTsLazy(ctx, taskID, mergeSpan)
+	}
+
+	return m.mergeSSTsEager(ctx, mergeSpan)
+}
+
+// mergeSSTsLazy processes a task using lazy SST loading. Only the SSTs that
+// overlap with the task's span are opened, reducing memory usage.
+func (m *bulkMergeProcessor) mergeSSTsLazy(
+	ctx context.Context, taskID taskset.TaskID, mergeSpan roachpb.Span,
+) (execinfrapb.BulkMergeSpec_Output, error) {
+	// Get the SST indices that overlap with this task's span.
+	sstIndices := m.sstIndex[int(taskID)]
+	if len(sstIndices) == 0 {
+		// No SSTs overlap with this task's span, return an empty output.
+		return execinfrapb.BulkMergeSpec_Output{}, nil
+	}
+
+	// Create an iterator over only the overlapping SSTs.
+	iter, err := m.createIterForSSTs(ctx, sstIndices, mergeSpan)
+	if err != nil {
+		return execinfrapb.BulkMergeSpec_Output{}, err
+	}
+	if iter == nil {
+		return execinfrapb.BulkMergeSpec_Output{}, nil
+	}
+	defer iter.Close()
+
+	// Position the iterator at the start of the span.
+	iter.SeekGE(storage.MVCCKey{Key: mergeSpan.Key})
+
+	if m.spec.Iteration == m.spec.MaxIterations {
+		return m.ingestFinalIterationWithIter(ctx, iter, mergeSpan)
+	}
+
+	return m.processNonFinalIteration(ctx, iter, mergeSpan)
+}
+
+// mergeSSTsEager processes a task using the shared iterator over all SSTs.
+// This is the legacy path used when lazy SST loading is disabled.
+func (m *bulkMergeProcessor) mergeSSTsEager(
+	ctx context.Context, mergeSpan roachpb.Span,
+) (execinfrapb.BulkMergeSpec_Output, error) {
 	// If there's no iterator (no SSTs to merge), return an empty output.
 	if m.iter == nil {
 		return execinfrapb.BulkMergeSpec_Output{}, nil
 	}
-
-	mergeSpan := m.spec.Spans[taskID]
 
 	// Seek the iterator if it's not positioned within the current task's span.
 	// The spans are disjoint, so the only way the iterator would be contained
@@ -231,6 +309,14 @@ func (m *bulkMergeProcessor) mergeSSTs(
 		return m.ingestFinalIteration(ctx, m.iter, mergeSpan)
 	}
 
+	return m.processNonFinalIteration(ctx, m.iter, mergeSpan)
+}
+
+// processNonFinalIteration handles writing merged data to external storage
+// for non-final iterations.
+func (m *bulkMergeProcessor) processNonFinalIteration(
+	ctx context.Context, iter storage.SimpleMVCCIterator, mergeSpan roachpb.Span,
+) (execinfrapb.BulkMergeSpec_Output, error) {
 	sstTargetSize := targetFileSize.Get(&m.flowCtx.EvalCtx.Settings.SV)
 	destStore, err := m.flowCtx.Cfg.ExternalStorage(ctx, m.spec.OutputStorage)
 	if err != nil {
@@ -251,7 +337,64 @@ func (m *bulkMergeProcessor) mergeSSTs(
 	}
 	defer writer.Close(ctx)
 
-	return processMergedData(ctx, m.iter, mergeSpan, writer)
+	return processMergedData(ctx, iter, mergeSpan, writer)
+}
+
+// createIterForSSTs creates an iterator over a subset of SSTs specified by
+// their indices. This is used for lazy SST loading.
+func (m *bulkMergeProcessor) createIterForSSTs(
+	ctx context.Context, sstIndices []int, mergeSpan roachpb.Span,
+) (storage.SimpleMVCCIterator, error) {
+	if len(sstIndices) == 0 {
+		return nil, nil
+	}
+
+	storeFiles := make([]storageccl.StoreFile, 0, len(sstIndices))
+	for _, idx := range sstIndices {
+		file, err := m.storageMux.StoreFile(ctx, m.spec.SSTs[idx].URI)
+		if err != nil {
+			return nil, err
+		}
+		storeFiles = append(storeFiles, file)
+	}
+
+	iterOpts := storage.IterOptions{
+		KeyTypes:   storage.IterKeyTypePointsAndRanges,
+		LowerBound: mergeSpan.Key,
+		UpperBound: mergeSpan.EndKey,
+	}
+	return storageccl.ExternalSSTReader(ctx, storeFiles, nil, iterOpts)
+}
+
+// ingestFinalIterationWithIter is like ingestFinalIteration but accepts an
+// iterator parameter for use with lazy SST loading.
+func (m *bulkMergeProcessor) ingestFinalIterationWithIter(
+	ctx context.Context, iter storage.SimpleMVCCIterator, mergeSpan roachpb.Span,
+) (execinfrapb.BulkMergeSpec_Output, error) {
+	writeTS := m.spec.WriteTimestamp
+	if writeTS.IsEmpty() {
+		writeTS = m.flowCtx.Cfg.DB.KV().Clock().Now()
+	}
+
+	batcher, err := bulk.MakeSSTBatcher(
+		ctx,
+		"bulk-merge-final",
+		m.flowCtx.Cfg.DB.KV(),
+		m.flowCtx.EvalCtx.Settings,
+		hlc.Timestamp{}, // disallowShadowingBelow
+		false,           // writeAtBatchTs
+		false,           // scatterSplitRanges
+		m.flowCtx.Cfg.BackupMonitor.MakeConcurrentBoundAccount(),
+		m.flowCtx.Cfg.BulkSenderLimiter,
+		nil, // range cache
+	)
+	if err != nil {
+		return execinfrapb.BulkMergeSpec_Output{}, err
+	}
+
+	writer := newKVStorageWriter(batcher, writeTS)
+	defer writer.Close(ctx)
+	return processMergedData(ctx, iter, mergeSpan, writer)
 }
 
 // processMergedData is a unified function for iterating over merged data and
