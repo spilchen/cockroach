@@ -14,6 +14,7 @@ go_library(
         "merge_planning.go",
         "merge_processor.go",
         "merge_writer.go",
+        "sst_source.go",
         "testing_knobs.go",
     ],
     importpath = "github.com/cockroachdb/cockroach/pkg/sql/bulkmerge",
@@ -53,6 +54,7 @@ go_test(
     srcs = [
         "main_test.go",
         "merge_test.go",
+        "sst_source_test.go",
     ],
     embed = [":bulkmerge"],
     deps = [

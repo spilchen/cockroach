@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 
+	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/ccl/storageccl"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/bulk"
@@ -191,8 +192,21 @@ func (m *bulkMergeProcessor) Start(ctx context.Context) {
 	ctx = m.StartInternal(ctx, "bulkMergeProcessor")
 	m.input.Start(ctx)
 
+	// Non-final iterations only merge local SSTs to reduce cross-node traffic.
+	// This creates larger merged files locally before the final cross-node merge.
+	localOnly := m.spec.Iteration < m.spec.MaxIterations
+
 	var err error
-	m.iter, err = m.createIter(ctx)
+	if localOnly {
+		localInstanceID := m.flowCtx.NodeID.SQLInstanceID()
+		log.Dev.Infof(ctx, "non-final iteration %d/%d: filtering to local SSTs from instance %d",
+			m.spec.Iteration, m.spec.MaxIterations, localInstanceID)
+		m.iter, err = m.createIterLocalOnly(ctx, localInstanceID)
+	} else {
+		log.Dev.Infof(ctx, "final iteration %d/%d: opening iterator for %d SSTs",
+			m.spec.Iteration, m.spec.MaxIterations, len(m.spec.SSTs))
+		m.iter, err = m.createIter(ctx)
+	}
 	if err != nil {
 		m.MoveToDraining(err)
 		return
@@ -219,6 +233,7 @@ func (m *bulkMergeProcessor) mergeSSTs(
 	}
 
 	mergeSpan := m.spec.Spans[taskID]
+	log.Dev.Infof(ctx, "merge processor starting task %d with span %s", taskID, mergeSpan)
 
 	// Seek the iterator if it's not positioned within the current task's span.
 	// The spans are disjoint, so the only way the iterator would be contained
@@ -381,6 +396,50 @@ func (m *bulkMergeProcessor) createIter(ctx context.Context) (storage.SimpleMVCC
 		return nil, err
 	}
 	return iter, nil
+}
+
+// createIterLocalOnly builds an iterator over only the SSTs from the specified
+// local instance. This is used for non-final iterations when lazy SST loading
+// is disabled.
+func (m *bulkMergeProcessor) createIterLocalOnly(
+	ctx context.Context, localInstanceID base.SQLInstanceID,
+) (storage.SimpleMVCCIterator, error) {
+	if len(m.spec.SSTs) == 0 {
+		return nil, nil
+	}
+	if len(m.spec.Spans) == 0 {
+		return nil, errors.AssertionFailedf("no spans specified for merge processor")
+	}
+
+	var storeFiles []storageccl.StoreFile
+	for _, sst := range m.spec.SSTs {
+		sourceID, err := ExtractSourceInstanceID(sst.URI)
+		if err != nil {
+			return nil, err
+		}
+		if sourceID != localInstanceID {
+			continue
+		}
+		file, err := m.storageMux.StoreFile(ctx, sst.URI)
+		if err != nil {
+			return nil, err
+		}
+		storeFiles = append(storeFiles, file)
+	}
+
+	log.Dev.Infof(ctx, "local-only iterator: selected %d/%d SSTs from instance %d",
+		len(storeFiles), len(m.spec.SSTs), localInstanceID)
+
+	if len(storeFiles) == 0 {
+		return nil, nil
+	}
+
+	iterOpts := storage.IterOptions{
+		KeyTypes:   storage.IterKeyTypePointsAndRanges,
+		LowerBound: m.spec.Spans[0].Key,
+		UpperBound: m.spec.Spans[len(m.spec.Spans)-1].EndKey,
+	}
+	return storageccl.ExternalSSTReader(ctx, storeFiles, nil, iterOpts)
 }
 
 // containsKey returns true if the given key is within the mergeSpan.
