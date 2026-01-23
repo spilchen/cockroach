@@ -40,6 +40,8 @@ var (
 // merged SSTables can be applied within raft's 64MB limit, including
 // RPC overhead.
 var (
+	// SPILLY - this isn't needed. We should just use targetFileSize everywhere as
+	// I think localMergeFileSize made this redundant.
 	targetFileSize = settings.RegisterByteSizeSetting(
 		settings.ApplicationLevel,
 		"bulkio.merge.file_size",
