@@ -277,6 +277,146 @@ func TestBulkJobCleaner_CleanupJobDirectories(t *testing.T) {
 	})
 }
 
+func TestBulkJobCleaner_CleanupJobSubdirectory(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx := context.Background()
+	jobID := jobspb.JobID(456)
+
+	t.Run("cleans up map subdirectory", func(t *testing.T) {
+		mocks := make(map[string]*mockStorageWithTracking)
+		factory := func(ctx context.Context, uri string, user username.SQLUsername, opts ...cloud.ExternalStorageOption) (cloud.ExternalStorage, error) {
+			mock := &mockStorageWithTracking{
+				uri:     uri,
+				deleted: []string{},
+				listed:  []string{},
+				files: map[string]struct{}{
+					"/file1.sst": {},
+					"/file2.sst": {},
+				},
+			}
+			mocks[uri] = mock
+			return mock, nil
+		}
+
+		cleaner := NewBulkJobCleaner(factory, username.RootUserName())
+		defer func() {
+			_ = cleaner.Close()
+		}()
+
+		storagePrefixes := []string{"nodelocal://1/", "nodelocal://2/"}
+		err := cleaner.CleanupJobSubdirectory(ctx, jobID, storagePrefixes, "map/")
+		require.NoError(t, err)
+
+		// Verify node 1 was listed with correct subdirectory path.
+		require.Contains(t, mocks, "nodelocal://1")
+		node1 := mocks["nodelocal://1"]
+		require.Contains(t, node1.listed, "/job/456/map/")
+		require.ElementsMatch(t, []string{
+			"/job/456/map/file1.sst",
+			"/job/456/map/file2.sst",
+		}, node1.deleted)
+
+		// Verify node 2 was listed with correct subdirectory path.
+		require.Contains(t, mocks, "nodelocal://2")
+		node2 := mocks["nodelocal://2"]
+		require.Contains(t, node2.listed, "/job/456/map/")
+	})
+
+	t.Run("cleans up merge iteration subdirectory", func(t *testing.T) {
+		mocks := make(map[string]*mockStorageWithTracking)
+		factory := func(ctx context.Context, uri string, user username.SQLUsername, opts ...cloud.ExternalStorageOption) (cloud.ExternalStorage, error) {
+			mock := &mockStorageWithTracking{
+				uri:     uri,
+				deleted: []string{},
+				listed:  []string{},
+				files: map[string]struct{}{
+					"/merged1.sst": {},
+					"/merged2.sst": {},
+				},
+			}
+			mocks[uri] = mock
+			return mock, nil
+		}
+
+		cleaner := NewBulkJobCleaner(factory, username.RootUserName())
+		defer func() {
+			_ = cleaner.Close()
+		}()
+
+		storagePrefixes := []string{"nodelocal://1/"}
+		err := cleaner.CleanupJobSubdirectory(ctx, jobID, storagePrefixes, "merge/iter-2/")
+		require.NoError(t, err)
+
+		// Verify the subdirectory path includes iteration number.
+		require.Contains(t, mocks, "nodelocal://1")
+		node1 := mocks["nodelocal://1"]
+		require.Contains(t, node1.listed, "/job/456/merge/iter-2/")
+		require.ElementsMatch(t, []string{
+			"/job/456/merge/iter-2/merged1.sst",
+			"/job/456/merge/iter-2/merged2.sst",
+		}, node1.deleted)
+	})
+
+	t.Run("deduplicates storage prefixes", func(t *testing.T) {
+		mocks := make(map[string]*mockStorageWithTracking)
+		factory := func(ctx context.Context, uri string, user username.SQLUsername, opts ...cloud.ExternalStorageOption) (cloud.ExternalStorage, error) {
+			mock := &mockStorageWithTracking{
+				uri:     uri,
+				deleted: []string{},
+				listed:  []string{},
+				files:   map[string]struct{}{},
+			}
+			mocks[uri] = mock
+			return mock, nil
+		}
+
+		cleaner := NewBulkJobCleaner(factory, username.RootUserName())
+		defer func() {
+			_ = cleaner.Close()
+		}()
+
+		// Same storage prefix specified multiple times should be deduplicated.
+		storagePrefixes := []string{
+			"nodelocal://1/",
+			"nodelocal://1/",
+			"nodelocal://1/",
+		}
+
+		err := cleaner.CleanupJobSubdirectory(ctx, jobID, storagePrefixes, "map/")
+		require.NoError(t, err)
+
+		// Verify the subdirectory was only listed once despite duplicate prefixes.
+		require.Contains(t, mocks, "nodelocal://1")
+		require.Len(t, mocks["nodelocal://1"].listed, 1)
+	})
+
+	t.Run("handles errors gracefully", func(t *testing.T) {
+		deleteErr := errors.New("delete failed")
+		factory := func(ctx context.Context, uri string, user username.SQLUsername, opts ...cloud.ExternalStorageOption) (cloud.ExternalStorage, error) {
+			return &mockStorageWithTracking{
+				uri:     uri,
+				deleted: []string{},
+				listed:  []string{},
+				files: map[string]struct{}{
+					"/file1.sst": {},
+				},
+				deleteError: deleteErr,
+			}, nil
+		}
+
+		cleaner := NewBulkJobCleaner(factory, username.RootUserName())
+		defer func() {
+			_ = cleaner.Close()
+		}()
+
+		storagePrefixes := []string{"nodelocal://1/"}
+		err := cleaner.CleanupJobSubdirectory(ctx, jobID, storagePrefixes, "map/")
+		require.Error(t, err)
+		require.ErrorContains(t, err, "delete failed")
+	})
+}
+
 func TestBulkJobCleaner_WithRealNodelocal(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
