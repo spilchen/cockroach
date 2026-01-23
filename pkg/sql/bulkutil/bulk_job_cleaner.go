@@ -136,3 +136,77 @@ func (c *BulkJobCleaner) CleanupJobDirectories(
 	}
 	return errOut
 }
+
+// CleanupJobSubdirectory enumerates all files under a specific subdirectory
+// within the job-scoped directories and removes them. This is intended for
+// cleaning up intermediate files between merge iterations.
+//
+// The storagePrefixes parameter specifies the storage locations (without the
+// job directory path) where temporary files may exist. The function constructs
+// the full cleanup path as "<prefix>/job/<jobID>/<subdirectory>" and removes
+// all files under that path.
+//
+// Examples:
+//
+//   - Input: storagePrefixes=["nodelocal://1/"], jobID=123, subdirectory="map/"
+//     Cleans: "nodelocal://1/job/123/map/*"
+//
+//   - Input: storagePrefixes=["nodelocal://1/"], jobID=123, subdirectory="merge/iter-1/"
+//     Cleans: "nodelocal://1/job/123/merge/iter-1/*"
+//
+// These operations are best-effort; callers should log returned errors rather
+// than failing the job.
+func (c *BulkJobCleaner) CleanupJobSubdirectory(
+	ctx context.Context, jobID jobspb.JobID, storagePrefixes []string, subdirectory string,
+) error {
+	if c == nil {
+		return nil
+	}
+
+	// Construct full subdirectory paths from storage prefixes.
+	subDirs := make([]string, 0, len(storagePrefixes))
+	for _, prefix := range storagePrefixes {
+		if prefix == "" {
+			continue
+		}
+		// Ensure prefix ends with / before appending job path.
+		if !strings.HasSuffix(prefix, "/") {
+			prefix += "/"
+		}
+		subDir := fmt.Sprintf("%sjob/%d/%s", prefix, jobID, subdirectory)
+		subDirs = append(subDirs, subDir)
+	}
+
+	// Remove duplicates.
+	seen := make(map[string]struct{})
+	var uniqueDirs []string
+	for _, dir := range subDirs {
+		if _, exists := seen[dir]; !exists {
+			seen[dir] = struct{}{}
+			uniqueDirs = append(uniqueDirs, dir)
+		}
+	}
+
+	var errOut error
+	for _, subDir := range uniqueDirs {
+		listErr := c.mux.ListFiles(ctx, subDir, func(name string) error {
+			trimmed := strings.TrimPrefix(name, "/")
+			target := subDir
+			if !strings.HasSuffix(target, "/") {
+				target += "/"
+			}
+			target += trimmed
+			if err := c.mux.DeleteFile(ctx, target); err != nil {
+				errOut = errors.CombineErrors(errOut, err)
+			}
+			return nil
+		})
+		if errors.Is(listErr, cloud.ErrListingUnsupported) {
+			continue
+		}
+		if listErr != nil {
+			errOut = errors.CombineErrors(errOut, listErr)
+		}
+	}
+	return errOut
+}
