@@ -36,30 +36,15 @@ var (
 	_ execinfra.RowSource = &bulkMergeProcessor{}
 )
 
-// So long as bulkingest is using AddSSTable(), we need to ensure that
-// merged SSTables can be applied within raft's 64MB limit, including
-// RPC overhead.
-var (
-	targetFileSize = settings.RegisterByteSizeSetting(
-		settings.ApplicationLevel,
-		"bulkio.merge.file_size",
-		"target size for individual data files produced during merge phase",
-		60<<20,
-		settings.WithPublic)
-
-	// localMergeFileSize controls the target SST size for non-final merge
-	// iterations (local merges). Larger files reduce the number of SSTs that
-	// the final iteration must process, improving efficiency. Since these
-	// files are written to external storage and not ingested via AddSSTable,
-	// they are not constrained by raft's 64MB limit.
-	localMergeFileSize = settings.RegisterByteSizeSetting(
-		settings.ApplicationLevel,
-		"bulkio.merge.local_file_size",
-		"target size for SST files produced during local merge iterations; "+
-			"larger values reduce the file count for the final merge",
-		1<<30, // 1GB
-		settings.WithPublic)
-)
+// targetFileSize controls the target SST size for non-final merge iterations
+// (local merges). Larger files reduce the number of SSTs that the final
+// iteration must process, improving efficiency.
+var targetFileSize = settings.RegisterByteSizeSetting(
+	settings.ApplicationLevel,
+	"bulkio.merge.file_size",
+	"target size for individual data files produced during local only merge phases",
+	1<<30, // 1GB
+	settings.WithPublic)
 
 // Output row format for the bulk merge processor. The third column contains
 // a marshaled BulkMergeSpec_Output protobuf with the list of output SSTs.
@@ -262,7 +247,7 @@ func (m *bulkMergeProcessor) mergeSSTs(
 		return m.ingestFinalIteration(ctx, m.iter, mergeSpan)
 	}
 
-	sstTargetSize := localMergeFileSize.Get(&m.flowCtx.EvalCtx.Settings.SV)
+	sstTargetSize := targetFileSize.Get(&m.flowCtx.EvalCtx.Settings.SV)
 	destStore, err := m.flowCtx.Cfg.ExternalStorage(ctx, m.spec.OutputStorage)
 	if err != nil {
 		return execinfrapb.BulkMergeSpec_Output{}, err

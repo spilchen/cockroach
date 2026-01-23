@@ -155,7 +155,7 @@ func TestDistributedMergeMultiPassIngestsIntoKV(t *testing.T) {
 	)
 	defer jobCleanup()
 
-	localMergeFileSize.Override(ctx, &s.ClusterSettings().SV, 1<<20)
+	targetFileSize.Override(ctx, &s.ClusterSettings().SV, 1<<20)
 	fileAllocator := bulksst.NewExternalFileAllocator(tsa.es, tsa.prefixUri, s.Clock())
 	batcher := bulksst.NewUnsortedSSTBatcher(s.ClusterSettings(), fileAllocator)
 
@@ -311,7 +311,7 @@ func testMergeProcessors(
 
 	// Override the target size of our merged SSTs to ensure we are flushing
 	// correctly.
-	localMergeFileSize.Override(ctx, &s.ClusterSettings().SV, 30)
+	targetFileSize.Override(ctx, &s.ClusterSettings().SV, 30)
 	fileAllocator := bulksst.NewExternalFileAllocator(tsa.es, tsa.prefixUri, s.Clock())
 	batcher := bulksst.NewUnsortedSSTBatcher(s.ClusterSettings(), fileAllocator)
 	ls := writeSSTs(t, ctx, batcher, 13)
@@ -505,7 +505,7 @@ func TestMergeSSTsSplitsAtRowBoundaries(t *testing.T) {
 	// Set a small target size to force splits mid-processing.
 	// With 3 rows × 2 column families × ~60 byte values = ~360 bytes of data,
 	// a 150 byte target should create at least 2 SSTs.
-	localMergeFileSize.Override(ctx, &srv.ClusterSettings().SV, 150)
+	targetFileSize.Override(ctx, &srv.ClusterSettings().SV, 150)
 
 	tsa := newTestServerAllocator(t, ctx, execCfg)
 	fileAllocator := bulksst.NewExternalFileAllocator(tsa.es, tsa.prefixUri, srv.Clock())
