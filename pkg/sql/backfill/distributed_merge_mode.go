@@ -76,6 +76,20 @@ var DistributedMergeIterations = settings.RegisterIntSetting(
 	settings.IntWithMinimum(1),
 )
 
+// LocalMergeThreshold controls the minimum SST count to trigger the local merge
+// phase. If the map phase produces fewer SSTs than this threshold, the local
+// merge is skipped and the job proceeds directly to the final merge. Higher
+// values reduce overhead for small backfills; lower values ensure more
+// workloads benefit from local merging.
+var LocalMergeThreshold = settings.RegisterIntSetting(
+	settings.ApplicationLevel,
+	"bulkio.index_backfill.distributed_merge.local_merge_threshold",
+	"minimum SST count to trigger local merge phase; below this, skip to final merge",
+	1000,
+	settings.IntWithMinimum(1),
+	settings.WithPublic,
+)
+
 // shouldEnableDistributedMergeIndexBackfill determines whether the specified
 // backfill consumer should opt into the distributed merge pipeline based on the
 // current cluster setting and version state.

@@ -8,6 +8,8 @@ package sql
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
@@ -224,12 +226,25 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	//   - phase = 0: Map phase complete, no merge iterations completed yet.
 	//   - phase = N (N >= 1): Merge iteration N completed.
 	//
-	// On resume after a completed iteration, for simplicity in tracking we do a
-	// single final iteration to KV rather than continuing with the original
-	// iteration count.
-	maxIterations := int(backfill.DistributedMergeIterations.Get(&ib.execCfg.Settings.SV))
-	startIteration := 1
+	// The number of merge iterations depends on the SST count from the map phase:
+	//   - If SST count >= threshold: do local merge (iteration 1) then final (iteration 2)
+	//   - If SST count < threshold: skip local merge, go directly to final (iteration 1)
+	//
+	// On resume after a completed iteration, we continue to the next iteration
+	// as the final iteration to KV.
+	fileCount := len(manifests)
+	threshold := int(backfill.LocalMergeThreshold.Get(&ib.execCfg.Settings.SV))
 
+	var maxIterations int
+	if fileCount >= threshold {
+		// Many files: do local merge (iteration 1) then final merge (iteration 2).
+		maxIterations = 2
+	} else {
+		// Few files: skip local merge, go directly to final (iteration 1).
+		maxIterations = 1
+	}
+
+	startIteration := 1
 	if progress.DistributedMergePhase >= 1 {
 		// Resume case: we've completed at least one merge iteration.
 		// Complete the merge in a single final iteration directly to KV.
@@ -237,7 +252,13 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 		maxIterations = startIteration
 	}
 	// If phase = 0, this is either a fresh merge or resume before any iteration
-	// completed. In both cases, run the full merge iterations from the start.
+	// completed. In both cases, run merge iterations based on file count threshold.
+
+	// Validate that all source nodes are still available before starting merge.
+	// This catches cases where a node was removed between pause and resume.
+	if err := ib.validateSourceNodes(ctx, manifests); err != nil {
+		return err
+	}
 
 	return ib.runDistributedMerge(
 		ctx, job, descriptor, &progress, tracker, manifests, startIteration, maxIterations, addStoragePrefix,
@@ -527,6 +548,82 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 
 		// Use the output of this iteration as input to the next.
 		currentSSTs = merged
+	}
+
+	return nil
+}
+
+// extractSourceInstanceID parses a nodelocal URI and returns the source
+// SQL instance ID. Returns an error if the URI cannot be parsed or is not
+// a nodelocal URI with a numeric host.
+func extractSourceInstanceID(uri string) (base.SQLInstanceID, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return 0, errors.Wrapf(err, "failed to parse SST URI %q", uri)
+	}
+	if u.Scheme != "nodelocal" {
+		return 0, errors.Newf("expected nodelocal URI, got scheme %q in %q", u.Scheme, uri)
+	}
+	if u.Host == "" || u.Host == "self" {
+		return 0, errors.Newf("nodelocal URI %q has no explicit instance ID", uri)
+	}
+	id, err := strconv.Atoi(u.Host)
+	if err != nil {
+		return 0, errors.Wrapf(err, "failed to parse instance ID from URI %q", uri)
+	}
+	return base.SQLInstanceID(id), nil
+}
+
+// validateSourceNodes checks that all nodes whose SSTs are referenced in the
+// manifests are still available in the cluster. This is critical for resume
+// scenarios where a node may have been removed between pause and resume,
+// making its nodelocal SSTs inaccessible.
+func (ib *IndexBackfillPlanner) validateSourceNodes(
+	ctx context.Context, manifests []jobspb.IndexBackfillSSTManifest,
+) error {
+	if len(manifests) == 0 {
+		return nil
+	}
+
+	// Extract unique source node IDs from SST URIs.
+	sourceNodes := make(map[base.SQLInstanceID]struct{})
+	for _, m := range manifests {
+		nodeID, err := extractSourceInstanceID(m.URI)
+		if err != nil {
+			// Non-nodelocal URIs are fine (e.g., cloud storage).
+			continue
+		}
+		sourceNodes[nodeID] = struct{}{}
+	}
+
+	if len(sourceNodes) == 0 {
+		// No nodelocal URIs, nothing to validate.
+		return nil
+	}
+
+	// Get the list of available SQL instances using the DistSQL planner.
+	jobExecCtx, cleanup := MakeJobExecContext(ctx, "validate-source-nodes", username.RootUserName(), &MemoryMetrics{}, ib.execCfg)
+	defer cleanup()
+
+	_, availableInstances, err := ib.execCfg.DistSQLPlanner.SetupAllNodesPlanning(
+		ctx, jobExecCtx.ExtendedEvalContext(), ib.execCfg)
+	if err != nil {
+		return errors.Wrap(err, "failed to get available nodes for validation")
+	}
+
+	// Build a set of available instance IDs.
+	availableSet := make(map[base.SQLInstanceID]struct{}, len(availableInstances))
+	for _, id := range availableInstances {
+		availableSet[id] = struct{}{}
+	}
+
+	// Check that all source nodes are available.
+	for nodeID := range sourceNodes {
+		if _, ok := availableSet[nodeID]; !ok {
+			return errors.Errorf(
+				"cannot resume merge: node %d is not available; "+
+					"its SSTs in nodelocal storage are inaccessible", nodeID)
+		}
 	}
 
 	return nil
