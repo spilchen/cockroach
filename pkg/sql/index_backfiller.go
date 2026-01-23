@@ -226,22 +226,15 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	//   - phase = 0: Map phase complete, no merge iterations completed yet.
 	//   - phase = N (N >= 1): Merge iteration N completed.
 	//
-	// The number of merge iterations depends on the SST count from the map phase:
-	//   - If SST count >= threshold: do local merge (iteration 1) then final (iteration 2)
-	//   - If SST count < threshold: skip local merge, go directly to final (iteration 1)
+	// The number of merge iterations is controlled by the LocalMergeEnabled setting:
+	//   - When disabled (default): 1 iteration (final only).
+	//   - When enabled: 2 iterations (local merge + final).
 	//
 	// On resume after a completed iteration, we continue to the next iteration
 	// as the final iteration to KV.
-	fileCount := len(manifests)
-	threshold := int(backfill.LocalMergeThreshold.Get(&ib.execCfg.Settings.SV))
-
-	var maxIterations int
-	if fileCount >= threshold {
-		// Many files: do local merge (iteration 1) then final merge (iteration 2).
-		maxIterations = 2
-	} else {
-		// Few files: skip local merge, go directly to final (iteration 1).
-		maxIterations = 1
+	totalIterations := 1
+	if backfill.LocalMergeEnabled.Get(&ib.execCfg.Settings.SV) {
+		totalIterations = 2
 	}
 
 	startIteration := 1
@@ -249,10 +242,10 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 		// Resume case: we've completed at least one merge iteration.
 		// Complete the merge in a single final iteration directly to KV.
 		startIteration = int(progress.DistributedMergePhase) + 1
-		maxIterations = startIteration
+		totalIterations = startIteration
 	}
 	// If phase = 0, this is either a fresh merge or resume before any iteration
-	// completed. In both cases, run merge iterations based on file count threshold.
+	// completed. In both cases, run merge iterations based on the setting.
 
 	// Validate that all source nodes are still available before starting merge.
 	// This catches cases where a node was removed between pause and resume.
@@ -261,7 +254,7 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	}
 
 	return ib.runDistributedMerge(
-		ctx, job, descriptor, &progress, tracker, manifests, startIteration, maxIterations, addStoragePrefix,
+		ctx, job, descriptor, &progress, tracker, manifests, startIteration, totalIterations, addStoragePrefix,
 	)
 }
 
@@ -404,7 +397,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	tracker scexec.BackfillerProgressWriter,
 	manifests []jobspb.IndexBackfillSSTManifest,
 	startIteration int,
-	maxIterations int,
+	totalIterations int,
 	addStoragePrefix func(ctx context.Context, prefixes []string) error,
 ) error {
 	if len(manifests) == 0 {
@@ -457,13 +450,15 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	// Iterate through merge passes, with all but the final iteration writing to
 	// intermediate storage, and the final iteration ingesting directly into KV.
 	currentSSTs := ssts
-	for iteration := startIteration; iteration <= maxIterations; iteration++ {
+	for iteration := startIteration; iteration <= totalIterations; iteration++ {
 		// Check if the job has been paused or cancelled before starting work.
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
+
+		isFinal := iteration == totalIterations
 
 		genOutputURIAndRecordPrefix := func(instanceID base.SQLInstanceID) (string, error) {
 			// Use nodelocal for temporary storage of merged SSTs. These SSTs are
@@ -479,7 +474,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 		}
 
 		var writeTS *hlc.Timestamp
-		if iteration == maxIterations {
+		if isFinal {
 			// Final iteration: ingest directly into KV.
 			ts := progress.MinimumWriteTimestamp
 			writeTS = &ts
@@ -492,7 +487,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 			mergeSpans,
 			genOutputURIAndRecordPrefix,
 			iteration,
-			maxIterations,
+			isFinal,
 			writeTS,
 		)
 		if err != nil {
@@ -500,7 +495,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 		}
 
 		// Final iteration: data is ingested into KV, we're done.
-		if iteration == maxIterations {
+		if isFinal {
 			// Clear manifests to indicate completion.
 			progress.SSTManifests = nil
 			if err := tracker.SetBackfillProgress(ctx, *progress); err != nil {

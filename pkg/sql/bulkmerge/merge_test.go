@@ -127,7 +127,7 @@ func TestDistributedMergeProcessorFailurePropagates(t *testing.T) {
 	writeTS := hlc.Timestamp{WallTime: 1}
 	_, err := Merge(ctx, jobExecCtx, ssts, spans, func(instanceID base.SQLInstanceID) (string, error) {
 		return fmt.Sprintf("nodelocal://%d/merge/out/", instanceID), nil
-	}, 1 /* iteration */, 1 /* maxIterations */, &writeTS)
+	}, 1 /* iteration */, true /* isFinal */, &writeTS)
 	require.ErrorIs(t, err, injectedErr)
 }
 
@@ -192,8 +192,8 @@ func TestDistributedMergeMultiPassIngestsIntoKV(t *testing.T) {
 		func(instanceID base.SQLInstanceID) (string, error) {
 			return fmt.Sprintf("nodelocal://%d/merge/iter-1/", instanceID), nil
 		},
-		1, /* iteration */
-		2, /* maxIterations */
+		1,     /* iteration */
+		false, /* isFinal */
 		nil,
 	)
 	require.NoError(t, err)
@@ -209,8 +209,8 @@ func TestDistributedMergeMultiPassIngestsIntoKV(t *testing.T) {
 		func(instanceID base.SQLInstanceID) (string, error) {
 			return fmt.Sprintf("nodelocal://%d/merge/iter-2/", instanceID), nil
 		},
-		2, /* iteration */
-		2, /* maxIterations */
+		2,    /* iteration */
+		true, /* isFinal */
 		&writeTS,
 	)
 	require.NoError(t, err)
@@ -346,9 +346,9 @@ func testMergeProcessors(
 		func(instanceID base.SQLInstanceID) (string, error) {
 			return fmt.Sprintf("nodelocal://%d/merge/out/", instanceID), nil
 		},
-		1,   /* iteration */
-		2,   /* maxIterations */
-		nil, /* writeTS */
+		1,     /* iteration */
+		false, /* isFinal */
+		nil,   /* writeTS */
 	)
 	require.NoError(t, err)
 	defer plan.Release()
@@ -553,7 +553,7 @@ func TestMergeSSTsSplitsAtRowBoundaries(t *testing.T) {
 			return fmt.Sprintf("nodelocal://%d/merge/out/", instanceID), nil
 		},
 		1,        /* iteration */
-		2,        /* maxIterations */
+		false,    /* isFinal */
 		&writeTS, /* writeTS */
 	)
 	require.NoError(t, err)

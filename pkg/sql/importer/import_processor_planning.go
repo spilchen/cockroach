@@ -361,7 +361,7 @@ func distImport(
 				return "", err
 			}
 			return fmt.Sprintf("%sjob/%d/merge/", prefix, job.ID()), nil
-		}, 1 /* iteration */, 1 /* maxIterations */, writeTS)
+		}, 1 /* iteration */, true /* isFinal */, writeTS)
 
 		return err
 	})

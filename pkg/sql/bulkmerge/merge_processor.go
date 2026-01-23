@@ -205,19 +205,21 @@ func (m *bulkMergeProcessor) Start(ctx context.Context) {
 	ctx = m.StartInternal(ctx, "bulkMergeProcessor")
 	m.input.Start(ctx)
 
+	// Infer whether this is the final iteration from the spec fields.
 	// Non-final iterations only merge local SSTs to reduce cross-node traffic.
 	// This creates larger merged files locally before the final cross-node merge.
-	localOnly := m.spec.Iteration < m.spec.MaxIterations
+	isFinal := m.spec.Iteration == m.spec.MaxIterations
+	localOnly := !isFinal
 
 	var err error
 	if localOnly {
 		localInstanceID := m.flowCtx.NodeID.SQLInstanceID()
-		log.Dev.Infof(ctx, "non-final iteration %d/%d: filtering to local SSTs from instance %d",
-			m.spec.Iteration, m.spec.MaxIterations, localInstanceID)
+		log.Dev.Infof(ctx, "local iteration %d: filtering to local SSTs from instance %d",
+			m.spec.Iteration, localInstanceID)
 		m.iter, err = m.createIterLocalOnly(ctx, localInstanceID)
 	} else {
-		log.Dev.Infof(ctx, "final iteration %d/%d: opening iterator for %d SSTs",
-			m.spec.Iteration, m.spec.MaxIterations, len(m.spec.SSTs))
+		log.Dev.Infof(ctx, "final iteration %d: opening iterator for %d SSTs",
+			m.spec.Iteration, len(m.spec.SSTs))
 		m.iter, err = m.createIter(ctx)
 	}
 	if err != nil {
@@ -255,6 +257,7 @@ func (m *bulkMergeProcessor) mergeSSTs(
 		m.iter.SeekGE(storage.MVCCKey{Key: mergeSpan.Key})
 	}
 
+	// Infer whether this is the final iteration from the spec fields.
 	if m.spec.Iteration == m.spec.MaxIterations {
 		return m.ingestFinalIteration(ctx, m.iter, mergeSpan)
 	}

@@ -26,7 +26,7 @@ func newBulkMergePlan(
 	spans []roachpb.Span,
 	genOutputURIAndRecordPrefix func(sqlInstance base.SQLInstanceID) (string, error),
 	iteration int,
-	maxIterations int,
+	isFinal bool,
 	writeTS *hlc.Timestamp,
 ) (*sql.PhysicalPlan, *sql.PlanningCtx, error) {
 	if len(spans) == 0 {
@@ -62,7 +62,7 @@ func newBulkMergePlan(
 	// node-level outputs using split spans for balanced work distribution.
 	var mergeSpans []roachpb.Span
 	var taskCount int
-	if iteration < maxIterations {
+	if !isFinal {
 		// Compute full span from the input spans (they're contiguous and sorted).
 		fullSpan := roachpb.Span{
 			Key:    spans[0].Key,
@@ -105,7 +105,7 @@ func newBulkMergePlan(
 	}
 	for streamID, sqlInstanceID := range sqlInstanceIDs {
 		var outputStorageConf cloudpb.ExternalStorage
-		if iteration < maxIterations {
+		if !isFinal {
 			outputURI, err := genOutputURIAndRecordPrefix(sqlInstanceID)
 			if err != nil {
 				return nil, nil, err
@@ -133,7 +133,7 @@ func newBulkMergePlan(
 						Spans:          mergeSpans,
 						OutputStorage:  outputStorageConf,
 						Iteration:      int32(iteration),
-						MaxIterations:  int32(maxIterations),
+						MaxIterations:  computeMaxIterations(iteration, isFinal),
 						WriteTimestamp: writeTimestamp,
 					},
 				},
@@ -165,4 +165,14 @@ func newBulkMergePlan(
 	sql.FinalizePlan(ctx, planCtx, plan)
 
 	return plan, planCtx, nil
+}
+
+// computeMaxIterations converts the isFinal boolean into the max_iterations
+// value for the BulkMergeSpec. The processor infers isFinal from
+// iteration == max_iterations.
+func computeMaxIterations(iteration int, isFinal bool) int32 {
+	if isFinal {
+		return int32(iteration) // iteration == max means final
+	}
+	return int32(iteration + 1) // iteration < max means not final
 }

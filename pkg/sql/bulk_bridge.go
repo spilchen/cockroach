@@ -22,7 +22,7 @@ type bulkMergeFunc func(
 	spans []roachpb.Span,
 	genOutputURIAndRecordPrefix func(base.SQLInstanceID) (string, error),
 	iteration int,
-	maxIterations int,
+	isFinal bool,
 	writeTS *hlc.Timestamp,
 ) ([]execinfrapb.BulkMergeSpec_SST, error)
 
@@ -41,11 +41,11 @@ func invokeBulkMerge(
 	spans []roachpb.Span,
 	genOutputURIAndRecordPrefix func(base.SQLInstanceID) (string, error),
 	iteration int,
-	maxIterations int,
+	isFinal bool,
 	writeTS *hlc.Timestamp,
 ) ([]execinfrapb.BulkMergeSpec_SST, error) {
 	if registeredBulkMerge == nil {
 		return nil, errors.AssertionFailedf("bulk merge implementation not registered")
 	}
-	return registeredBulkMerge(ctx, execCtx, ssts, spans, genOutputURIAndRecordPrefix, iteration, maxIterations, writeTS)
+	return registeredBulkMerge(ctx, execCtx, ssts, spans, genOutputURIAndRecordPrefix, iteration, isFinal, writeTS)
 }

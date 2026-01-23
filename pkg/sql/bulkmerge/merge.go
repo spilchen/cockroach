@@ -29,14 +29,14 @@ func Merge(
 	spans []roachpb.Span,
 	genOutputURIAndRecordPrefix func(sqlInstance base.SQLInstanceID) (string, error),
 	iteration int,
-	maxIterations int,
+	isFinal bool,
 	writeTS *hlc.Timestamp,
 ) ([]execinfrapb.BulkMergeSpec_SST, error) {
-	logMergeInputs(ctx, ssts, iteration, maxIterations)
+	logMergeInputs(ctx, ssts, iteration, isFinal)
 
 	execCfg := execCtx.ExecCfg()
 
-	plan, planCtx, err := newBulkMergePlan(ctx, execCtx, ssts, spans, genOutputURIAndRecordPrefix, iteration, maxIterations, writeTS)
+	plan, planCtx, err := newBulkMergePlan(ctx, execCtx, ssts, spans, genOutputURIAndRecordPrefix, iteration, isFinal, writeTS)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +70,7 @@ func Merge(
 		return nil, err
 	}
 
-	if iteration == maxIterations {
+	if isFinal {
 		// Final iteration writes directly to KV; no SST outputs expected.
 		return nil, nil
 	}
@@ -88,15 +88,19 @@ func Merge(
 // logMergeInputs logs the input SSTs for the current merge iteration.
 // All logging is opt-in via log.V(2) for detailed iteration tracking.
 func logMergeInputs(
-	ctx context.Context, ssts []execinfrapb.BulkMergeSpec_SST, iteration int, maxIterations int,
+	ctx context.Context, ssts []execinfrapb.BulkMergeSpec_SST, iteration int, isFinal bool,
 ) {
 	// All iteration logging is verbose (opt-in).
 	if !log.V(2) {
 		return
 	}
 
-	log.Dev.Infof(ctx, "Distributed merge iteration %d/%d starting with %d input SSTs",
-		iteration, maxIterations, len(ssts))
+	iterType := "local"
+	if isFinal {
+		iterType = "final"
+	}
+	log.Dev.Infof(ctx, "Distributed merge iteration %d (%s) starting with %d input SSTs",
+		iteration, iterType, len(ssts))
 
 	var totalInputKeys uint64
 	for i, sst := range ssts {
