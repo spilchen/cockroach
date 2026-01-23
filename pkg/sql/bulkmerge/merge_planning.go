@@ -15,6 +15,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/physicalplan"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/errors"
 )
 
@@ -78,6 +79,8 @@ func newBulkMergePlan(
 		mergeSpans = spans
 		taskCount = len(spans)
 	}
+
+	log.Dev.Infof(ctx, "bulk merge plan: taskCount=%d", taskCount)
 
 	loopbackID := plan.AddProcessor(physicalplan.Processor{
 		SQLInstanceID: coordinatorID,

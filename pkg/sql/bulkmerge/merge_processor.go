@@ -412,8 +412,7 @@ func (m *bulkMergeProcessor) createIter(ctx context.Context) (storage.SimpleMVCC
 }
 
 // createIterLocalOnly builds an iterator over only the SSTs from the specified
-// local instance. This is used for non-final iterations when lazy SST loading
-// is disabled.
+// local instance. This is used for non-final iterations.
 func (m *bulkMergeProcessor) createIterLocalOnly(
 	ctx context.Context, localInstanceID base.SQLInstanceID,
 ) (storage.SimpleMVCCIterator, error) {
