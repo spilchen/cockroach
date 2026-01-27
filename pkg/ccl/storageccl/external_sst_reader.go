@@ -115,15 +115,48 @@ func ExternalSSTReader(
 	encryption *kvpb.FileEncryptionOptions,
 	iterOpts storage.IterOptions,
 ) (storage.SimpleMVCCIterator, error) {
-	// TODO(jackson): Change the interface to accept a two-dimensional
-	// [][]StoreFiles slice, and propagate that structure to
-	// NewSSTIterator.
+	// Wrap as a single level for backward compatibility.
+	// For multi-level support, use ExternalSSTReaderByLevel.
 
-	if !remoteSSTs.Get(&storeFiles[0].Store.Settings().SV) {
-		return newMemPebbleSSTReader(ctx, storeFiles, encryption, iterOpts)
+	// Create a single-level structure by wrapping each file in its own level.
+	// This maintains the existing behavior while using the new implementation.
+	storeFilesByLevel := make([][]StoreFile, len(storeFiles))
+	for i, sf := range storeFiles {
+		storeFilesByLevel[i] = []StoreFile{sf}
 	}
-	remoteCacheSize := remoteSSTSuffixCacheSize.Get(&storeFiles[0].Store.Settings().SV)
-	openedReadersByLevel := make([][]objstorage.ReadableFile, 0, len(storeFiles))
+
+	return ExternalSSTReaderByLevel(ctx, storeFilesByLevel, encryption, iterOpts)
+}
+
+// ExternalSSTReaderByLevel returns a PebbleSSTIterator for the SSTs in external
+// storage, organized by levels. Each level is a slice of SST files, and levels
+// are processed in order. This structure reduces memory overhead in Pebble's
+// merge iterator from O(files) to O(levels).
+//
+// The typical use case is to group SSTs by their source node, where each level
+// contains all SSTs from a single node, ordered by their key ranges.
+//
+// Note: the order of SSTs within each level matters if multiple SSTs contain
+// the exact same Pebble key. In this case, the PebbleIterator will surface the
+// key in the first SST (within the first level) that contains it.
+//
+// ctx is captured and used throughout the life of the returned iterator, until
+// the iterator's Close() method is called.
+func ExternalSSTReaderByLevel(
+	ctx context.Context,
+	storeFilesByLevel [][]StoreFile,
+	encryption *kvpb.FileEncryptionOptions,
+	iterOpts storage.IterOptions,
+) (storage.SimpleMVCCIterator, error) {
+	if len(storeFilesByLevel) == 0 || len(storeFilesByLevel[0]) == 0 {
+		return storage.NewMultiMemSSTIterator(nil, false, iterOpts)
+	}
+
+	if !remoteSSTs.Get(&storeFilesByLevel[0][0].Store.Settings().SV) {
+		return newMemPebbleSSTReaderByLevel(ctx, storeFilesByLevel, encryption, iterOpts)
+	}
+	remoteCacheSize := remoteSSTSuffixCacheSize.Get(&storeFilesByLevel[0][0].Store.Settings().SV)
+	openedReadersByLevel := make([][]objstorage.ReadableFile, 0, len(storeFilesByLevel))
 
 	// Cleanup any files we've opened if we fail with an error.
 	defer func() {
@@ -134,49 +167,94 @@ func ExternalSSTReader(
 		}
 	}()
 
-	for _, sf := range storeFiles {
-		f, sz, err := getFileWithRetry(ctx, sf.FilePath, sf.Store)
-		if err != nil {
-			return nil, err
-		}
+	// Process each level.
+	for _, levelFiles := range storeFilesByLevel {
+		levelReaders := make([]objstorage.ReadableFile, 0, len(levelFiles))
 
-		raw := &sstReader{
-			ctx:  ctx,
-			sz:   sizeStat(sz),
-			body: f,
-			openAt: func(offset int64) (ioctx.ReadCloserCtx, error) {
-				reader, _, err := sf.Store.ReadFile(ctx, sf.FilePath, cloud.ReadOptions{
-					Offset:     offset,
-					NoFileSize: true,
-				})
-				return reader, err
-			},
-		}
-
-		var reader objstorage.ReadableFile
-
-		if encryption != nil {
-			r, err := decryptingReader(raw, encryption.Key)
+		// Process each file within the level.
+		for _, sf := range levelFiles {
+			f, sz, err := getFileWithRetry(ctx, sf.FilePath, sf.Store)
 			if err != nil {
-				f.Close(ctx)
 				return nil, err
 			}
-			reader = r
-		} else {
-			// We only explicitly buffer the suffix of the file when not decrypting as
-			// the decrypting reader has its own internal block buffer.
-			if err := raw.readAndCacheSuffix(remoteCacheSize); err != nil {
-				f.Close(ctx)
-				return nil, err
+
+			raw := &sstReader{
+				ctx:  ctx,
+				sz:   sizeStat(sz),
+				body: f,
+				openAt: func(offset int64) (ioctx.ReadCloserCtx, error) {
+					reader, _, err := sf.Store.ReadFile(ctx, sf.FilePath, cloud.ReadOptions{
+						Offset:     offset,
+						NoFileSize: true,
+					})
+					return reader, err
+				},
 			}
-			reader = raw
+
+			var reader objstorage.ReadableFile
+
+			if encryption != nil {
+				r, err := decryptingReader(raw, encryption.Key)
+				if err != nil {
+					f.Close(ctx)
+					return nil, err
+				}
+				reader = r
+			} else {
+				// We only explicitly buffer the suffix of the file when not decrypting as
+				// the decrypting reader has its own internal block buffer.
+				if err := raw.readAndCacheSuffix(remoteCacheSize); err != nil {
+					f.Close(ctx)
+					return nil, err
+				}
+				reader = raw
+			}
+			levelReaders = append(levelReaders, reader)
 		}
-		openedReadersByLevel = append(openedReadersByLevel, []objstorage.ReadableFile{reader})
+		openedReadersByLevel = append(openedReadersByLevel, levelReaders)
 	}
 
 	readerLevels := openedReadersByLevel
 	openedReadersByLevel = nil
 	return storage.NewSSTIterator(readerLevels, iterOpts)
+}
+
+// newMemPebbleSSTReaderByLevel returns a PebbleSSTIterator for in-memory SSTs
+// from external storage organized by levels, optionally decrypting with the
+// supplied parameters.
+//
+// ctx is captured and used throughout the life of the returned iterator, until
+// the iterator's Close() method is called.
+func newMemPebbleSSTReaderByLevel(
+	ctx context.Context,
+	storeFilesByLevel [][]StoreFile,
+	encryption *kvpb.FileEncryptionOptions,
+	iterOps storage.IterOptions,
+) (storage.SimpleMVCCIterator, error) {
+	inMemorySSTs := make([][]byte, 0)
+	memAcc := mon.NewStandaloneUnlimitedAccount()
+
+	for _, levelFiles := range storeFilesByLevel {
+		for _, sf := range levelFiles {
+			f, _, err := getFileWithRetry(ctx, sf.FilePath, sf.Store)
+			if err != nil {
+				return nil, err
+			}
+			content, err := ioctx.ReadAll(ctx, f)
+			f.Close(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if encryption != nil {
+				content, err = DecryptFile(ctx, content, encryption.Key, memAcc)
+				if err != nil {
+					return nil, err
+				}
+			}
+			inMemorySSTs = append(inMemorySSTs, content)
+		}
+	}
+	return storage.NewMultiMemSSTIterator(inMemorySSTs, false, iterOps)
 }
 
 type sstReader struct {

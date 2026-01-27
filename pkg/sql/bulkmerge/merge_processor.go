@@ -8,6 +8,7 @@ package bulkmerge
 import (
 	"bytes"
 	"context"
+	"sort"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/ccl/storageccl"
@@ -24,6 +25,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/storage"
+	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
@@ -359,9 +361,60 @@ func (m *bulkMergeProcessor) ingestFinalIteration(
 	return processMergedData(ctx, iter, mergeSpan, writer)
 }
 
+// overlaps checks if two SST key ranges overlap using half-open interval semantics.
+// Ranges [a.StartKey, a.EndKey) and [b.StartKey, b.EndKey) overlap if:
+//
+//	a.StartKey < b.EndKey AND b.StartKey < a.EndKey
+//
+// Examples:
+//
+//	[A,M) and [M,Z) → false (adjacent, not overlapping)
+//	[A,M) and [K,Z) → true  (overlapping)
+//	[A,Z) and [D,P) → true  (second contained in first)
+func overlaps(a, b execinfrapb.BulkMergeSpec_SST) bool {
+	return a.StartKey.Compare(b.EndKey) < 0 && b.StartKey.Compare(a.EndKey) < 0
+}
+
+// canAddToLevel checks if an SST can be added to a level without creating overlaps.
+// Returns true only if the SST's key range doesn't overlap with any existing SST
+// in the level.
+func canAddToLevel(level []execinfrapb.BulkMergeSpec_SST, sst execinfrapb.BulkMergeSpec_SST) bool {
+	for _, existing := range level {
+		if overlaps(existing, sst) {
+			return false
+		}
+	}
+	return true
+}
+
+// validateNoOverlapsWithinLevels checks that no SSTs within the same level
+// overlap. This is only called in test builds as a safety check.
+func validateNoOverlapsWithinLevels(sstsByLevel [][]execinfrapb.BulkMergeSpec_SST) error {
+	for levelIdx, level := range sstsByLevel {
+		for i := 0; i < len(level)-1; i++ {
+			for j := i + 1; j < len(level); j++ {
+				if overlaps(level[i], level[j]) {
+					return errors.AssertionFailedf("BUG: level %d contains overlapping SSTs:\n"+
+						"  SST[%d]: [%s, %s) URI=%s\n"+
+						"  SST[%d]: [%s, %s) URI=%s",
+						levelIdx,
+						i, level[i].StartKey, level[i].EndKey, level[i].URI,
+						j, level[j].StartKey, level[j].EndKey, level[j].URI)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // createIter builds an iterator over all input SSTs. Actual access to the SSTs
 // is deferred until the iterator seeks to one based on the merge span used for
 // a given task ID.
+//
+// For the final iteration, SSTs are grouped into disjoint levels using a greedy
+// algorithm to ensure non-overlapping SSTs within each level, satisfying Pebble's
+// invariants. This typically achieves O(nodes) levels when nodes produce disjoint
+// ranges.
 func (m *bulkMergeProcessor) createIter(ctx context.Context) (storage.SimpleMVCCIterator, error) {
 	// If there are no SSTs, there's nothing to merge.
 	if len(m.spec.SSTs) == 0 {
@@ -371,16 +424,57 @@ func (m *bulkMergeProcessor) createIter(ctx context.Context) (storage.SimpleMVCC
 		return nil, errors.AssertionFailedf("no spans specified for merge processor")
 	}
 
-	var storeFiles []storageccl.StoreFile
+	// Sort all SSTs by start key for deterministic level assignment.
+	allSSTs := make([]execinfrapb.BulkMergeSpec_SST, len(m.spec.SSTs))
+	copy(allSSTs, m.spec.SSTs)
+	sort.Slice(allSSTs, func(i, j int) bool {
+		return allSSTs[i].StartKey.Compare(allSSTs[j].StartKey) < 0
+	})
 
-	// Create store files for all SSTs. We access the ones needed for each task
-	// in mergeSSTs.
-	for _, sst := range m.spec.SSTs {
-		file, err := m.storageMux.StoreFile(ctx, sst.URI)
-		if err != nil {
+	// Build disjoint levels using greedy algorithm.
+	// Each level contains only non-overlapping SSTs, satisfying Pebble's requirement.
+	sstsByLevel := make([][]execinfrapb.BulkMergeSpec_SST, 0)
+	for _, sst := range allSSTs {
+		placed := false
+
+		// Try to place SST in an existing level (greedy: use first available).
+		for levelIdx := range sstsByLevel {
+			if canAddToLevel(sstsByLevel[levelIdx], sst) {
+				sstsByLevel[levelIdx] = append(sstsByLevel[levelIdx], sst)
+				placed = true
+				break
+			}
+		}
+
+		// If SST overlaps with all existing levels, create a new level.
+		if !placed {
+			sstsByLevel = append(sstsByLevel, []execinfrapb.BulkMergeSpec_SST{sst})
+		}
+	}
+
+	// Convert to StoreFiles, preserving level structure.
+	storeFilesByLevel := make([][]storageccl.StoreFile, 0, len(sstsByLevel))
+	for _, level := range sstsByLevel {
+		levelFiles := make([]storageccl.StoreFile, 0, len(level))
+		for _, sst := range level {
+			file, err := m.storageMux.StoreFile(ctx, sst.URI)
+			if err != nil {
+				return nil, err
+			}
+			levelFiles = append(levelFiles, file)
+		}
+		storeFilesByLevel = append(storeFilesByLevel, levelFiles)
+	}
+
+	log.Dev.Infof(ctx, "final iteration: created %d disjoint levels from %d total SSTs (avg %.1f SSTs/level)",
+		len(storeFilesByLevel), len(m.spec.SSTs),
+		float64(len(m.spec.SSTs))/float64(len(storeFilesByLevel)))
+
+	// In development builds, validate non-overlapping within levels.
+	if buildutil.CrdbTestBuild {
+		if err := validateNoOverlapsWithinLevels(sstsByLevel); err != nil {
 			return nil, err
 		}
-		storeFiles = append(storeFiles, file)
 	}
 
 	iterOpts := storage.IterOptions{
@@ -392,7 +486,7 @@ func (m *bulkMergeProcessor) createIter(ctx context.Context) (storage.SimpleMVCC
 		LowerBound: m.spec.Spans[0].Key,
 		UpperBound: m.spec.Spans[len(m.spec.Spans)-1].EndKey,
 	}
-	iter, err := storageccl.ExternalSSTReader(ctx, storeFiles, nil, iterOpts)
+	iter, err := storageccl.ExternalSSTReaderByLevel(ctx, storeFilesByLevel, nil, iterOpts)
 	if err != nil {
 		return nil, err
 	}

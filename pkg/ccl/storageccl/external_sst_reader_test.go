@@ -8,6 +8,7 @@ package storageccl
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
@@ -210,4 +211,200 @@ func TestNewExternalSSTReaderFailure(t *testing.T) {
 		int64(0),
 		metrics.(*cloud.Metrics).OpenReaders.Value(),
 		"unexpected open readers")
+}
+
+// TestExternalSSTReaderByLevel ensures that ExternalSSTReaderByLevel properly
+// reads and iterates through SSTs organized by levels. This test creates SSTs
+// in multiple levels (simulating SSTs from different nodes) and verifies that
+// the iterator correctly reads all data in order.
+//
+// The test creates the following structure:
+// Level 0 (node 1): a0---a100, a500---a600
+// Level 1 (node 2): a200--a300, a700--a800
+func TestExternalSSTReaderByLevel(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	ctx := context.Background()
+	tempDir, dirCleanupFn := testutils.TempDir(t)
+	defer nodelocal.ReplaceNodeLocalForTesting(tempDir)()
+	defer dirCleanupFn()
+	clusterSettings := cluster.MakeTestingClusterSettings()
+
+	const localFoo = "nodelocal://1/foo"
+
+	// Create two levels, each with two SST files.
+	levels := []struct {
+		name      string
+		sstRanges []struct{ start, end int }
+	}{
+		{
+			name:      "level0",
+			sstRanges: []struct{ start, end int }{{0, 100}, {500, 600}},
+		},
+		{
+			name:      "level1",
+			sstRanges: []struct{ start, end int }{{200, 300}, {700, 800}},
+		},
+	}
+
+	storeFilesByLevel := make([][]StoreFile, len(levels))
+
+	for levelIdx, level := range levels {
+		levelFiles := make([]StoreFile, len(level.sstRanges))
+
+		for sstIdx, sstRange := range level.sstRanges {
+			// Create a store for this SST.
+			subdir := fmt.Sprintf("%s/sst%d/", level.name, sstIdx)
+			store, err := cloud.EarlyBootExternalStorageFromURI(
+				ctx,
+				localFoo+subdir,
+				base.ExternalIODirConfig{},
+				clusterSettings,
+				nil, /* limiters */
+				cloud.NilMetrics,
+			)
+			require.NoError(t, err)
+
+			// Create KVs for this SST.
+			kvs := make(storageutils.KVs, 0, sstRange.end-sstRange.start)
+			for j := sstRange.start; j < sstRange.end; j++ {
+				suffix := string(encoding.EncodeVarintAscending([]byte{}, int64(j)))
+				kvs = append(kvs, storageutils.PointKV("a"+suffix, 1, "1"))
+			}
+
+			// Write the SST.
+			fileName := fmt.Sprintf("file%d.sst", sstIdx)
+			sst, _, _ := storageutils.MakeSST(t, clusterSettings, kvs)
+			w, err := store.Writer(ctx, fileName)
+			require.NoError(t, err)
+			_, err = w.Write(sst)
+			require.NoError(t, err)
+			require.NoError(t, w.Close())
+
+			levelFiles[sstIdx] = StoreFile{
+				Store:    store,
+				FilePath: fileName,
+			}
+		}
+
+		storeFilesByLevel[levelIdx] = levelFiles
+	}
+
+	iterOpts := storage.IterOptions{
+		KeyTypes:   storage.IterKeyTypePointsAndRanges,
+		LowerBound: keys.LocalMax,
+		UpperBound: keys.MaxKey,
+	}
+
+	// Test the by-level reader.
+	iter, err := ExternalSSTReaderByLevel(ctx, storeFilesByLevel, nil, iterOpts)
+	require.NoError(t, err)
+	defer iter.Close()
+
+	// Verify we can iterate through all keys.
+	keyCount := 0
+	for iter.SeekGE(storage.MVCCKey{Key: keys.LocalMax}); ; iter.Next() {
+		ok, err := iter.Valid()
+		require.NoError(t, err)
+		if !ok {
+			break
+		}
+		keyCount++
+	}
+
+	// We should have 400 keys total: (100 + 100) from level0 + (100 + 100) from level1.
+	require.Equal(t, 400, keyCount)
+}
+
+// TestExternalSSTReaderByLevelMatchesFlatReader verifies that using
+// ExternalSSTReaderByLevel with a single level produces the same results
+// as the original ExternalSSTReader.
+func TestExternalSSTReaderByLevelMatchesFlatReader(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	ctx := context.Background()
+	tempDir, dirCleanupFn := testutils.TempDir(t)
+	defer nodelocal.ReplaceNodeLocalForTesting(tempDir)()
+	defer dirCleanupFn()
+	clusterSettings := cluster.MakeTestingClusterSettings()
+
+	const localFoo = "nodelocal://1/foo"
+
+	// Create 3 SST files.
+	subdirs := []string{"a", "b", "c"}
+	fileStores := make([]StoreFile, len(subdirs))
+	for i, subdir := range subdirs {
+		store, err := cloud.EarlyBootExternalStorageFromURI(
+			ctx,
+			localFoo+subdir+"/",
+			base.ExternalIODirConfig{},
+			clusterSettings,
+			nil, /* limiters */
+			cloud.NilMetrics,
+		)
+		require.NoError(t, err)
+
+		kvs := make(storageutils.KVs, 0, 50)
+		for j := i * 100; j < i*100+50; j++ {
+			suffix := string(encoding.EncodeVarintAscending([]byte{}, int64(j)))
+			kvs = append(kvs, storageutils.PointKV("a"+suffix, 1, "1"))
+		}
+
+		fileName := "file.sst"
+		sst, _, _ := storageutils.MakeSST(t, clusterSettings, kvs)
+		w, err := store.Writer(ctx, fileName)
+		require.NoError(t, err)
+		_, err = w.Write(sst)
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		fileStores[i] = StoreFile{
+			Store:    store,
+			FilePath: fileName,
+		}
+	}
+
+	iterOpts := storage.IterOptions{
+		KeyTypes:   storage.IterKeyTypePointsAndRanges,
+		LowerBound: keys.LocalMax,
+		UpperBound: keys.MaxKey,
+	}
+
+	// Get keys from the flat reader.
+	flatIter, err := ExternalSSTReader(ctx, fileStores, nil, iterOpts)
+	require.NoError(t, err)
+	defer flatIter.Close()
+
+	flatKeys := make([]string, 0)
+	for flatIter.SeekGE(storage.MVCCKey{Key: keys.LocalMax}); ; flatIter.Next() {
+		ok, err := flatIter.Valid()
+		require.NoError(t, err)
+		if !ok {
+			break
+		}
+		flatKeys = append(flatKeys, string(flatIter.UnsafeKey().Key))
+	}
+
+	// Get keys from the by-level reader using the same files as levels.
+	storeFilesByLevel := make([][]StoreFile, len(fileStores))
+	for i, sf := range fileStores {
+		storeFilesByLevel[i] = []StoreFile{sf}
+	}
+
+	levelIter, err := ExternalSSTReaderByLevel(ctx, storeFilesByLevel, nil, iterOpts)
+	require.NoError(t, err)
+	defer levelIter.Close()
+
+	levelKeys := make([]string, 0)
+	for levelIter.SeekGE(storage.MVCCKey{Key: keys.LocalMax}); ; levelIter.Next() {
+		ok, err := levelIter.Valid()
+		require.NoError(t, err)
+		if !ok {
+			break
+		}
+		levelKeys = append(levelKeys, string(levelIter.UnsafeKey().Key))
+	}
+
+	// Both readers should produce the same keys in the same order.
+	require.Equal(t, flatKeys, levelKeys)
 }

@@ -40,6 +40,137 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOverlaps(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	testCases := []struct {
+		name     string
+		a, b     execinfrapb.BulkMergeSpec_SST
+		overlaps bool
+	}{
+		{
+			name:     "adjacent ranges do not overlap",
+			a:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
+			b:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
+			overlaps: false,
+		},
+		{
+			name:     "overlapping ranges",
+			a:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
+			b:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("k"), EndKey: roachpb.Key("z")},
+			overlaps: true,
+		},
+		{
+			name:     "contained range",
+			a:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("z")},
+			b:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("d"), EndKey: roachpb.Key("p")},
+			overlaps: true,
+		},
+		{
+			name:     "identical ranges",
+			a:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
+			b:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
+			overlaps: true,
+		},
+		{
+			name:     "non-overlapping ranges (a before b)",
+			a:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("d")},
+			b:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
+			overlaps: false,
+		},
+		{
+			name:     "non-overlapping ranges (b before a)",
+			a:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
+			b:        execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("d")},
+			overlaps: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := overlaps(tc.a, tc.b)
+			require.Equal(t, tc.overlaps, result,
+				"overlaps(%v, %v) = %v, want %v",
+				tc.a, tc.b, result, tc.overlaps)
+
+			// overlaps should be symmetric
+			resultReverse := overlaps(tc.b, tc.a)
+			require.Equal(t, tc.overlaps, resultReverse,
+				"overlaps should be symmetric: overlaps(%v, %v) = %v, but overlaps(%v, %v) = %v",
+				tc.a, tc.b, result, tc.b, tc.a, resultReverse)
+		})
+	}
+}
+
+func TestCanAddToLevel(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	testCases := []struct {
+		name   string
+		level  []execinfrapb.BulkMergeSpec_SST
+		sst    execinfrapb.BulkMergeSpec_SST
+		canAdd bool
+	}{
+		{
+			name:   "empty level - can add any SST",
+			level:  []execinfrapb.BulkMergeSpec_SST{},
+			sst:    execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("z")},
+			canAdd: true,
+		},
+		{
+			name: "can add adjacent SST after existing",
+			level: []execinfrapb.BulkMergeSpec_SST{
+				{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
+			},
+			sst:    execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
+			canAdd: true,
+		},
+		{
+			name: "cannot add overlapping SST",
+			level: []execinfrapb.BulkMergeSpec_SST{
+				{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
+			},
+			sst:    execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("k"), EndKey: roachpb.Key("z")},
+			canAdd: false,
+		},
+		{
+			name: "can add SST before existing",
+			level: []execinfrapb.BulkMergeSpec_SST{
+				{StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
+			},
+			sst:    execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("m")},
+			canAdd: true,
+		},
+		{
+			name: "can add SST in gap between two existing SSTs",
+			level: []execinfrapb.BulkMergeSpec_SST{
+				{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("d")},
+				{StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
+			},
+			sst:    execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("d"), EndKey: roachpb.Key("m")},
+			canAdd: true,
+		},
+		{
+			name: "cannot add if overlaps with any SST in level",
+			level: []execinfrapb.BulkMergeSpec_SST{
+				{StartKey: roachpb.Key("a"), EndKey: roachpb.Key("d")},
+				{StartKey: roachpb.Key("m"), EndKey: roachpb.Key("z")},
+			},
+			sst:    execinfrapb.BulkMergeSpec_SST{StartKey: roachpb.Key("k"), EndKey: roachpb.Key("p")},
+			canAdd: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := canAddToLevel(tc.level, tc.sst)
+			require.Equal(t, tc.canAdd, result,
+				"canAddToLevel(%v, %v) = %v, want %v",
+				tc.level, tc.sst, result, tc.canAdd)
+		})
+	}
+}
+
 func TestDistributedMergeOneNode(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
