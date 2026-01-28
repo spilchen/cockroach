@@ -30,6 +30,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/taskset"
+	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 )
 
@@ -75,6 +76,13 @@ type bulkMergeProcessor struct {
 	// currentPartitionBounds tracks the partition bounds for which the iterator
 	// was created. Used in final iteration to filter SSTs based on partition bounds.
 	currentPartitionBounds *roachpb.Span
+
+	// Statistics for tracking iterator lifecycle and work distribution.
+	iteratorCreations   int                 // Number of times iterator was created from scratch.
+	iteratorReuses      int                 // Number of times existing iterator was reused.
+	iteratorRecreations int                 // Number of times iterator was recreated for new partition.
+	tasksProcessed      int                 // Total number of tasks processed by this processor.
+	partitionsVisited   map[string]struct{} // Set of partition bounds visited (for tracking work-stealing).
 }
 
 type mergeProcessorInput struct {
@@ -132,10 +140,11 @@ func newBulkMergeProcessor(
 	input execinfra.RowSource,
 ) (execinfra.Processor, error) {
 	mp := &bulkMergeProcessor{
-		input:      input,
-		spec:       spec,
-		flowCtx:    flowCtx,
-		storageMux: bulkutil.NewExternalStorageMux(flowCtx.Cfg.ExternalStorageFromURI, flowCtx.EvalCtx.SessionData().User()),
+		input:             input,
+		spec:              spec,
+		flowCtx:           flowCtx,
+		storageMux:        bulkutil.NewExternalStorageMux(flowCtx.Cfg.ExternalStorageFromURI, flowCtx.EvalCtx.SessionData().User()),
+		partitionsVisited: make(map[string]struct{}),
 	}
 	err := mp.Init(
 		ctx, mp, post, bulkMergeProcessorOutputTypes, flowCtx, processorID, nil,
@@ -186,7 +195,10 @@ func (m *bulkMergeProcessor) handleRow(row rowenc.EncDatumRow) (rowenc.EncDatumR
 	isFinal := m.spec.Iteration == m.spec.MaxIterations
 	if isFinal && m.iter == nil {
 		// First task for this processor - create iterator based on partition bounds.
-		log.Dev.Infof(m.Ctx(), "first task (taskID=%d), creating iterator for partition [%s, %s)",
+		partitionKey := input.partitionBounds.String()
+		m.partitionsVisited[partitionKey] = struct{}{}
+
+		log.Dev.Infof(m.Ctx(), "task %d: creating iterator for partition [%s, %s)",
 			input.taskID, input.partitionBounds.Key, input.partitionBounds.EndKey)
 
 		iter, err := m.createIterForPartition(m.Ctx(), input.partitionBounds)
@@ -195,13 +207,17 @@ func (m *bulkMergeProcessor) handleRow(row rowenc.EncDatumRow) (rowenc.EncDatumR
 		}
 		m.iter = iter
 		m.currentPartitionBounds = &input.partitionBounds
+		m.iteratorCreations++
 	} else if isFinal && m.currentPartitionBounds != nil {
 		// Check if partition bounds changed (work-stealing to different partition).
 		if !input.partitionBounds.Equal(*m.currentPartitionBounds) {
-			log.Dev.Infof(m.Ctx(), "task %d has different partition bounds [%s, %s), recreating iterator (previous bounds: [%s, %s))",
+			partitionKey := input.partitionBounds.String()
+			m.partitionsVisited[partitionKey] = struct{}{}
+
+			log.Dev.Infof(m.Ctx(), "task %d: partition changed [%s, %s) → [%s, %s), recreating iterator",
 				input.taskID,
-				input.partitionBounds.Key, input.partitionBounds.EndKey,
-				m.currentPartitionBounds.Key, m.currentPartitionBounds.EndKey)
+				m.currentPartitionBounds.Key, m.currentPartitionBounds.EndKey,
+				input.partitionBounds.Key, input.partitionBounds.EndKey)
 
 			// Close old iterator and create new one for the new partition.
 			m.iter.Close()
@@ -212,8 +228,14 @@ func (m *bulkMergeProcessor) handleRow(row rowenc.EncDatumRow) (rowenc.EncDatumR
 			}
 			m.iter = iter
 			m.currentPartitionBounds = &input.partitionBounds
+			m.iteratorRecreations++
+		} else {
+			// Same partition - reusing existing iterator.
+			m.iteratorReuses++
 		}
 	}
+
+	m.tasksProcessed++
 
 	if knobs, ok := m.flowCtx.Cfg.TestingKnobs.BulkMergeTestingKnobs.(*TestingKnobs); ok {
 		if knobs.RunBeforeMergeTask != nil {
@@ -275,6 +297,16 @@ func (m *bulkMergeProcessor) Close(ctx context.Context) {
 	if m.iter != nil {
 		m.iter.Close()
 	}
+
+	// Log summary statistics for final iteration.
+	isFinal := m.spec.Iteration == m.spec.MaxIterations
+	if isFinal && m.tasksProcessed > 0 {
+		log.Dev.Infof(ctx, "processor stats: %d tasks processed, %d partitions visited, "+
+			"iterator: %d creations, %d reuses, %d recreations",
+			m.tasksProcessed, len(m.partitionsVisited),
+			m.iteratorCreations, m.iteratorReuses, m.iteratorRecreations)
+	}
+
 	err := m.storageMux.Close()
 	if err != nil {
 		log.Dev.Errorf(ctx, "failed to close external storage mux: %v", err)
@@ -476,6 +508,8 @@ func validateNoOverlapsWithinLevels(sstsByLevel [][]execinfrapb.BulkMergeSpec_SS
 func (m *bulkMergeProcessor) createIterForPartition(
 	ctx context.Context, partitionBounds roachpb.Span,
 ) (storage.SimpleMVCCIterator, error) {
+	startTime := timeutil.Now()
+
 	// If there are no SSTs, there's nothing to merge.
 	if len(m.spec.SSTs) == 0 {
 		return nil, nil
@@ -492,9 +526,10 @@ func (m *bulkMergeProcessor) createIterForPartition(
 		}
 	}
 
-	log.Dev.Infof(ctx, "partition [%s, %s): filtered to %d SSTs (from %d total)",
+	log.Dev.Infof(ctx, "partition [%s, %s): filtered to %d SSTs (from %d total) - %.1f%% reduction",
 		partitionBounds.Key, partitionBounds.EndKey,
-		len(partitionSSTs), len(m.spec.SSTs))
+		len(partitionSSTs), len(m.spec.SSTs),
+		100.0*(1.0-float64(len(partitionSSTs))/float64(len(m.spec.SSTs))))
 
 	if len(partitionSSTs) == 0 {
 		return nil, nil
@@ -519,7 +554,16 @@ func (m *bulkMergeProcessor) createIterForPartition(
 
 	// Use the simpler ExternalSSTReader (no level grouping).
 	// SST filtering provides the main optimization.
-	return storageccl.ExternalSSTReader(ctx, storeFiles, nil, iterOpts)
+	iter, err := storageccl.ExternalSSTReader(ctx, storeFiles, nil, iterOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	elapsed := timeutil.Since(startTime)
+	log.Dev.Infof(ctx, "iterator created in %s (%d SSTs opened)",
+		elapsed, len(partitionSSTs))
+
+	return iter, nil
 }
 
 // createIter builds an iterator over all input SSTs. Actual access to the SSTs
