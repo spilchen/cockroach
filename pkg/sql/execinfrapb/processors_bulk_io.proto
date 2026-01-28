@@ -191,7 +191,12 @@ message ReadImportDataSpec {
 message MergeCoordinatorSpec {
   optional int64 task_count = 1 [(gogoproto.nullable) = false];
   repeated bytes worker_sql_instance_ids = 2;
-  // NEXT ID: 3.
+  // spans are the merge task spans. The coordinator uses these to compute
+  // partition bounds for each worker. Each worker is assigned a contiguous
+  // range of spans, and the coordinator sends the partition bounds (min/max
+  // key range) with each task assignment.
+  repeated roachpb.Span spans = 3 [(gogoproto.nullable) = false];
+  // NEXT ID: 4.
 }
 
 // MergeLoopback is scheduled on the same node as the MergeCoordinator.

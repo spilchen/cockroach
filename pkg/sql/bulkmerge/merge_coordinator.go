@@ -8,6 +8,7 @@ package bulkmerge
 import (
 	"context"
 
+	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfra"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
@@ -43,6 +44,11 @@ type mergeCoordinator struct {
 
 	done    bool
 	results execinfrapb.BulkMergeSpec_Output
+
+	// partitionBounds contains the key span boundaries for each worker partition.
+	// Each worker is assigned a contiguous range of task spans, and partitionBounds[i]
+	// represents the min/max key range covering all spans assigned to worker i.
+	partitionBounds []roachpb.Span
 }
 
 type mergeCoordinatorInput struct {
@@ -133,15 +139,26 @@ func (m *mergeCoordinator) emitResults() (rowenc.EncDatumRow, *execinfrapb.Produ
 }
 
 func (m *mergeCoordinator) publishInitialTasks() {
-	for _, sqlInstanceID := range m.spec.WorkerSqlInstanceIds {
+	for workerIdx, sqlInstanceID := range m.spec.WorkerSqlInstanceIds {
 		taskID := m.tasks.ClaimFirst()
 		if taskID.IsDone() {
 			m.closeLoopback()
 			return
 		}
+
+		// Encode partition bounds for this worker.
+		partitionBoundsBytes, err := encodePartitionBounds(m.partitionBounds[workerIdx])
+		if err != nil {
+			// If we can't encode partition bounds, we have a serious problem.
+			// Close the loopback and the workers will get an error.
+			m.closeLoopback()
+			return
+		}
+
 		m.loopback <- rowenc.EncDatumRow{
 			rowenc.EncDatum{Datum: tree.NewDBytes(tree.DBytes(sqlInstanceID))},
 			rowenc.EncDatum{Datum: tree.NewDInt(tree.DInt(taskID))},
+			rowenc.EncDatum{Datum: tree.NewDBytes(tree.DBytes(partitionBoundsBytes))},
 		}
 	}
 }
@@ -151,6 +168,63 @@ func (m *mergeCoordinator) closeLoopback() {
 		m.cleanup()
 		m.cleanup = nil
 	}
+}
+
+// computePartitionBounds divides the task spans across workers and computes
+// the min/max key range for each worker's partition. Returns a slice where
+// partitionBounds[i] is the key range covering all spans assigned to worker i.
+func computePartitionBounds(spans []roachpb.Span, numWorkers int) []roachpb.Span {
+	if numWorkers == 0 || len(spans) == 0 {
+		return nil
+	}
+
+	bounds := make([]roachpb.Span, numWorkers)
+
+	// Distribute spans evenly across workers using round-robin.
+	// Each worker gets roughly len(spans)/numWorkers spans.
+	spansPerWorker := len(spans) / numWorkers
+	remainder := len(spans) % numWorkers
+
+	start := 0
+	for i := 0; i < numWorkers; i++ {
+		// Workers with index < remainder get one extra span to distribute the remainder.
+		end := start + spansPerWorker
+		if i < remainder {
+			end++
+		}
+
+		if start >= len(spans) {
+			// No more spans for this worker (happens when numWorkers > len(spans)).
+			// Use an empty span.
+			bounds[i] = roachpb.Span{}
+			continue
+		}
+
+		// The partition bounds span from the first span's Key to the last span's EndKey.
+		bounds[i] = roachpb.Span{
+			Key:    spans[start].Key,
+			EndKey: spans[end-1].EndKey,
+		}
+		start = end
+	}
+
+	return bounds
+}
+
+// encodePartitionBounds marshals a Span into bytes for transmission via loopback.
+func encodePartitionBounds(span roachpb.Span) ([]byte, error) {
+	return protoutil.Marshal(&span)
+}
+
+// getWorkerIndex returns the worker index for a given SQL instance ID.
+// Returns -1 if not found.
+func (m *mergeCoordinator) getWorkerIndex(sqlInstanceID string) int {
+	for i, id := range m.spec.WorkerSqlInstanceIds {
+		if string(id) == sqlInstanceID {
+			return i
+		}
+	}
+	return -1
 }
 
 // handleRow accepts a row output by the merge processor, marks its task as
@@ -169,9 +243,22 @@ func (m *mergeCoordinator) handleRow(row rowenc.EncDatumRow) error {
 		return nil
 	}
 
+	// Get the worker index for this SQL instance ID to find partition bounds.
+	workerIdx := m.getWorkerIndex(input.sqlInstanceID)
+	if workerIdx < 0 {
+		return errors.Newf("unknown SQL instance ID: %s", input.sqlInstanceID)
+	}
+
+	// Encode partition bounds for this worker.
+	partitionBoundsBytes, err := encodePartitionBounds(m.partitionBounds[workerIdx])
+	if err != nil {
+		return errors.Wrap(err, "failed to encode partition bounds")
+	}
+
 	m.loopback <- rowenc.EncDatumRow{
 		rowenc.EncDatum{Datum: tree.NewDBytes(tree.DBytes(input.sqlInstanceID))},
 		rowenc.EncDatum{Datum: tree.NewDInt(tree.DInt(next))},
+		rowenc.EncDatum{Datum: tree.NewDBytes(tree.DBytes(partitionBoundsBytes))},
 	}
 
 	return nil
@@ -181,6 +268,12 @@ func (m *mergeCoordinator) handleRow(row rowenc.EncDatumRow) error {
 func (m *mergeCoordinator) Start(ctx context.Context) {
 	m.StartInternal(ctx, "mergeCoordinator")
 	m.input.Start(ctx)
+
+	// Compute partition bounds for each worker based on the task spans.
+	// Each worker gets a contiguous range of spans, and we compute the
+	// min/max key range covering those spans.
+	m.partitionBounds = computePartitionBounds(m.spec.Spans, len(m.spec.WorkerSqlInstanceIds))
+
 	m.publishInitialTasks()
 }
 

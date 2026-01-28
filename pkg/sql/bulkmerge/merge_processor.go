@@ -71,23 +71,31 @@ type bulkMergeProcessor struct {
 	flowCtx    *execinfra.FlowCtx
 	storageMux *bulkutil.ExternalStorageMux
 	iter       storage.SimpleMVCCIterator
+
+	// currentPartitionBounds tracks the partition bounds for which the iterator
+	// was created. Used in final iteration to filter SSTs based on partition bounds.
+	currentPartitionBounds *roachpb.Span
 }
 
 type mergeProcessorInput struct {
-	sqlInstanceID string
-	taskID        taskset.TaskID
+	sqlInstanceID   string
+	taskID          taskset.TaskID
+	partitionBounds roachpb.Span
 }
 
 func parseMergeProcessorInput(
 	row rowenc.EncDatumRow, typs []*types.T,
 ) (mergeProcessorInput, error) {
-	if len(row) != 2 {
-		return mergeProcessorInput{}, errors.Newf("expected 2 columns, got %d", len(row))
+	if len(row) != 3 {
+		return mergeProcessorInput{}, errors.Newf("expected 3 columns, got %d", len(row))
 	}
 	if err := row[0].EnsureDecoded(typs[0], nil); err != nil {
 		return mergeProcessorInput{}, err
 	}
 	if err := row[1].EnsureDecoded(typs[1], nil); err != nil {
+		return mergeProcessorInput{}, err
+	}
+	if err := row[2].EnsureDecoded(typs[2], nil); err != nil {
 		return mergeProcessorInput{}, err
 	}
 	sqlInstanceID, ok := row[0].Datum.(*tree.DBytes)
@@ -98,9 +106,20 @@ func parseMergeProcessorInput(
 	if !ok {
 		return mergeProcessorInput{}, errors.Newf("expected int4 column for taskID, got %s", row[1].Datum.String())
 	}
+	partitionBoundsBytes, ok := row[2].Datum.(*tree.DBytes)
+	if !ok {
+		return mergeProcessorInput{}, errors.Newf("expected bytes column for partitionBounds, got %s", row[2].Datum.String())
+	}
+
+	var partitionBounds roachpb.Span
+	if err := protoutil.Unmarshal([]byte(*partitionBoundsBytes), &partitionBounds); err != nil {
+		return mergeProcessorInput{}, errors.Wrap(err, "failed to unmarshal partition bounds")
+	}
+
 	return mergeProcessorInput{
-		sqlInstanceID: string(*sqlInstanceID),
-		taskID:        taskset.TaskID(*taskID),
+		sqlInstanceID:   string(*sqlInstanceID),
+		taskID:          taskset.TaskID(*taskID),
+		partitionBounds: partitionBounds,
 	}, nil
 }
 
@@ -162,6 +181,32 @@ func (m *bulkMergeProcessor) handleRow(row rowenc.EncDatumRow) (rowenc.EncDatumR
 		return nil, err
 	}
 
+	// Lazy iterator creation for final iteration.
+	// Non-final iterations create the iterator in Start().
+	isFinal := m.spec.Iteration == m.spec.MaxIterations
+	if isFinal && m.iter == nil {
+		// First task for this processor - create iterator based on partition bounds.
+		log.Dev.Infof(m.Ctx(), "first task (taskID=%d), creating iterator for partition [%s, %s)",
+			input.taskID, input.partitionBounds.Key, input.partitionBounds.EndKey)
+
+		iter, err := m.createIterForPartition(m.Ctx(), input.partitionBounds)
+		if err != nil {
+			return nil, err
+		}
+		m.iter = iter
+		m.currentPartitionBounds = &input.partitionBounds
+	} else if isFinal && m.currentPartitionBounds != nil {
+		// Subsequent task - verify partition bounds match.
+		if !input.partitionBounds.Equal(*m.currentPartitionBounds) {
+			return nil, errors.Newf(
+				"task %d has different partition bounds [%s, %s) than current [%s, %s) - work-stealing not yet supported",
+				input.taskID,
+				input.partitionBounds.Key, input.partitionBounds.EndKey,
+				m.currentPartitionBounds.Key, m.currentPartitionBounds.EndKey,
+			)
+		}
+	}
+
 	if knobs, ok := m.flowCtx.Cfg.TestingKnobs.BulkMergeTestingKnobs.(*TestingKnobs); ok {
 		if knobs.RunBeforeMergeTask != nil {
 			if err := knobs.RunBeforeMergeTask(m.Ctx(), m.flowCtx.ID, input.taskID); err != nil {
@@ -198,20 +243,23 @@ func (m *bulkMergeProcessor) Start(ctx context.Context) {
 	isFinal := m.spec.Iteration == m.spec.MaxIterations
 	localOnly := !isFinal
 
-	var err error
+	// For non-final (local-only) iterations, create the iterator at startup.
+	// For final iterations, defer iterator creation until the first task arrives,
+	// allowing us to filter SSTs based on partition bounds.
 	if localOnly {
 		localInstanceID := m.flowCtx.NodeID.SQLInstanceID()
 		log.Dev.Infof(ctx, "local iteration %d: filtering to local SSTs from instance %d",
 			m.spec.Iteration, localInstanceID)
-		m.iter, err = m.createIterLocalOnly(ctx, localInstanceID)
+		iter, err := m.createIterLocalOnly(ctx, localInstanceID)
+		if err != nil {
+			m.MoveToDraining(err)
+			return
+		}
+		m.iter = iter
 	} else {
-		log.Dev.Infof(ctx, "final iteration %d: opening iterator for %d SSTs",
-			m.spec.Iteration, len(m.spec.SSTs))
-		m.iter, err = m.createIter(ctx)
-	}
-	if err != nil {
-		m.MoveToDraining(err)
-		return
+		log.Dev.Infof(ctx, "final iteration %d: deferring iterator creation until first task",
+			m.spec.Iteration)
+		// Iterator will be created lazily in handleRow() based on partition bounds.
 	}
 }
 
@@ -361,6 +409,12 @@ func (m *bulkMergeProcessor) ingestFinalIteration(
 	return processMergedData(ctx, iter, mergeSpan, writer)
 }
 
+// sstOverlapsSpan checks if an SST's key range overlaps with a given span.
+// Uses half-open interval semantics where both ranges are [start, end).
+func sstOverlapsSpan(sst execinfrapb.BulkMergeSpec_SST, span roachpb.Span) bool {
+	return sst.StartKey.Compare(span.EndKey) < 0 && span.Key.Compare(sst.EndKey) < 0
+}
+
 // overlaps checks if two SST key ranges overlap using half-open interval semantics.
 // Ranges [a.StartKey, a.EndKey) and [b.StartKey, b.EndKey) overlap if:
 //
@@ -407,6 +461,59 @@ func validateNoOverlapsWithinLevels(sstsByLevel [][]execinfrapb.BulkMergeSpec_SS
 	return nil
 }
 
+// createIterForPartition builds an iterator over SSTs that overlap with the
+// given partition bounds. This filters out SSTs that don't overlap with the
+// partition, reducing memory and I/O. Uses the simpler ExternalSSTReader
+// (without level grouping) since SST filtering provides the main optimization.
+func (m *bulkMergeProcessor) createIterForPartition(
+	ctx context.Context, partitionBounds roachpb.Span,
+) (storage.SimpleMVCCIterator, error) {
+	// If there are no SSTs, there's nothing to merge.
+	if len(m.spec.SSTs) == 0 {
+		return nil, nil
+	}
+	if len(m.spec.Spans) == 0 {
+		return nil, errors.AssertionFailedf("no spans specified for merge processor")
+	}
+
+	// Filter SSTs to only those overlapping the partition bounds.
+	var partitionSSTs []execinfrapb.BulkMergeSpec_SST
+	for _, sst := range m.spec.SSTs {
+		if sstOverlapsSpan(sst, partitionBounds) {
+			partitionSSTs = append(partitionSSTs, sst)
+		}
+	}
+
+	log.Dev.Infof(ctx, "partition [%s, %s): filtered to %d SSTs (from %d total)",
+		partitionBounds.Key, partitionBounds.EndKey,
+		len(partitionSSTs), len(m.spec.SSTs))
+
+	if len(partitionSSTs) == 0 {
+		return nil, nil
+	}
+
+	// Convert to StoreFiles.
+	storeFiles := make([]storageccl.StoreFile, 0, len(partitionSSTs))
+	for _, sst := range partitionSSTs {
+		file, err := m.storageMux.StoreFile(ctx, sst.URI)
+		if err != nil {
+			return nil, err
+		}
+		storeFiles = append(storeFiles, file)
+	}
+
+	// Use partition bounds as iterator bounds.
+	iterOpts := storage.IterOptions{
+		KeyTypes:   storage.IterKeyTypePointsAndRanges,
+		LowerBound: partitionBounds.Key,
+		UpperBound: partitionBounds.EndKey,
+	}
+
+	// Use the simpler ExternalSSTReader (no level grouping).
+	// SST filtering provides the main optimization.
+	return storageccl.ExternalSSTReader(ctx, storeFiles, nil, iterOpts)
+}
+
 // createIter builds an iterator over all input SSTs. Actual access to the SSTs
 // is deferred until the iterator seeks to one based on the merge span used for
 // a given task ID.
@@ -415,6 +522,9 @@ func validateNoOverlapsWithinLevels(sstsByLevel [][]execinfrapb.BulkMergeSpec_SS
 // algorithm to ensure non-overlapping SSTs within each level, satisfying Pebble's
 // invariants. This typically achieves O(nodes) levels when nodes produce disjoint
 // ranges.
+//
+// NOTE: This function is currently unused in the final iteration. Instead,
+// createIterForPartition() is used to filter SSTs based on partition bounds.
 func (m *bulkMergeProcessor) createIter(ctx context.Context) (storage.SimpleMVCCIterator, error) {
 	// If there are no SSTs, there's nothing to merge.
 	if len(m.spec.SSTs) == 0 {

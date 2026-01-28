@@ -63,6 +63,10 @@ var mergeLoopbackOutputTypes = []*types.T{
 	types.Bytes,
 	// Task ID
 	types.Int4,
+	// Partition bounds (serialized roachpb.Span) for this task's partition.
+	// The worker uses these bounds to filter SSTs to only those overlapping
+	// its assigned partition, reducing memory and I/O.
+	types.Bytes,
 }
 
 type mergeLoopback struct {
