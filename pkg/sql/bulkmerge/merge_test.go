@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cloud"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql"
@@ -772,6 +773,7 @@ func TestKVWritePreexistingKeyConflictDetection(t *testing.T) {
 
 // writeSpecificKeys writes SST entries for the given key indices with properly
 // encoded MVCC values. Uses the codec to apply tenant-aware key encoding.
+// The batcher is closed after writing all keys.
 func writeSpecificKeys(
 	t *testing.T,
 	ctx context.Context,
@@ -790,5 +792,157 @@ func writeSpecificKeys(
 		require.NoError(t, err)
 		require.NoError(t, batcher.AddMVCCKey(ctx, key, encMVCCVal))
 	}
-	require.NoError(t, batcher.Flush(ctx))
+	require.NoError(t, batcher.CloseWithError(ctx))
+}
+
+// TestCrossSSTDuplicateDetection verifies that duplicate keys are detected
+// when they exist across different SSTs during a merge with EnforceUniqueness
+// enabled.
+func TestCrossSSTDuplicateDetection(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	ctx := context.Background()
+	dir, cleanup := testutils.TempDir(t)
+	defer cleanup()
+
+	srv := serverutils.StartServerOnly(t, base.TestServerArgs{
+		ExternalIODir: dir,
+	})
+	defer srv.Stopper().Stop(ctx)
+	s := srv.ApplicationLayer()
+	execCfg := s.ExecutorConfig().(sql.ExecutorConfig)
+
+	jobExecCtx, jobCleanup := sql.MakeJobExecContext(
+		ctx, "test-cross-sst-dup", username.RootUserName(), &sql.MemoryMetrics{}, &execCfg,
+	)
+	defer jobCleanup()
+
+	// Create two separate SST files with overlapping keys.
+	// SST 1: keys [key-0, key-1, key-2]
+	// SST 2: keys [key-2, key-3, key-4]
+	// key-2 is the duplicate that should be detected.
+	writeTS := hlc.Timestamp{WallTime: 1}
+
+	// First SST: create external storage and file allocator for sst1/ subdirectory.
+	prefixURI1 := "nodelocal://1/merge/sst1/"
+	store1, err := execCfg.DistSQLSrv.ExternalStorageFromURI(ctx, prefixURI1, username.RootUserName())
+	require.NoError(t, err)
+	fileAllocator1 := bulksst.NewExternalFileAllocator(store1, prefixURI1, s.Clock())
+	batcher1 := bulksst.NewUnsortedSSTBatcher(s.ClusterSettings(), fileAllocator1)
+	writeSpecificKeys(t, ctx, batcher1, []int{0, 1, 2}, writeTS, s.Codec())
+
+	// Second SST: create external storage and file allocator for sst2/ subdirectory.
+	prefixURI2 := "nodelocal://1/merge/sst2/"
+	store2, err := execCfg.DistSQLSrv.ExternalStorageFromURI(ctx, prefixURI2, username.RootUserName())
+	require.NoError(t, err)
+	fileAllocator2 := bulksst.NewExternalFileAllocator(store2, prefixURI2, s.Clock())
+	batcher2 := bulksst.NewUnsortedSSTBatcher(s.ClusterSettings(), fileAllocator2)
+	writeSpecificKeys(t, ctx, batcher2, []int{2, 3, 4}, writeTS, s.Codec())
+
+	// Combine SSTs from both allocators.
+	ssts1 := importToMerge(fileAllocator1.GetFileList())
+	ssts2 := importToMerge(fileAllocator2.GetFileList())
+	allSSTs := append(ssts1, ssts2...)
+
+	spans := []roachpb.Span{{Key: roachpb.KeyMin, EndKey: roachpb.KeyMax}}
+
+	// Merge with EnforceUniqueness=true. This should detect key-2 as a duplicate.
+	mergeWriteTS := execCfg.Clock.Now()
+	_, err = Merge(
+		ctx,
+		jobExecCtx,
+		allSSTs,
+		spans,
+		func(instanceID base.SQLInstanceID) (string, error) {
+			return fmt.Sprintf("nodelocal://%d/merge/cross-sst-dup/", instanceID), nil
+		},
+		MergeOptions{
+			Iteration:         1,
+			MaxIterations:     1,
+			WriteTimestamp:    &mergeWriteTS,
+			EnforceUniqueness: true,
+		},
+	)
+
+	// Expect a DuplicateKeyError because key-2 exists in both SSTs.
+	require.Error(t, err, "expected DuplicateKeyError for cross-SST duplicate key")
+	isDupKeyErr := errors.HasType(err, &kvserverbase.DuplicateKeyError{})
+	require.True(t, isDupKeyErr,
+		"expected DuplicateKeyError, got: %+v", err)
+
+	// Verify the error mentions the right key.
+	var dupKeyErr *kvserverbase.DuplicateKeyError
+	require.True(t, errors.As(err, &dupKeyErr), "should be able to extract DuplicateKeyError")
+	require.Contains(t, string(dupKeyErr.Key), "key-2",
+		"duplicate key error should reference key-2")
+}
+
+// TestCrossSSTNonUniqueAllowsDuplicates verifies that duplicate keys across
+// SSTs are allowed when EnforceUniqueness is false.
+func TestCrossSSTNonUniqueAllowsDuplicates(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	ctx := context.Background()
+	dir, cleanup := testutils.TempDir(t)
+	defer cleanup()
+
+	srv := serverutils.StartServerOnly(t, base.TestServerArgs{
+		ExternalIODir: dir,
+	})
+	defer srv.Stopper().Stop(ctx)
+	s := srv.ApplicationLayer()
+	execCfg := s.ExecutorConfig().(sql.ExecutorConfig)
+
+	jobExecCtx, jobCleanup := sql.MakeJobExecContext(
+		ctx, "test-cross-sst-nonunique", username.RootUserName(), &sql.MemoryMetrics{}, &execCfg,
+	)
+	defer jobCleanup()
+
+	// Create two SSTs with overlapping keys (same as above).
+	writeTS := hlc.Timestamp{WallTime: 1}
+
+	// First SST: create external storage and file allocator for sst1/ subdirectory.
+	prefixURI1 := "nodelocal://1/merge/sst1/"
+	store1, err := execCfg.DistSQLSrv.ExternalStorageFromURI(ctx, prefixURI1, username.RootUserName())
+	require.NoError(t, err)
+	fileAllocator1 := bulksst.NewExternalFileAllocator(store1, prefixURI1, s.Clock())
+	batcher1 := bulksst.NewUnsortedSSTBatcher(s.ClusterSettings(), fileAllocator1)
+	writeSpecificKeys(t, ctx, batcher1, []int{0, 1, 2}, writeTS, s.Codec())
+
+	// Second SST: create external storage and file allocator for sst2/ subdirectory.
+	prefixURI2 := "nodelocal://1/merge/sst2/"
+	store2, err := execCfg.DistSQLSrv.ExternalStorageFromURI(ctx, prefixURI2, username.RootUserName())
+	require.NoError(t, err)
+	fileAllocator2 := bulksst.NewExternalFileAllocator(store2, prefixURI2, s.Clock())
+	batcher2 := bulksst.NewUnsortedSSTBatcher(s.ClusterSettings(), fileAllocator2)
+	writeSpecificKeys(t, ctx, batcher2, []int{2, 3, 4}, writeTS, s.Codec())
+
+	ssts1 := importToMerge(fileAllocator1.GetFileList())
+	ssts2 := importToMerge(fileAllocator2.GetFileList())
+	allSSTs := append(ssts1, ssts2...)
+
+	spans := []roachpb.Span{{Key: roachpb.KeyMin, EndKey: roachpb.KeyMax}}
+
+	// Merge with EnforceUniqueness=false. This should succeed despite duplicates.
+	mergeWriteTS := execCfg.Clock.Now()
+	_, err = Merge(
+		ctx,
+		jobExecCtx,
+		allSSTs,
+		spans,
+		func(instanceID base.SQLInstanceID) (string, error) {
+			return fmt.Sprintf("nodelocal://%d/merge/cross-sst-nonunique/", instanceID), nil
+		},
+		MergeOptions{
+			Iteration:         1,
+			MaxIterations:     1,
+			WriteTimestamp:    &mergeWriteTS,
+			EnforceUniqueness: false,
+		},
+	)
+
+	// Should succeed because uniqueness is not enforced.
+	require.NoError(t, err, "merge without uniqueness enforcement should succeed")
 }
