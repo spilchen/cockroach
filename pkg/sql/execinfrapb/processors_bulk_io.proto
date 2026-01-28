@@ -196,7 +196,10 @@ message MergeCoordinatorSpec {
   // range of spans, and the coordinator sends the partition bounds (min/max
   // key range) with each task assignment.
   repeated roachpb.Span spans = 3 [(gogoproto.nullable) = false];
-  // NEXT ID: 4.
+  // ssts is the list of input SSTs to merge. This is used by the coordinator
+  // to compute fair partition bounds by balancing SST distribution across workers.
+  repeated BulkMergeSpec.SST ssts = 4 [(gogoproto.nullable) = false, (gogoproto.customname) = "SSTs"];
+  // NEXT ID: 5.
 }
 
 // MergeLoopback is scheduled on the same node as the MergeCoordinator.

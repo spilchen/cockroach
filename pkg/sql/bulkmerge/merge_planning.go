@@ -159,6 +159,7 @@ func newBulkMergePlan(
 			TaskCount:            int64(taskCount),
 			WorkerSqlInstanceIds: keys,
 			Spans:                mergeSpans,
+			SSTs:                 ssts,
 		},
 	}, execinfrapb.PostProcessSpec{}, mergeCoordinatorOutputTypes, nil /* finalizeLastStageCb */)
 

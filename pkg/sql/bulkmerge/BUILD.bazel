@@ -45,6 +45,7 @@ go_library(
         "//pkg/util/protoutil",
         "//pkg/util/syncutil",
         "//pkg/util/taskset",
+        "//pkg/util/timeutil",
         "@com_github_cockroachdb_errors//:errors",
         "@com_github_cockroachdb_pebble//objstorage",
     ],
@@ -54,6 +55,7 @@ go_test(
     name = "bulkmerge_test",
     srcs = [
         "main_test.go",
+        "merge_coordinator_test.go",
         "merge_test.go",
         "sst_source_test.go",
     ],

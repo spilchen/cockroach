@@ -15,6 +15,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/rowexec"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/taskset"
 	"github.com/cockroachdb/errors"
@@ -144,7 +145,7 @@ func (m *mergeCoordinator) emitResults() (rowenc.EncDatumRow, *execinfrapb.Produ
 }
 
 func (m *mergeCoordinator) publishInitialTasks() {
-	for _, sqlInstanceID := range m.spec.WorkerSqlInstanceIds {
+	for workerIdx, sqlInstanceID := range m.spec.WorkerSqlInstanceIds {
 		taskID := m.tasks.ClaimFirst()
 		if taskID.IsDone() {
 			m.closeLoopback()
@@ -161,6 +162,9 @@ func (m *mergeCoordinator) publishInitialTasks() {
 			m.closeLoopback()
 			return
 		}
+
+		log.Dev.Infof(m.Ctx(), "assigning task %d (partition %d) to worker %d (SQL instance %s)",
+			taskID, partitionIdx, workerIdx, sqlInstanceID)
 
 		m.loopback <- rowenc.EncDatumRow{
 			rowenc.EncDatum{Datum: tree.NewDBytes(tree.DBytes(sqlInstanceID))},
@@ -180,8 +184,12 @@ func (m *mergeCoordinator) closeLoopback() {
 // computePartitionBounds divides the task spans across workers and computes
 // the min/max key range for each worker's partition. Returns partition bounds
 // and a mapping from task ID to partition index.
+//
+// Partitioning is done by balancing SST counts across workers to ensure fair
+// work distribution. Each worker is assigned a contiguous range of spans such
+// that the total number of SSTs overlapping those spans is roughly equal.
 func computePartitionBounds(
-	spans []roachpb.Span, numWorkers int,
+	spans []roachpb.Span, ssts []execinfrapb.BulkMergeSpec_SST, numWorkers int,
 ) (partitionBounds []roachpb.Span, taskToPartition []int) {
 	if numWorkers == 0 || len(spans) == 0 {
 		return nil, nil
@@ -190,38 +198,60 @@ func computePartitionBounds(
 	bounds := make([]roachpb.Span, numWorkers)
 	taskToPartition = make([]int, len(spans))
 
-	// Distribute spans evenly across workers using round-robin.
-	// Each worker gets roughly len(spans)/numWorkers spans.
-	spansPerWorker := len(spans) / numWorkers
-	remainder := len(spans) % numWorkers
-
-	start := 0
-	for i := 0; i < numWorkers; i++ {
-		// Workers with index < remainder get one extra span to distribute the remainder.
-		end := start + spansPerWorker
-		if i < remainder {
-			end++
+	// Count SSTs overlapping each span.
+	sstCountPerSpan := make([]int, len(spans))
+	for spanIdx, span := range spans {
+		for _, sst := range ssts {
+			if sstOverlapsSpan(sst, span) {
+				sstCountPerSpan[spanIdx]++
+			}
 		}
+	}
 
-		if start >= len(spans) {
-			// No more spans for this worker (happens when numWorkers > len(spans)).
-			// Use an empty span.
-			bounds[i] = roachpb.Span{}
-			continue
+	// Calculate total SST count and target SSTs per worker.
+	totalSSTs := 0
+	for _, count := range sstCountPerSpan {
+		totalSSTs += count
+	}
+	sstsPerWorker := totalSSTs / numWorkers
+	if sstsPerWorker == 0 {
+		sstsPerWorker = 1 // Avoid division by zero in edge cases.
+	}
+
+	// Distribute spans to workers to balance SST counts.
+	currentWorker := 0
+	currentWorkerSSTs := 0
+	partitionStart := 0
+
+	for spanIdx, sstCount := range sstCountPerSpan {
+		// If adding this span would exceed the target and we're not on the last worker,
+		// finalize the current partition and move to the next worker.
+		if currentWorkerSSTs+sstCount > sstsPerWorker && currentWorker < numWorkers-1 && currentWorkerSSTs > 0 {
+			// End current partition.
+			bounds[currentWorker] = roachpb.Span{
+				Key:    spans[partitionStart].Key,
+				EndKey: spans[spanIdx-1].EndKey,
+			}
+			currentWorker++
+			partitionStart = spanIdx
+			currentWorkerSSTs = 0
 		}
+		taskToPartition[spanIdx] = currentWorker
+		currentWorkerSSTs += sstCount
+	}
 
-		// The partition bounds span from the first span's Key to the last span's EndKey.
-		bounds[i] = roachpb.Span{
-			Key:    spans[start].Key,
-			EndKey: spans[end-1].EndKey,
+	// Finalize the last partition.
+	if partitionStart < len(spans) {
+		bounds[currentWorker] = roachpb.Span{
+			Key:    spans[partitionStart].Key,
+			EndKey: spans[len(spans)-1].EndKey,
 		}
+	}
 
-		// Map each task in this partition to the partition index.
-		for taskIdx := start; taskIdx < end; taskIdx++ {
-			taskToPartition[taskIdx] = i
-		}
-
-		start = end
+	// Handle case where we have more workers than partitions created.
+	// Remaining workers get empty spans.
+	for i := currentWorker + 1; i < numWorkers; i++ {
+		bounds[i] = roachpb.Span{}
 	}
 
 	return bounds, taskToPartition
@@ -251,6 +281,7 @@ func (m *mergeCoordinator) handleRow(row rowenc.EncDatumRow) error {
 		return err
 	}
 
+	completedPartitionIdx := m.taskToPartition[input.taskID]
 	m.results.SSTs = append(m.results.SSTs, input.outputSSTs...)
 
 	next := m.tasks.ClaimNext(input.taskID)
@@ -261,10 +292,18 @@ func (m *mergeCoordinator) handleRow(row rowenc.EncDatumRow) error {
 
 	// Get partition bounds for the NEXT TASK (not this worker).
 	// This supports work-stealing where a worker may process tasks from different partitions.
-	partitionIdx := m.taskToPartition[next]
-	partitionBoundsBytes, err := encodePartitionBounds(m.partitionBounds[partitionIdx])
+	nextPartitionIdx := m.taskToPartition[next]
+	partitionBoundsBytes, err := encodePartitionBounds(m.partitionBounds[nextPartitionIdx])
 	if err != nil {
 		return errors.Wrap(err, "failed to encode partition bounds")
+	}
+
+	// Log work-stealing detection.
+	if completedPartitionIdx != nextPartitionIdx {
+		log.Dev.Infof(m.Ctx(), "work-stealing: worker %s completed task %d (partition %d), "+
+			"now assigned task %d (partition %d)",
+			input.sqlInstanceID, input.taskID, completedPartitionIdx,
+			next, nextPartitionIdx)
 	}
 
 	m.loopback <- rowenc.EncDatumRow{
@@ -281,12 +320,12 @@ func (m *mergeCoordinator) Start(ctx context.Context) {
 	m.StartInternal(ctx, "mergeCoordinator")
 	m.input.Start(ctx)
 
-	// Compute partition bounds for each worker based on the task spans.
-	// Each worker gets a contiguous range of spans, and we compute the
-	// min/max key range covering those spans. Also build a mapping from
-	// task ID to partition index for work-stealing scenarios.
+	// Compute partition bounds for each worker based on the task spans and SSTs.
+	// Partitioning is done by balancing SST counts across workers to ensure fair
+	// work distribution. Also build a mapping from task ID to partition index for
+	// work-stealing scenarios.
 	m.partitionBounds, m.taskToPartition = computePartitionBounds(
-		m.spec.Spans, len(m.spec.WorkerSqlInstanceIds))
+		m.spec.Spans, m.spec.SSTs, len(m.spec.WorkerSqlInstanceIds))
 
 	m.publishInitialTasks()
 }
