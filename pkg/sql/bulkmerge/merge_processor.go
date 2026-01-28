@@ -196,14 +196,22 @@ func (m *bulkMergeProcessor) handleRow(row rowenc.EncDatumRow) (rowenc.EncDatumR
 		m.iter = iter
 		m.currentPartitionBounds = &input.partitionBounds
 	} else if isFinal && m.currentPartitionBounds != nil {
-		// Subsequent task - verify partition bounds match.
+		// Check if partition bounds changed (work-stealing to different partition).
 		if !input.partitionBounds.Equal(*m.currentPartitionBounds) {
-			return nil, errors.Newf(
-				"task %d has different partition bounds [%s, %s) than current [%s, %s) - work-stealing not yet supported",
+			log.Dev.Infof(m.Ctx(), "task %d has different partition bounds [%s, %s), recreating iterator (previous bounds: [%s, %s))",
 				input.taskID,
 				input.partitionBounds.Key, input.partitionBounds.EndKey,
-				m.currentPartitionBounds.Key, m.currentPartitionBounds.EndKey,
-			)
+				m.currentPartitionBounds.Key, m.currentPartitionBounds.EndKey)
+
+			// Close old iterator and create new one for the new partition.
+			m.iter.Close()
+
+			iter, err := m.createIterForPartition(m.Ctx(), input.partitionBounds)
+			if err != nil {
+				return nil, err
+			}
+			m.iter = iter
+			m.currentPartitionBounds = &input.partitionBounds
 		}
 	}
 

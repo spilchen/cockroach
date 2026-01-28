@@ -49,6 +49,11 @@ type mergeCoordinator struct {
 	// Each worker is assigned a contiguous range of task spans, and partitionBounds[i]
 	// represents the min/max key range covering all spans assigned to worker i.
 	partitionBounds []roachpb.Span
+
+	// taskToPartition maps each task ID to its partition index.
+	// This is needed for work-stealing scenarios where a worker processes tasks
+	// from different partitions.
+	taskToPartition []int
 }
 
 type mergeCoordinatorInput struct {
@@ -139,15 +144,17 @@ func (m *mergeCoordinator) emitResults() (rowenc.EncDatumRow, *execinfrapb.Produ
 }
 
 func (m *mergeCoordinator) publishInitialTasks() {
-	for workerIdx, sqlInstanceID := range m.spec.WorkerSqlInstanceIds {
+	for _, sqlInstanceID := range m.spec.WorkerSqlInstanceIds {
 		taskID := m.tasks.ClaimFirst()
 		if taskID.IsDone() {
 			m.closeLoopback()
 			return
 		}
 
-		// Encode partition bounds for this worker.
-		partitionBoundsBytes, err := encodePartitionBounds(m.partitionBounds[workerIdx])
+		// Get partition bounds for this TASK (not this worker).
+		// This supports work-stealing where a worker may process tasks from different partitions.
+		partitionIdx := m.taskToPartition[taskID]
+		partitionBoundsBytes, err := encodePartitionBounds(m.partitionBounds[partitionIdx])
 		if err != nil {
 			// If we can't encode partition bounds, we have a serious problem.
 			// Close the loopback and the workers will get an error.
@@ -171,14 +178,17 @@ func (m *mergeCoordinator) closeLoopback() {
 }
 
 // computePartitionBounds divides the task spans across workers and computes
-// the min/max key range for each worker's partition. Returns a slice where
-// partitionBounds[i] is the key range covering all spans assigned to worker i.
-func computePartitionBounds(spans []roachpb.Span, numWorkers int) []roachpb.Span {
+// the min/max key range for each worker's partition. Returns partition bounds
+// and a mapping from task ID to partition index.
+func computePartitionBounds(
+	spans []roachpb.Span, numWorkers int,
+) (partitionBounds []roachpb.Span, taskToPartition []int) {
 	if numWorkers == 0 || len(spans) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	bounds := make([]roachpb.Span, numWorkers)
+	taskToPartition = make([]int, len(spans))
 
 	// Distribute spans evenly across workers using round-robin.
 	// Each worker gets roughly len(spans)/numWorkers spans.
@@ -205,10 +215,16 @@ func computePartitionBounds(spans []roachpb.Span, numWorkers int) []roachpb.Span
 			Key:    spans[start].Key,
 			EndKey: spans[end-1].EndKey,
 		}
+
+		// Map each task in this partition to the partition index.
+		for taskIdx := start; taskIdx < end; taskIdx++ {
+			taskToPartition[taskIdx] = i
+		}
+
 		start = end
 	}
 
-	return bounds
+	return bounds, taskToPartition
 }
 
 // encodePartitionBounds marshals a Span into bytes for transmission via loopback.
@@ -243,14 +259,10 @@ func (m *mergeCoordinator) handleRow(row rowenc.EncDatumRow) error {
 		return nil
 	}
 
-	// Get the worker index for this SQL instance ID to find partition bounds.
-	workerIdx := m.getWorkerIndex(input.sqlInstanceID)
-	if workerIdx < 0 {
-		return errors.Newf("unknown SQL instance ID: %s", input.sqlInstanceID)
-	}
-
-	// Encode partition bounds for this worker.
-	partitionBoundsBytes, err := encodePartitionBounds(m.partitionBounds[workerIdx])
+	// Get partition bounds for the NEXT TASK (not this worker).
+	// This supports work-stealing where a worker may process tasks from different partitions.
+	partitionIdx := m.taskToPartition[next]
+	partitionBoundsBytes, err := encodePartitionBounds(m.partitionBounds[partitionIdx])
 	if err != nil {
 		return errors.Wrap(err, "failed to encode partition bounds")
 	}
@@ -271,8 +283,10 @@ func (m *mergeCoordinator) Start(ctx context.Context) {
 
 	// Compute partition bounds for each worker based on the task spans.
 	// Each worker gets a contiguous range of spans, and we compute the
-	// min/max key range covering those spans.
-	m.partitionBounds = computePartitionBounds(m.spec.Spans, len(m.spec.WorkerSqlInstanceIds))
+	// min/max key range covering those spans. Also build a mapping from
+	// task ID to partition index for work-stealing scenarios.
+	m.partitionBounds, m.taskToPartition = computePartitionBounds(
+		m.spec.Spans, len(m.spec.WorkerSqlInstanceIds))
 
 	m.publishInitialTasks()
 }
