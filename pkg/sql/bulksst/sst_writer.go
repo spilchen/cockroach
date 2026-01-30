@@ -40,7 +40,8 @@ var _ kvserverbase.BulkAdder = &Writer{}
 var BatchSize = settings.RegisterByteSizeSetting(settings.ApplicationLevel,
 	"bulkio.sst_writer.batch_size",
 	"bytes to buffer in-memory per SST before the bulk writer flushes",
-	128*1024*1024)
+	1<<30, // 1GB
+)
 
 // NewUnsortedSSTBatcher creates a new SST batcher, a file allocator must be
 // provided which will be used to create new files either locally or remotely
