@@ -10,6 +10,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/base"
 	"github.com/cockroachdb/cockroach/pkg/cloud/cloudpb"
+	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
@@ -38,6 +39,22 @@ func newBulkMergePlan(
 		ctx, execCtx.ExtendedEvalContext(), execCtx.ExecCfg())
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Validate that all instances owning SST files are available before starting
+	// the distributed merge. This detects permanently unavailable instances early.
+	instances, err := execCtx.DistSQLPlanner().GetAllInstancesByLocality(ctx, roachpb.Locality{})
+	if err != nil {
+		return nil, nil, jobs.MarkAsRetryJobError(
+			errors.Wrap(err, "getting SQL instances for availability check"))
+	}
+
+	execCfg := execCtx.ExecCfg()
+	if execCfg.SQLLiveness != nil {
+		livenessReader := execCfg.SQLLiveness.BlockingReader()
+		if err := ValidateRequiredInstancesAvailable(ctx, ssts, instances, livenessReader); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	plan := planCtx.NewPhysicalPlan()

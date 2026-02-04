@@ -8,6 +8,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "bulkmerge",
     srcs = [
+        "instance_availability.go",
         "merge.go",
         "merge_coordinator.go",
         "merge_loopback.go",
@@ -23,6 +24,7 @@ go_library(
         "//pkg/ccl/storageccl",
         "//pkg/cloud/cloudpb",
         "//pkg/cloud/nodelocal",
+        "//pkg/jobs",
         "//pkg/keys",
         "//pkg/kv/bulk",
         "//pkg/roachpb",
@@ -37,6 +39,8 @@ go_library(
         "//pkg/sql/rowenc",
         "//pkg/sql/rowexec",
         "//pkg/sql/sem/tree",
+        "//pkg/sql/sqlinstance",
+        "//pkg/sql/sqlliveness",
         "//pkg/sql/types",
         "//pkg/storage",
         "//pkg/util/hlc",
@@ -52,6 +56,7 @@ go_library(
 go_test(
     name = "bulkmerge_test",
     srcs = [
+        "instance_availability_test.go",
         "main_test.go",
         "merge_test.go",
     ],
@@ -61,6 +66,7 @@ go_test(
         "//pkg/ccl/storageccl",
         "//pkg/cloud",
         "//pkg/cloud/externalconn/providers",
+        "//pkg/jobs",
         "//pkg/keys",
         "//pkg/kv/kvclient/kvtenant",
         "//pkg/kv/kvpb",
@@ -75,6 +81,8 @@ go_test(
         "//pkg/sql/execinfra",
         "//pkg/sql/execinfrapb",
         "//pkg/sql/sem/tree",
+        "//pkg/sql/sqlinstance",
+        "//pkg/sql/sqlliveness",
         "//pkg/storage",
         "//pkg/testutils",
         "//pkg/testutils/serverutils",
