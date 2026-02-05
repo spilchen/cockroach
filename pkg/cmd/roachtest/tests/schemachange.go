@@ -9,6 +9,8 @@ import (
 	"context"
 	gosql "database/sql"
 	"fmt"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
@@ -541,6 +543,40 @@ func scaleStatsSum(vals []float64) float64 {
 	return sum
 }
 
+// extractFinalMergeSSTCount searches the cluster logs for the final merge iteration
+// SST count and returns the highest value found. Returns 0 if not found (e.g., for
+// non-distributed merge runs).
+func extractFinalMergeSSTCount(ctx context.Context, t test.Test, c cluster.Cluster) int {
+	// Pattern: "final iteration X: opening iterator for Y SSTs"
+	// We want to extract Y from the highest iteration number
+	cmd := `grep -oE 'final iteration [0-9]+: opening iterator for [0-9]+ SSTs' {log-dir}/cockroach.log | tail -1`
+
+	results, err := c.RunWithDetails(ctx, nil, option.WithNodes(c.CRDBNodes()), cmd)
+	if err != nil {
+		t.L().Printf("Warning: failed to grep for SST count: %v", err)
+		return 0
+	}
+
+	// Pattern to extract the SST count from the log line
+	re := regexp.MustCompile(`opening iterator for (\d+) SSTs`)
+
+	maxSSTCount := 0
+	for _, res := range results {
+		if res.Err != nil || res.Stdout == "" {
+			continue
+		}
+		matches := re.FindStringSubmatch(res.Stdout)
+		if len(matches) >= 2 {
+			count, err := strconv.Atoi(matches[1])
+			if err == nil && count > maxSSTCount {
+				maxSSTCount = count
+			}
+		}
+	}
+
+	return maxSSTCount
+}
+
 func registerSchemaChangeBulkIngest(r registry.Registry) {
 	// Allow a long running time to account for runs that use a
 	// cockroach build with runtime assertions enabled.
@@ -907,6 +943,13 @@ func runBulkIngestScaleTest(
 	metricsEndTime := timeutil.Now()
 	perfStats := collectScaleTestStats(ctx, t, statCollector, metricsStartTime, metricsEndTime)
 
+	// Collect final merge SST count from logs (only meaningful for distributed merge)
+	var finalMergeSSTCount int
+	if distributedMerge {
+		finalMergeSSTCount = extractFinalMergeSSTCount(ctx, t, c)
+		t.L().Printf("Final merge iteration used %d SSTs", finalMergeSSTCount)
+	}
+
 	// Step 10: Report results
 	var resultError string
 	if err != nil {
@@ -914,11 +957,11 @@ func runBulkIngestScaleTest(
 	}
 	t.L().Printf("RESULT: rows=%d, dist=%v, order=%s, disk=%s, size_gb=%.2f, duration_sec=%.2f, "+
 		"avg_cpu=%.1f, max_cpu=%.1f, total_read_ops=%d, total_write_ops=%d, "+
-		"max_mem_gb=%.2f, success=%v%s",
+		"max_mem_gb=%.2f, final_merge_ssts=%d, success=%v%s",
 		numRows, distributedMerge, order, disk, logicalGB,
 		indexDuration.Seconds(),
 		perfStats.AvgCPU, perfStats.MaxCPU, perfStats.TotalReadOps, perfStats.TotalWriteOps,
-		perfStats.MaxMemoryGB,
+		perfStats.MaxMemoryGB, finalMergeSSTCount,
 		err == nil, resultError)
 
 	if err != nil {
