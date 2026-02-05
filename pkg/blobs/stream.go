@@ -39,7 +39,7 @@ var FlowControlWindow = settings.RegisterIntSetting(
 	settings.ApplicationLevel,
 	"bulkio.blob.flow_control_window",
 	"number of unacknowledged chunks the blob service can have in flight",
-	64, // default
+	32, // default
 	settings.IntInRange(1, 64),
 )
 
