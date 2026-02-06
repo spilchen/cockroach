@@ -1,0 +1,30 @@
+// Copyright 2026 The Cockroach Authors.
+//
+// Use of this software is governed by the CockroachDB Software License
+// included in the /LICENSE file.
+
+syntax = "proto3";
+package cockroach.sql.bulkmerge;
+option go_package = "github.com/cockroachdb/cockroach/pkg/sql/bulkmerge";
+
+import "gogoproto/gogo.proto";
+
+// InstanceUnavailabilityState tracks instance unavailability across job retries.
+// This state is stored in system.job_info under the instanceUnavailabilityInfoKey
+// to persist tracking across job restarts.
+message InstanceUnavailabilityState {
+  // first_failure_nanos is the wall clock time (in nanoseconds) when
+  // unavailability was first detected for the current failure window.
+  int64 first_failure_nanos = 1;
+
+  // retry_count is the number of retry attempts since first_failure_nanos.
+  int32 retry_count = 2;
+
+  // unavailable_instances contains the SQL instance IDs that were unavailable
+  // at the last check.
+  repeated int32 unavailable_instances = 3;
+
+  // last_check_nanos is the wall clock time (in nanoseconds) of the most
+  // recent availability check.
+  int64 last_check_nanos = 4;
+}

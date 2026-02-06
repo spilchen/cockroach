@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
+	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
@@ -22,6 +23,10 @@ import (
 
 // MergeOptions contains configuration for the distributed merge operation.
 type MergeOptions struct {
+	// JobID is the ID of the job that owns this merge operation. Used for
+	// tracking instance unavailability state across retries.
+	JobID jobspb.JobID
+
 	// Iteration is the current merge iteration (1-based).
 	Iteration int
 
@@ -142,6 +147,7 @@ func init() {
 	sql.RegisterBulkMerge(func(
 		ctx context.Context,
 		execCtx sql.JobExecContext,
+		jobID jobspb.JobID,
 		ssts []execinfrapb.BulkMergeSpec_SST,
 		spans []roachpb.Span,
 		genOutputURIAndRecordPrefix func(base.SQLInstanceID) (string, error),
@@ -151,6 +157,7 @@ func init() {
 		enforceUniqueness bool,
 	) ([]execinfrapb.BulkMergeSpec_SST, error) {
 		return Merge(ctx, execCtx, ssts, spans, genOutputURIAndRecordPrefix, MergeOptions{
+			JobID:             jobID,
 			Iteration:         iteration,
 			MaxIterations:     maxIterations,
 			WriteTimestamp:    writeTimestamp,

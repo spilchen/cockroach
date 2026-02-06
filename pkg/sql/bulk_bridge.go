@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
+	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/execinfrapb"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
@@ -18,6 +19,7 @@ import (
 type bulkMergeFunc func(
 	ctx context.Context,
 	execCtx JobExecContext,
+	jobID jobspb.JobID,
 	ssts []execinfrapb.BulkMergeSpec_SST,
 	spans []roachpb.Span,
 	genOutputURIAndRecordPrefix func(base.SQLInstanceID) (string, error),
@@ -38,6 +40,7 @@ func RegisterBulkMerge(fn bulkMergeFunc) {
 func invokeBulkMerge(
 	ctx context.Context,
 	execCtx JobExecContext,
+	jobID jobspb.JobID,
 	ssts []execinfrapb.BulkMergeSpec_SST,
 	spans []roachpb.Span,
 	genOutputURIAndRecordPrefix func(base.SQLInstanceID) (string, error),
@@ -50,7 +53,7 @@ func invokeBulkMerge(
 		return nil, errors.AssertionFailedf("bulk merge implementation not registered")
 	}
 	return registeredBulkMerge(
-		ctx, execCtx, ssts, spans, genOutputURIAndRecordPrefix,
+		ctx, execCtx, jobID, ssts, spans, genOutputURIAndRecordPrefix,
 		iteration, maxIterations, writeTimestamp, enforceUniqueness,
 	)
 }

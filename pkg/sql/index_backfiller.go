@@ -474,6 +474,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 		merged, err := invokeBulkMerge(
 			ctx,
 			jobExecCtx,
+			job.ID(),
 			currentSSTs,
 			mergeSpans,
 			genOutputURIAndRecordPrefix,
