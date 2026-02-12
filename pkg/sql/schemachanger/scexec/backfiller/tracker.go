@@ -195,6 +195,8 @@ func (b *Tracker) SetBackfillProgress(ctx context.Context, progress scexec.Backf
 	}
 	p.needsCheckpointFlush = true
 	p.needsFractionFlush = true
+	log.Dev.Infof(ctx, "added a cached backfill checkpoint for table %d, distributed merge phase is %d",
+		progress.Backfill.TableID, progress.DistributedMergePhase)
 	return nil
 }
 
@@ -259,6 +261,9 @@ func (b *Tracker) FlushCheckpoint(ctx context.Context) error {
 		return false
 	})
 	log.Dev.Infof(ctx, "writing %d backfill checkpoints and %d merge checkpoints", len(bps), len(mps))
+	if len(bps) > 0 {
+		log.Dev.Infof(ctx, "distribute merge phase in first backfill: %d\n", bps[0].DistributedMergePhase)
+	}
 	return b.writeCheckpoint(ctx, bps, mps)
 }
 

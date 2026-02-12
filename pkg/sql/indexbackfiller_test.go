@@ -56,6 +56,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/mon"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
+	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/errors/oserror"
 	"github.com/stretchr/testify/require"
@@ -1545,6 +1546,7 @@ func waitForCheckpointPersisted(
 	expectedSpans []roachpb.Span,
 	expectedPhase int32,
 ) {
+	t.Helper()
 	testutils.SucceedsWithin(t, func() error {
 		stmt := `SELECT payload FROM crdb_internal.system_jobs WHERE id = $1`
 		var payloadBytes []byte
@@ -1562,9 +1564,11 @@ func waitForCheckpointPersisted(
 			return errors.Errorf("no backfill progress found")
 		}
 
+		bp := schemaChangeDetails.BackfillProgress[0]
+
 		// If expectedSpans is provided, verify completed spans are checkpointed.
 		if len(expectedSpans) > 0 {
-			checkpointedSpans := schemaChangeDetails.BackfillProgress[0].CompletedSpans
+			checkpointedSpans := bp.CompletedSpans
 			var checkpointedGroup roachpb.SpanGroup
 			checkpointedGroup.Add(checkpointedSpans...)
 
@@ -1578,7 +1582,6 @@ func waitForCheckpointPersisted(
 		}
 
 		// Otherwise, verify SST manifests are checkpointed (iteration pause case).
-		bp := schemaChangeDetails.BackfillProgress[0]
 		if len(bp.SSTManifests) == 0 {
 			return errors.Errorf("no SST manifests checkpointed yet")
 		}
@@ -1586,7 +1589,7 @@ func waitForCheckpointPersisted(
 			return errors.Errorf("waiting for phase %d, current: %d",
 				expectedPhase, bp.DistributedMergePhase)
 		}
-		t.Logf("checkpoint contains %d SST manifests", len(bp.SSTManifests))
+		t.Logf("checkpoint contains %d SST manifests, phase=%d", len(bp.SSTManifests), bp.DistributedMergePhase)
 		return nil
 	}, 5*time.Second)
 }
@@ -1658,7 +1661,7 @@ func TestDistributedMergeResumePreservesProgress(t *testing.T) {
 				},
 				AfterDistributedMergeMapPhase: func(ctx context.Context, manifests []jobspb.IndexBackfillSSTManifest) {
 					state.mapPhaseManifestCount.Store(int32(len(manifests)))
-					t.Logf("[%s] after distributed merge map phase, manifests count: %d", state.currentTestName, len(manifests))
+					t.Logf("[%s] [%s] after distributed merge map phase, manifests count: %d", state.currentTestName, timeutil.Now().Format("15:04:05.000"), len(manifests))
 
 					if state.pauseAfterMapPhase {
 						t.Logf("[%s] map phase complete, blocking to allow test to pause job", state.currentTestName)
@@ -1669,7 +1672,7 @@ func TestDistributedMergeResumePreservesProgress(t *testing.T) {
 				AfterDistributedMergeIteration: func(ctx context.Context, iteration int, manifests []jobspb.IndexBackfillSSTManifest) {
 					state.currentIteration.Store(int32(iteration))
 					state.manifestCountByIteration[iteration] = len(manifests)
-					t.Logf("[%s] after distributed merge iteration %d, manifests count: %d", state.currentTestName, iteration, len(manifests))
+					t.Logf("[%s] [%s] after distributed merge iteration %d, manifests count: %d", state.currentTestName, timeutil.Now().Format("15:04:05.000"), iteration, len(manifests))
 
 					if len(manifests) == 0 {
 						t.Logf("[%s] final iteration %d completed (direct KV ingest)", state.currentTestName, iteration)
@@ -1679,7 +1682,7 @@ func TestDistributedMergeResumePreservesProgress(t *testing.T) {
 					// Only block if this is NOT the final iteration (len(manifests) > 0).
 					// On resume, the final iteration will have len(manifests)==0, and we don't want to block.
 					if state.pauseAfterIteration > 0 && iteration == state.pauseAfterIteration && len(manifests) > 0 {
-						t.Logf("[%s] iteration %d complete, blocking to allow test to pause job", state.currentTestName, iteration)
+						t.Logf("[%s] [%s] iteration %d complete, blocking to allow test to pause job", state.currentTestName, timeutil.Now().Format("15:04:05.000"), iteration)
 						<-state.iterationContinueCh
 						t.Logf("[%s] unblocked by test, continuing with remaining iterations", state.currentTestName)
 					}

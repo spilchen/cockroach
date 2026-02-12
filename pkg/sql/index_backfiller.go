@@ -133,6 +133,7 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 		if knobs.RunBeforeIndexBackfillProgressUpdate != nil {
 			knobs.RunBeforeIndexBackfillProgressUpdate(ctx, meta.BulkProcessorProgress.CompletedSpans)
 		}
+		log.Dev.Infof(ctx, "Setting backfill progress in updateFunc with distributed merge phase %d", progress.DistributedMergePhase)
 		return tracker.SetBackfillProgress(ctx, progress)
 	}
 	useDistributedMerge := mode == jobspb.IndexBackfillDistributedMergeMode_Enabled
@@ -158,6 +159,7 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 			return nil
 		}
 		progress.SSTStoragePrefixes = append(progress.SSTStoragePrefixes, newPrefixes...)
+		log.Dev.Infof(ctx, "Setting backfill progress in addStoragePrefix with distributed merge phase %d", progress.DistributedMergePhase)
 		return tracker.SetBackfillProgress(ctx, progress)
 	}
 
@@ -205,6 +207,17 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	if !useDistributedMerge {
 		return nil
 	}
+
+	// SPILLY - hack
+	log.Dev.Infof(ctx, "flushing after map phase with %d manifests", len(sstManifestBuf.Snapshot()))
+	flusher, ok := tracker.(scexec.BackfillerProgressFlusher)
+	if !ok {
+		return errors.AssertionFailedf("tracker does not implement BackfillerProgressFlusher")
+	}
+	if err := flusher.FlushCheckpoint(ctx); err != nil {
+		return err
+	}
+	log.Dev.Infof(ctx, "flushing after map phase done")
 
 	// Check if there are manifests to merge. On resume, sstManifestBuf is
 	// initialized from progress.SSTManifests (see NewSSTManifestBuffer call
@@ -493,6 +506,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 				progress.MergeIterationTasksTotal = mergeProgress.TasksTotal
 				progress.MergeIterationCompletedTasks = append(
 					progress.MergeIterationCompletedTasks, mergeProgress.CompletedTaskID)
+				log.Dev.Infof(ctx, "Setting backfill progress in onProgress with distributed merge phase %d", progress.DistributedMergePhase)
 				return tracker.SetBackfillProgress(ctx, *progress)
 			}
 			return nil
@@ -521,12 +535,11 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 			progress.DistributedMergePhase = int32(iteration)
 			progress.MergeIterationTasksTotal = 0
 			progress.MergeIterationCompletedTasks = nil
-			if err := tracker.SetBackfillProgress(ctx, *progress); err != nil {
+
+			// Update progress, flush checkpoint, and cleanup SST files atomically.
+			if err := ib.setBackfillProgressAndCleanup(ctx, progress, tracker, job.ID(), iteration); err != nil {
 				return err
 			}
-
-			// Clean up SST files from the previous iteration.
-			ib.cleanupPreviousIterationSSTs(ctx, job.ID(), progress.SSTStoragePrefixes, iteration)
 
 			// Call testing knob for final iteration (manifests will be nil/empty).
 			if fn := ib.execCfg.DistSQLSrv.TestingKnobs.AfterDistributedMergeIteration; fn != nil {
@@ -562,12 +575,11 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 		progress.DistributedMergePhase = int32(iteration)
 		progress.MergeIterationTasksTotal = 0
 		progress.MergeIterationCompletedTasks = nil
-		if err := tracker.SetBackfillProgress(ctx, *progress); err != nil {
+
+		// Update progress, flush checkpoint, and cleanup SST files atomically.
+		if err := ib.setBackfillProgressAndCleanup(ctx, progress, tracker, job.ID(), iteration); err != nil {
 			return err
 		}
-
-		// Clean up SST files from the previous stage.
-		ib.cleanupPreviousIterationSSTs(ctx, job.ID(), progress.SSTStoragePrefixes, iteration)
 
 		// Call testing knob after updating progress for this iteration.
 		if fn := ib.execCfg.DistSQLSrv.TestingKnobs.AfterDistributedMergeIteration; fn != nil {
@@ -577,6 +589,47 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 		// Use the output of this iteration as input to the next.
 		currentSSTs = merged
 	}
+
+	return nil
+}
+
+// setBackfillProgressAndCleanup updates the backfill progress, flushes the
+// checkpoint to ensure persistence, and then cleans up SST files from the
+// previous iteration.
+//
+// CRITICAL INVARIANT: SST files must only be deleted AFTER their replacement
+// manifests are safely persisted to the database. This function enforces that
+// invariant by flushing the checkpoint synchronously before cleanup.
+//
+// If this function is not used and SetBackfillProgress + cleanup are called
+// separately, there is a race condition: if the job pauses after cleanup but
+// before the periodic checkpoint flush runs, the checkpoint will reference
+// deleted SST files, causing job failure on resume.
+func (ib *IndexBackfillPlanner) setBackfillProgressAndCleanup(
+	ctx context.Context,
+	progress *scexec.BackfillProgress,
+	tracker scexec.BackfillerProgressWriter,
+	jobID jobspb.JobID,
+	iteration int,
+) error {
+	log.Dev.Infof(ctx, "Setting backfill progress and cleaning up SSTs for iteration %d with distributed merge phase %d", iteration, progress.DistributedMergePhase)
+	// Update progress in memory (sets needsCheckpointFlush flag).
+	if err := tracker.SetBackfillProgress(ctx, *progress); err != nil {
+		return err
+	}
+
+	// CRITICAL: Flush checkpoint to database before cleaning up SST files.
+	// This ensures updated manifest references are persisted.
+	flusher, ok := tracker.(scexec.BackfillerProgressFlusher)
+	if !ok {
+		return errors.AssertionFailedf("tracker does not implement BackfillerProgressFlusher")
+	}
+	if err := flusher.FlushCheckpoint(ctx); err != nil {
+		return err
+	}
+
+	// Now safe to clean up SST files from the previous iteration.
+	ib.cleanupPreviousIterationSSTs(ctx, jobID, progress.SSTStoragePrefixes, iteration)
 
 	return nil
 }
