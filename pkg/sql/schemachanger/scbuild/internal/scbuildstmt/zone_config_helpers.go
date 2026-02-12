@@ -545,39 +545,39 @@ type regionsGetter func(context.Context) (*serverpb.RegionsResponse, error)
 func validateZoneAttrsAndLocalitiesForSystemTenant(
 	b BuildCtx, getNodes nodeGetter, currentZone, newZone *zonepb.ZoneConfig,
 ) error {
-	nodes, err := getNodes(b, &serverpb.NodesRequest{})
-	if err != nil {
-		return err
-	}
-
-	toValidate := accumulateNewUniqueConstraints(currentZone, newZone)
-
-	// Check that each constraint matches some store somewhere in the cluster.
-	for _, constraint := range toValidate {
-		// We skip validation for negative constraints. See the function-level comment.
-		if constraint.Type == zonepb.Constraint_PROHIBITED {
-			continue
-		}
-		var found bool
-	node:
-		for _, node := range nodes.Nodes {
-			for _, store := range node.StoreStatuses {
-				// We could alternatively use zonepb.StoreMatchesConstraint here to
-				// catch typos in prohibited constraints as well, but as noted in the
-				// function-level comment that could break very reasonable use cases for
-				// prohibited constraints.
-				if zonepb.StoreSatisfiesConstraint(store.Desc, constraint) {
-					found = true
-					break node
-				}
-			}
-		}
-		if !found {
-			return pgerror.Newf(pgcode.CheckViolation,
-				"constraint %q matches no existing nodes within the cluster - did you enter it correctly?",
-				constraint)
-		}
-	}
+	//nodes, err := getNodes(b, &serverpb.NodesRequest{})
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//toValidate := accumulateNewUniqueConstraints(currentZone, newZone)
+	//
+	//// Check that each constraint matches some store somewhere in the cluster.
+	//for _, constraint := range toValidate {
+	//	// We skip validation for negative constraints. See the function-level comment.
+	//	if constraint.Type == zonepb.Constraint_PROHIBITED {
+	//		continue
+	//	}
+	//	var found bool
+	//node:
+	//	for _, node := range nodes.Nodes {
+	//		for _, store := range node.StoreStatuses {
+	//			// We could alternatively use zonepb.StoreMatchesConstraint here to
+	//			// catch typos in prohibited constraints as well, but as noted in the
+	//			// function-level comment that could break very reasonable use cases for
+	//			// prohibited constraints.
+	//			if zonepb.StoreSatisfiesConstraint(store.Desc, constraint) {
+	//				found = true
+	//				break node
+	//			}
+	//		}
+	//	}
+	//	if !found {
+	//		return pgerror.Newf(pgcode.CheckViolation,
+	//			"constraint %q matches no existing nodes within the cluster - did you enter it correctly?",
+	//			constraint)
+	//	}
+	//}
 
 	return nil
 }

@@ -2059,10 +2059,6 @@ func (p *planner) optimizeSystemDatabase(ctx context.Context) error {
 	}
 
 	// Configure by region tables next.
-	primaryRegionName, err := systemDB.PrimaryRegionName()
-	if err != nil {
-		return err
-	}
 	for _, tableName := range regionTables {
 		descriptor, err := getDescriptor(tableName)
 		// Some system tables only come into effect once the
@@ -2073,7 +2069,7 @@ func (p *planner) optimizeSystemDatabase(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		descriptor.SetTableLocalityRegionalByTable(tree.Name(primaryRegionName))
+		descriptor.SetTableLocalityRegionalByTable(tree.PrimaryRegionNotSpecifiedName)
 		if err := applyLocalityChange(descriptor, "global"); err != nil {
 			return err
 		}

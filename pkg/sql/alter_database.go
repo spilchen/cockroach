@@ -609,7 +609,196 @@ func (p *planner) checkCanDropSystemDatabaseRegion(
 		}
 	}
 
+	// Check if any system tables have explicit REGIONAL BY TABLE locality configs
+	// referencing the region being dropped. This catches legacy tables from before
+	// commit f4dfcade908 that have explicit regions instead of using the PRIMARY
+	// REGION sentinel.
+	if err := p.checkSystemTableLocalityConfigsForRegion(ctx, region); err != nil {
+		return err
+	}
+
+	// Check if any system tables have explicit zone configurations referencing
+	// the region being dropped. This catches cases where primary region switches
+	// leave stale zone configs pointing to the old region.
+	if err := p.checkSystemTableZoneConfigsForRegion(ctx, region); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// checkSystemTableLocalityConfigsForRegion validates that no system tables have
+// explicit REGIONAL BY TABLE locality configurations referencing the region
+// being dropped. This catches legacy tables from before commit f4dfcade908 that
+// have explicit regions stored in their descriptors instead of using the PRIMARY
+// REGION sentinel (nil region).
+func (p *planner) checkSystemTableLocalityConfigsForRegion(
+	ctx context.Context, region catpb.RegionName,
+) error {
+	// Get all table descriptors in the system database.
+	allDescs, err := p.Descriptors().GetAllDescriptors(ctx, p.txn)
+	if err != nil {
+		return err
+	}
+
+	var systemTables []catalog.TableDescriptor
+	if err := allDescs.ForEachDescriptor(func(desc catalog.Descriptor) error {
+		if desc.GetParentID() == keys.SystemDatabaseID {
+			if tableDesc, ok := desc.(catalog.TableDescriptor); ok {
+				if !tableDesc.Dropped() {
+					systemTables = append(systemTables, tableDesc)
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// For each system table, check if it has an explicit REGIONAL BY TABLE locality
+	// configuration referencing the region being dropped.
+	for _, tableDesc := range systemTables {
+		// Check if table has REGIONAL BY TABLE locality with an EXPLICIT region.
+		if !tableDesc.IsLocalityRegionalByTable() {
+			continue
+		}
+
+		localityConfig := tableDesc.GetLocalityConfig()
+		if localityConfig == nil {
+			continue
+		}
+
+		rbtConfig := localityConfig.GetRegionalByTable()
+		if rbtConfig == nil {
+			continue
+		}
+
+		// Check if Region is explicitly set (not nil PRIMARY REGION sentinel).
+		// Region == nil means the table uses PRIMARY REGION sentinel (modern).
+		// Region != nil means the table has an explicit region (legacy).
+		if rbtConfig.Region == nil {
+			continue
+		}
+
+		explicitRegion := *rbtConfig.Region
+		// If the explicit region matches the one being dropped, block it.
+		if explicitRegion == region {
+			return errors.WithHintf(
+				pgerror.Newf(
+					pgcode.DependentObjectsStillExist,
+					"cannot drop region %q from the system database: table %s has REGIONAL BY TABLE locality in this region",
+					region,
+					tableDesc.GetName(),
+				),
+				"Run: ALTER TABLE system.%s SET LOCALITY REGIONAL BY TABLE IN PRIMARY REGION",
+				tableDesc.GetName(),
+			)
+		}
+	}
+
+	return nil
+}
+
+// checkSystemTableZoneConfigsForRegion validates that no system tables have
+// explicit zone configurations referencing the region being dropped.
+func (p *planner) checkSystemTableZoneConfigsForRegion(
+	ctx context.Context, region catpb.RegionName,
+) error {
+	// Get all table descriptors in the system database.
+	allDescs, err := p.Descriptors().GetAllDescriptors(ctx, p.txn)
+	if err != nil {
+		return err
+	}
+
+	var systemTables []catalog.TableDescriptor
+	if err := allDescs.ForEachDescriptor(func(desc catalog.Descriptor) error {
+		if desc.GetParentID() == keys.SystemDatabaseID {
+			if tableDesc, ok := desc.(catalog.TableDescriptor); ok {
+				if !tableDesc.Dropped() {
+					systemTables = append(systemTables, tableDesc)
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// For each system table, check if it has an explicit zone config that
+	// references the region being dropped.
+	for _, tableDesc := range systemTables {
+		zoneConfig, err := p.Descriptors().GetZoneConfig(ctx, p.txn, tableDesc.GetID())
+		if err != nil {
+			return errors.Wrapf(err, "failed to get zone config for table %s", tableDesc.GetName())
+		}
+
+		// Skip if the table doesn't have an explicit zone config, or if it's
+		// just a subzone placeholder.
+		if zoneConfig == nil || zoneConfig.ZoneConfigProto().IsSubzonePlaceholder() {
+			continue
+		}
+
+		// Extract region references from EXPLICIT (non-inherited) zone config
+		// settings.
+		regions := extractRegionsFromZoneConfig(zoneConfig.ZoneConfigProto())
+		if _, found := regions[string(region)]; found {
+			return errors.WithHintf(
+				pgerror.Newf(
+					pgcode.DependentObjectsStillExist,
+					"cannot drop region %q from the system database: table %s has a zone configuration referencing this region",
+					region,
+					tableDesc.GetName(),
+				),
+				"Remove the zone configuration with ALTER TABLE system.%s CONFIGURE ZONE DISCARD, "+
+					"or update it to not reference region %q",
+				tableDesc.GetName(),
+				region,
+			)
+		}
+	}
+
+	return nil
+}
+
+// extractRegionsFromZoneConfig extracts all region names referenced in a zone
+// config's EXPLICIT (non-inherited) constraints, voter_constraints, and
+// lease_preferences.
+func extractRegionsFromZoneConfig(zc *zonepb.ZoneConfig) map[string]struct{} {
+	regions := make(map[string]struct{})
+
+	// Helper to extract regions from a list of constraints.
+	extractFromConstraints := func(conjunctions []zonepb.ConstraintsConjunction) {
+		for _, conjunction := range conjunctions {
+			for _, constraint := range conjunction.Constraints {
+				if constraint.Key == "region" {
+					regions[constraint.Value] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// Check constraints field (only if not inherited).
+	if !zc.InheritedConstraints {
+		extractFromConstraints(zc.Constraints)
+	}
+
+	// Check voter_constraints field (only if not inherited).
+	if !zc.InheritedVoterConstraints() {
+		extractFromConstraints(zc.VoterConstraints)
+	}
+
+	// Check lease_preferences field (only if not inherited).
+	if !zc.InheritedLeasePreferences {
+		for _, pref := range zc.LeasePreferences {
+			for _, constraint := range pref.Constraints {
+				if constraint.Key == "region" {
+					regions[constraint.Value] = struct{}{}
+				}
+			}
+		}
+	}
+
+	return regions
 }
 
 // checkPrivilegesForMultiRegionOp ensures the current user has the required
