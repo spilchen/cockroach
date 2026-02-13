@@ -536,8 +536,8 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 			progress.MergeIterationTasksTotal = 0
 			progress.MergeIterationCompletedTasks = nil
 
-			// Update progress, flush checkpoint, and cleanup SST files atomically.
-			if err := ib.setBackfillProgressAndCleanup(ctx, progress, tracker, job.ID(), iteration); err != nil {
+			// Update progress. Periodic flusher will persist and trigger cleanup on phase change.
+			if err := ib.setBackfillProgress(ctx, progress, tracker); err != nil {
 				return err
 			}
 
@@ -577,7 +577,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 		progress.MergeIterationCompletedTasks = nil
 
 		// Update progress, flush checkpoint, and cleanup SST files atomically.
-		if err := ib.setBackfillProgressAndCleanup(ctx, progress, tracker, job.ID(), iteration); err != nil {
+		if err := ib.setBackfillProgress(ctx, progress, tracker); err != nil {
 			return err
 		}
 
@@ -593,71 +593,22 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	return nil
 }
 
-// setBackfillProgressAndCleanup updates the backfill progress, flushes the
-// checkpoint to ensure persistence, and then cleans up SST files from the
-// previous iteration.
+// setBackfillProgress updates the backfill progress and marks it for checkpoint flush.
+// The progress will be persisted by the periodic flusher, and cleanup will be triggered
+// automatically when the tracker detects the persisted phase transition.
 //
-// CRITICAL INVARIANT: SST files must only be deleted AFTER their replacement
-// manifests are safely persisted to the database. This function enforces that
-// invariant by flushing the checkpoint synchronously before cleanup.
-//
-// If this function is not used and SetBackfillProgress + cleanup are called
-// separately, there is a race condition: if the job pauses after cleanup but
-// before the periodic checkpoint flush runs, the checkpoint will reference
-// deleted SST files, causing job failure on resume.
-func (ib *IndexBackfillPlanner) setBackfillProgressAndCleanup(
+// IMPORTANT: Do not call FlushCheckpoint() manually here. Doing so would create a race
+// condition with the periodic flusher. The single-threaded periodic flusher is the only
+// caller of FlushCheckpoint(), ensuring no concurrent writes can occur.
+func (ib *IndexBackfillPlanner) setBackfillProgress(
 	ctx context.Context,
 	progress *scexec.BackfillProgress,
 	tracker scexec.BackfillerProgressWriter,
-	jobID jobspb.JobID,
-	iteration int,
 ) error {
-	log.Dev.Infof(ctx, "Setting backfill progress and cleaning up SSTs for iteration %d with distributed merge phase %d", iteration, progress.DistributedMergePhase)
-	// Update progress in memory (sets needsCheckpointFlush flag).
-	if err := tracker.SetBackfillProgress(ctx, *progress); err != nil {
-		return err
-	}
+	log.Dev.Infof(ctx, "Setting backfill progress: phase=%d, manifests=%d",
+		progress.DistributedMergePhase, len(progress.SSTManifests))
 
-	// CRITICAL: Flush checkpoint to database before cleaning up SST files.
-	// This ensures updated manifest references are persisted.
-	flusher, ok := tracker.(scexec.BackfillerProgressFlusher)
-	if !ok {
-		return errors.AssertionFailedf("tracker does not implement BackfillerProgressFlusher")
-	}
-	if err := flusher.FlushCheckpoint(ctx); err != nil {
-		return err
-	}
-
-	// Now safe to clean up SST files from the previous iteration.
-	ib.cleanupPreviousIterationSSTs(ctx, jobID, progress.SSTStoragePrefixes, iteration)
-
-	return nil
-}
-
-// cleanupPreviousIterationSSTs removes SST files from the previous stage of the
-// distributed merge. This is a best-effort operation; errors are logged but
-// don't fail the job.
-func (ib *IndexBackfillPlanner) cleanupPreviousIterationSSTs(
-	ctx context.Context, jobID jobspb.JobID, storagePrefixes []string, completedIteration int,
-) {
-	if len(storagePrefixes) == 0 {
-		return
-	}
-
-	subdirectory := bulkutil.NewDistMergePaths(jobID).InputSubdir(completedIteration)
-
-	cleaner := bulkutil.NewBulkJobCleaner(
-		ib.execCfg.DistSQLSrv.ExternalStorageFromURI,
-		username.NodeUserName(),
-	)
-	defer func() {
-		if err := cleaner.Close(); err != nil {
-			log.Ops.Warningf(ctx, "error closing bulk job cleaner: %v", err)
-		}
-	}()
-
-	if err := cleaner.CleanupJobSubdirectory(ctx, jobID, storagePrefixes, subdirectory); err != nil {
-		log.Ops.Warningf(ctx, "failed to cleanup previous iteration SSTs (job %d, subdirectory %s): %v",
-			jobID, subdirectory, err)
-	}
+	// Update in-memory progress and set needsCheckpointFlush flag.
+	// Periodic flusher will persist this and trigger cleanup on phase change.
+	return tracker.SetBackfillProgress(ctx, *progress)
 }

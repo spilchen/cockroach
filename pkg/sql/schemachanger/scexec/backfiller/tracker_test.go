@@ -108,7 +108,7 @@ func TestBackfillerTracker(t *testing.T) {
 		ctx := context.Background()
 		var bts backfillerTrackerTestState
 		bts.mu.rangeSpans = tc.rangeSpans
-		tr := newTracker(keys.SystemSQLCodec, bts.cfg(), tc.backfillProgress, tc.mergeProgress)
+		tr := newTracker(keys.SystemSQLCodec, bts.cfg(), 1 /* jobID */, tc.backfillProgress, tc.mergeProgress)
 
 		t.Run("retrieving initial state", func(t *testing.T) {
 			{
@@ -231,7 +231,7 @@ func TestBackfillerTracker(t *testing.T) {
 		ctx := context.Background()
 		var bts backfillerTrackerTestState
 		bts.mu.rangeSpans = tc.rangeSpans
-		tr := newTracker(keys.SystemSQLCodec, bts.cfg(), tc.backfillProgress, tc.mergeProgress)
+		tr := newTracker(keys.SystemSQLCodec, bts.cfg(), 1 /* jobID */, tc.backfillProgress, tc.mergeProgress)
 
 		t.Run("retrieving initial state", func(t *testing.T) {
 			{
