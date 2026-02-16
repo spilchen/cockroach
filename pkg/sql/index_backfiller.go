@@ -488,6 +488,16 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 
 		// Final iteration: data is ingested into KV, we're done.
 		if iteration == maxIterations {
+			// Check pausepoint after final merge iteration completes but before
+			// clearing manifests. This allows the job to be paused for memory
+			// profiling, and on resume the final iteration will re-run since
+			// manifests are still present.
+			if err := ib.execCfg.JobRegistry.CheckPausepoint(
+				"distribute_merge.after_final_iteration",
+			); err != nil {
+				return err
+			}
+
 			// Clear manifests to indicate completion.
 			progress.SSTManifests = nil
 			if err := tracker.SetBackfillProgress(ctx, *progress); err != nil {
