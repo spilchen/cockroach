@@ -27,8 +27,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 )
 
-type ExternalStorageFactory = cloud.ExternalStorageFromURIFactory
-
 // NewJobRunDependencies returns an scrun.JobRunDependencies implementation built from the
 // given arguments.
 func NewJobRunDependencies(
@@ -51,7 +49,7 @@ func NewJobRunDependencies(
 	statements []string,
 	sessionData *sessiondata.SessionData,
 	kvTrace bool,
-	externalStorageFactory ExternalStorageFactory,
+	externalStorageFactory cloud.ExternalStorageFromURIFactory,
 ) scrun.JobRunDependencies {
 	return &jobExecutionDeps{
 		collectionFactory:      collectionFactory,
@@ -91,7 +89,7 @@ type jobExecutionDeps struct {
 	jobRegistry            *jobs.Registry
 	job                    *jobs.Job
 	kvTrace                bool
-	externalStorageFactory ExternalStorageFactory
+	externalStorageFactory cloud.ExternalStorageFromURIFactory
 
 	indexValidator scexec.Validator
 
@@ -124,14 +122,13 @@ func (d *jobExecutionDeps) WithTxnInJob(ctx context.Context, fn scrun.JobTxnFunc
 		pl := d.job.Payload()
 
 		// Create tracker with cleanup capability (all in backfiller package).
-		tracker := backfiller.NewTrackerWithCleanup(
+		tracker := backfiller.NewTracker(
 			d.codec,
 			d.rangeCounter,
 			d.job,
 			d.db,
 			pl.GetNewSchemaChange().BackfillProgress,
 			pl.GetNewSchemaChange().MergeProgress,
-			d.job.ID(),
 			d.externalStorageFactory,
 			func(tableID descpb.ID) []string {
 				// Closure to get storage prefixes from job payload.

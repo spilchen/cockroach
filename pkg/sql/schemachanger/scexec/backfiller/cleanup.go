@@ -58,7 +58,7 @@ func (c *phaseTransitionCleaner) cleanupTransition(
 	)
 	defer func() {
 		if err := cleaner.Close(); err != nil {
-			log.Ops.Warningf(ctx, "error closing bulk job cleaner: %v", err)
+			log.Dev.Warningf(ctx, "error closing bulk job cleaner: %v", err)
 		}
 	}()
 

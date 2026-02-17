@@ -55,7 +55,13 @@ type Tracker struct {
 	}
 }
 
+var _ scexec.BackfillerTracker = (*Tracker)(nil)
+
 // NewTracker constructs a new Tracker.
+//
+// If externalStorageFactory and getStoragePrefixes are non-nil, the tracker
+// will perform SST cleanup when phase transitions are detected. If they are
+// nil, cleanup is disabled.
 func NewTracker(
 	codec keys.SQLCodec,
 	counter RangeCounter,
@@ -63,40 +69,25 @@ func NewTracker(
 	db isql.DB,
 	jobBackfillProgress []jobspb.BackfillProgress,
 	jobMergeProgress []jobspb.MergeProgress,
-) *Tracker {
-	return newTracker(
-		codec,
-		newTrackerConfig(codec, counter, job, db),
-		convertFromJobBackfillProgress(codec, jobBackfillProgress),
-		convertFromJobMergeProgress(codec, jobMergeProgress),
-	)
-}
-
-// NewTrackerWithCleanup constructs a new Tracker with SST cleanup capability.
-func NewTrackerWithCleanup(
-	codec keys.SQLCodec,
-	counter RangeCounter,
-	job *jobs.Job,
-	db isql.DB,
-	jobBackfillProgress []jobspb.BackfillProgress,
-	jobMergeProgress []jobspb.MergeProgress,
-	jobID jobspb.JobID,
 	externalStorageFactory cloud.ExternalStorageFromURIFactory,
 	getStoragePrefixes func(descpb.ID) []string,
 ) *Tracker {
-	cleaner := &phaseTransitionCleaner{
-		jobID:                  jobID,
-		externalStorageFactory: externalStorageFactory,
-		getStoragePrefixes:     getStoragePrefixes,
-	}
-
 	tr := newTracker(
 		codec,
 		newTrackerConfig(codec, counter, job, db),
 		convertFromJobBackfillProgress(codec, jobBackfillProgress),
 		convertFromJobMergeProgress(codec, jobMergeProgress),
 	)
-	tr.cleaner = cleaner
+
+	// Configure cleanup if dependencies provided.
+	if externalStorageFactory != nil && getStoragePrefixes != nil {
+		tr.cleaner = &phaseTransitionCleaner{
+			jobID:                  job.ID(),
+			externalStorageFactory: externalStorageFactory,
+			getStoragePrefixes:     getStoragePrefixes,
+		}
+	}
+
 	return tr
 }
 
@@ -223,8 +214,6 @@ func (b *Tracker) SetBackfillProgress(ctx context.Context, progress scexec.Backf
 	}
 	p.needsCheckpointFlush = true
 	p.needsFractionFlush = true
-	log.Dev.Infof(ctx, "added a cached backfill checkpoint for table %d, distributed merge phase is %d",
-		progress.Backfill.TableID, progress.DistributedMergePhase)
 	return nil
 }
 
@@ -289,20 +278,13 @@ func (b *Tracker) FlushCheckpoint(ctx context.Context) error {
 		return false
 	})
 	log.Dev.Infof(ctx, "writing %d backfill checkpoints and %d merge checkpoints", len(bps), len(mps))
-	if len(bps) > 0 {
-		log.Dev.Infof(ctx, "distribute merge phase in first backfill: %d\n", bps[0].DistributedMergePhase)
-	}
-
-	// Write checkpoint to database.
 	if err := b.writeCheckpoint(ctx, bps, mps); err != nil {
 		return err
 	}
 
 	// After successful write, detect phase transitions and handle cleanup.
-	transitions := b.detectPhaseTransitions(ctx, bps)
-
-	// Handle cleanup (if cleaner configured).
 	if b.cleaner != nil {
+		transitions := b.detectPhaseTransitions(ctx, bps)
 		for _, transition := range transitions {
 			if err := b.cleaner.cleanupTransition(ctx, transition); err != nil {
 				log.Ops.Warningf(ctx, "phase transition cleanup failed: %v", err)
