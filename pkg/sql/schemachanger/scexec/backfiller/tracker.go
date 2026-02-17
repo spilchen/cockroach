@@ -33,8 +33,9 @@ type RangeCounter interface {
 	) (total, inContainedBy int, _ error)
 }
 
-// PhaseTransition represents a detected phase change after checkpoint persistence.
-type PhaseTransition struct {
+// DistributedMergePhaseTransition represents a detected phase change in the
+// distributed merge pipeline after checkpoint persistence.
+type DistributedMergePhaseTransition struct {
 	TableID  descpb.ID
 	OldPhase int32
 	NewPhase int32
@@ -241,7 +242,7 @@ func (b *Tracker) FlushFractionCompleted(ctx context.Context) error {
 // FlushCheckpoint is part of the scexec.BackfillerProgressFlusher interface.
 // It returns a list of detected phase transitions that occurred after persisting
 // the checkpoint to the database.
-func (b *Tracker) FlushCheckpoint(ctx context.Context) ([]PhaseTransition, error) {
+func (b *Tracker) FlushCheckpoint(ctx context.Context) ([]DistributedMergePhaseTransition, error) {
 	needsFlush, bps, mps := b.collectProgressForCheckpointFlush()
 	if !needsFlush {
 		log.Dev.VInfof(ctx, 2, "backfill has no checkpoint to flush")
@@ -281,7 +282,7 @@ func (b *Tracker) FlushCheckpoint(ctx context.Context) ([]PhaseTransition, error
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	var transitions []PhaseTransition
+	var transitions []DistributedMergePhaseTransition
 	for _, bp := range bps {
 		key := toBackfillKey(bp.Backfill)
 		p, exists := b.mu.backfillProgress[key]
@@ -293,11 +294,11 @@ func (b *Tracker) FlushCheckpoint(ctx context.Context) ([]PhaseTransition, error
 		newPhase := bp.DistributedMergePhase
 
 		if oldPhase != newPhase {
-			log.Dev.Infof(ctx, "detected persisted phase transition for table %d: phase %d → %d",
+			log.Dev.Infof(ctx, "detected persisted distributed merge phase transition for table %d: phase %d → %d",
 				bp.Backfill.TableID, oldPhase, newPhase)
 
 			// Record the transition.
-			transitions = append(transitions, PhaseTransition{
+			transitions = append(transitions, DistributedMergePhaseTransition{
 				TableID:  bp.Backfill.TableID,
 				OldPhase: oldPhase,
 				NewPhase: newPhase,

@@ -139,7 +139,7 @@ func (t *trackerWithCleanup) FlushCheckpoint(ctx context.Context) error {
 	// Orchestrate cleanup for each transition.
 	for _, transition := range transitions {
 		if err := t.cleaner.cleanupTransition(ctx, transition); err != nil {
-			log.Ops.Warningf(ctx, "phase transition cleanup failed: %v", err)
+			log.Dev.Warningf(ctx, "phase transition cleanup failed: %v", err)
 		}
 	}
 
@@ -148,7 +148,7 @@ func (t *trackerWithCleanup) FlushCheckpoint(ctx context.Context) error {
 
 // cleanupTransition performs SST cleanup for a single phase transition.
 func (c *phaseTransitionCleaner) cleanupTransition(
-	ctx context.Context, transition backfiller.PhaseTransition,
+	ctx context.Context, transition backfiller.DistributedMergePhaseTransition,
 ) error {
 	log.Dev.Infof(ctx, "triggering SST cleanup for job %d, table %d after phase %d→%d transition",
 		c.jobID, transition.TableID, transition.OldPhase, transition.NewPhase)
@@ -174,7 +174,7 @@ func (c *phaseTransitionCleaner) cleanupTransition(
 	)
 	defer func() {
 		if err := cleaner.Close(); err != nil {
-			log.Ops.Warningf(ctx, "error closing bulk job cleaner: %v", err)
+			log.Dev.Warningf(ctx, "error closing bulk job cleaner: %v", err)
 		}
 	}()
 

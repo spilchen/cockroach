@@ -30,7 +30,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/admission/admissionpb"
 	"github.com/cockroachdb/cockroach/pkg/util/buildutil"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
-	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/errors"
 	gogotypes "github.com/gogo/protobuf/types"
@@ -133,7 +132,6 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 		if knobs.RunBeforeIndexBackfillProgressUpdate != nil {
 			knobs.RunBeforeIndexBackfillProgressUpdate(ctx, meta.BulkProcessorProgress.CompletedSpans)
 		}
-		log.Dev.Infof(ctx, "Setting backfill progress in updateFunc with distributed merge phase %d", progress.DistributedMergePhase)
 		return tracker.SetBackfillProgress(ctx, progress)
 	}
 	useDistributedMerge := mode == jobspb.IndexBackfillDistributedMergeMode_Enabled
@@ -159,7 +157,6 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 			return nil
 		}
 		progress.SSTStoragePrefixes = append(progress.SSTStoragePrefixes, newPrefixes...)
-		log.Dev.Infof(ctx, "Setting backfill progress in addStoragePrefix with distributed merge phase %d", progress.DistributedMergePhase)
 		return tracker.SetBackfillProgress(ctx, progress)
 	}
 
@@ -207,17 +204,6 @@ func (ib *IndexBackfillPlanner) BackfillIndexes(
 	if !useDistributedMerge {
 		return nil
 	}
-
-	// SPILLY - hack
-	log.Dev.Infof(ctx, "flushing after map phase with %d manifests", len(sstManifestBuf.Snapshot()))
-	flusher, ok := tracker.(scexec.BackfillerProgressFlusher)
-	if !ok {
-		return errors.AssertionFailedf("tracker does not implement BackfillerProgressFlusher")
-	}
-	if err := flusher.FlushCheckpoint(ctx); err != nil {
-		return err
-	}
-	log.Dev.Infof(ctx, "flushing after map phase done")
 
 	// Check if there are manifests to merge. On resume, sstManifestBuf is
 	// initialized from progress.SSTManifests (see NewSSTManifestBuffer call
@@ -506,7 +492,6 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 				progress.MergeIterationTasksTotal = mergeProgress.TasksTotal
 				progress.MergeIterationCompletedTasks = append(
 					progress.MergeIterationCompletedTasks, mergeProgress.CompletedTaskID)
-				log.Dev.Infof(ctx, "Setting backfill progress in onProgress with distributed merge phase %d", progress.DistributedMergePhase)
 				return tracker.SetBackfillProgress(ctx, *progress)
 			}
 			return nil
@@ -535,9 +520,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 			progress.DistributedMergePhase = int32(iteration)
 			progress.MergeIterationTasksTotal = 0
 			progress.MergeIterationCompletedTasks = nil
-
-			// Update progress. Periodic flusher will persist and trigger cleanup on phase change.
-			if err := ib.setBackfillProgress(ctx, progress, tracker); err != nil {
+			if err := tracker.SetBackfillProgress(ctx, *progress); err != nil {
 				return err
 			}
 
@@ -575,9 +558,7 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 		progress.DistributedMergePhase = int32(iteration)
 		progress.MergeIterationTasksTotal = 0
 		progress.MergeIterationCompletedTasks = nil
-
-		// Update progress, flush checkpoint, and cleanup SST files atomically.
-		if err := ib.setBackfillProgress(ctx, progress, tracker); err != nil {
+		if err := tracker.SetBackfillProgress(ctx, *progress); err != nil {
 			return err
 		}
 
@@ -591,24 +572,4 @@ func (ib *IndexBackfillPlanner) runDistributedMerge(
 	}
 
 	return nil
-}
-
-// setBackfillProgress updates the backfill progress and marks it for checkpoint flush.
-// The progress will be persisted by the periodic flusher, and cleanup will be triggered
-// automatically when the tracker detects the persisted phase transition.
-//
-// IMPORTANT: Do not call FlushCheckpoint() manually here. Doing so would create a race
-// condition with the periodic flusher. The single-threaded periodic flusher is the only
-// caller of FlushCheckpoint(), ensuring no concurrent writes can occur.
-func (ib *IndexBackfillPlanner) setBackfillProgress(
-	ctx context.Context,
-	progress *scexec.BackfillProgress,
-	tracker scexec.BackfillerProgressWriter,
-) error {
-	log.Dev.Infof(ctx, "Setting backfill progress: phase=%d, manifests=%d",
-		progress.DistributedMergePhase, len(progress.SSTManifests))
-
-	// Update in-memory progress and set needsCheckpointFlush flag.
-	// Periodic flusher will persist this and trigger cleanup on phase change.
-	return tracker.SetBackfillProgress(ctx, *progress)
 }
