@@ -130,15 +130,6 @@ func (d *jobExecutionDeps) WithTxnInJob(ctx context.Context, fn scrun.JobTxnFunc
 			pl.GetNewSchemaChange().BackfillProgress,
 			pl.GetNewSchemaChange().MergeProgress,
 			d.externalStorageFactory,
-			func(tableID descpb.ID) []string {
-				// Closure to get storage prefixes from job payload.
-				for _, bp := range pl.GetNewSchemaChange().BackfillProgress {
-					if bp.TableID == tableID {
-						return bp.SSTStoragePrefixes
-					}
-				}
-				return nil
-			},
 		)
 
 		ed := &execDeps{

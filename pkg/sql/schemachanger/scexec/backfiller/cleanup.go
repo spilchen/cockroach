@@ -20,16 +20,16 @@ import (
 // phaseTransition represents a detected phase change in the distributed merge
 // pipeline after checkpoint persistence.
 type phaseTransition struct {
-	TableID  descpb.ID
-	OldPhase int32
-	NewPhase int32
+	TableID            descpb.ID
+	OldPhase           int32
+	NewPhase           int32
+	SSTStoragePrefixes []string
 }
 
 // phaseTransitionCleaner orchestrates SST cleanup for phase transitions.
 type phaseTransitionCleaner struct {
 	jobID                  jobspb.JobID
 	externalStorageFactory cloud.ExternalStorageFromURIFactory
-	getStoragePrefixes     func(descpb.ID) []string
 }
 
 // cleanupTransition performs SST cleanup for a single phase transition.
@@ -44,9 +44,7 @@ func (c *phaseTransitionCleaner) cleanupTransition(
 	// - newPhase=2: cleanup merge/iter-1/ (iteration 1 output, input to iteration 2)
 	subdirectory := bulkutil.NewDistMergePaths(c.jobID).InputSubdir(int(transition.NewPhase))
 
-	// Get storage prefixes from closure (accesses job payload).
-	storagePrefixes := c.getStoragePrefixes(transition.TableID)
-	if len(storagePrefixes) == 0 {
+	if len(transition.SSTStoragePrefixes) == 0 {
 		log.Dev.Infof(ctx, "no storage prefixes found, skipping cleanup")
 		return nil
 	}
@@ -62,7 +60,7 @@ func (c *phaseTransitionCleaner) cleanupTransition(
 		}
 	}()
 
-	if err := cleaner.CleanupJobSubdirectory(ctx, c.jobID, storagePrefixes, subdirectory); err != nil {
+	if err := cleaner.CleanupJobSubdirectory(ctx, c.jobID, transition.SSTStoragePrefixes, subdirectory); err != nil {
 		return errors.Wrapf(err, "cleaning up subdirectory %s", subdirectory)
 	}
 

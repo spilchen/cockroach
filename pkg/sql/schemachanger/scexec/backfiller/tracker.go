@@ -59,9 +59,8 @@ var _ scexec.BackfillerTracker = (*Tracker)(nil)
 
 // NewTracker constructs a new Tracker.
 //
-// If externalStorageFactory and getStoragePrefixes are non-nil, the tracker
-// will perform SST cleanup when phase transitions are detected. If they are
-// nil, cleanup is disabled.
+// If externalStorageFactory is non-nil, the tracker will perform SST cleanup
+// when phase transitions are detected. If nil, cleanup is disabled.
 func NewTracker(
 	codec keys.SQLCodec,
 	counter RangeCounter,
@@ -70,7 +69,6 @@ func NewTracker(
 	jobBackfillProgress []jobspb.BackfillProgress,
 	jobMergeProgress []jobspb.MergeProgress,
 	externalStorageFactory cloud.ExternalStorageFromURIFactory,
-	getStoragePrefixes func(descpb.ID) []string,
 ) *Tracker {
 	tr := newTracker(
 		codec,
@@ -79,12 +77,11 @@ func NewTracker(
 		convertFromJobMergeProgress(codec, jobMergeProgress),
 	)
 
-	// Configure cleanup if dependencies provided.
-	if externalStorageFactory != nil && getStoragePrefixes != nil {
+	// Configure cleanup if factory provided.
+	if externalStorageFactory != nil {
 		tr.cleaner = &phaseTransitionCleaner{
 			jobID:                  job.ID(),
 			externalStorageFactory: externalStorageFactory,
-			getStoragePrefixes:     getStoragePrefixes,
 		}
 	}
 
@@ -319,9 +316,10 @@ func (b *Tracker) detectPhaseTransitions(
 				bp.Backfill.TableID, oldPhase, newPhase)
 
 			transitions = append(transitions, phaseTransition{
-				TableID:  bp.Backfill.TableID,
-				OldPhase: oldPhase,
-				NewPhase: newPhase,
+				TableID:            bp.Backfill.TableID,
+				OldPhase:           oldPhase,
+				NewPhase:           newPhase,
+				SSTStoragePrefixes: bp.SSTStoragePrefixes,
 			})
 			// Update last persisted phase.
 			p.lastPersistedDistributedMergePhase = newPhase
