@@ -9,6 +9,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/cockroachdb/cockroach/pkg/cloud"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
@@ -33,14 +34,6 @@ type RangeCounter interface {
 	) (total, inContainedBy int, _ error)
 }
 
-// DistributedMergePhaseTransition represents a detected phase change in the
-// distributed merge pipeline after checkpoint persistence.
-type DistributedMergePhaseTransition struct {
-	TableID  descpb.ID
-	OldPhase int32
-	NewPhase int32
-}
-
 // Tracker is used to receive backfillProgress updates on index
 // backfills and merges and periodically write them.
 //
@@ -51,7 +44,8 @@ type DistributedMergePhaseTransition struct {
 // records the remaining spans of the source index to scan.
 type Tracker struct {
 	trackerConfig
-	codec keys.SQLCodec
+	codec   keys.SQLCodec
+	cleaner *phaseTransitionCleaner // Optional: nil if no cleanup needed
 
 	mu struct {
 		syncutil.Mutex
@@ -76,6 +70,34 @@ func NewTracker(
 		convertFromJobBackfillProgress(codec, jobBackfillProgress),
 		convertFromJobMergeProgress(codec, jobMergeProgress),
 	)
+}
+
+// NewTrackerWithCleanup constructs a new Tracker with SST cleanup capability.
+func NewTrackerWithCleanup(
+	codec keys.SQLCodec,
+	counter RangeCounter,
+	job *jobs.Job,
+	db isql.DB,
+	jobBackfillProgress []jobspb.BackfillProgress,
+	jobMergeProgress []jobspb.MergeProgress,
+	jobID jobspb.JobID,
+	externalStorageFactory cloud.ExternalStorageFromURIFactory,
+	getStoragePrefixes func(descpb.ID) []string,
+) *Tracker {
+	cleaner := &phaseTransitionCleaner{
+		jobID:                  jobID,
+		externalStorageFactory: externalStorageFactory,
+		getStoragePrefixes:     getStoragePrefixes,
+	}
+
+	tr := newTracker(
+		codec,
+		newTrackerConfig(codec, counter, job, db),
+		convertFromJobBackfillProgress(codec, jobBackfillProgress),
+		convertFromJobMergeProgress(codec, jobMergeProgress),
+	)
+	tr.cleaner = cleaner
+	return tr
 }
 
 func newTracker(
@@ -240,13 +262,11 @@ func (b *Tracker) FlushFractionCompleted(ctx context.Context) error {
 }
 
 // FlushCheckpoint is part of the scexec.BackfillerProgressFlusher interface.
-// It returns a list of detected phase transitions that occurred after persisting
-// the checkpoint to the database.
-func (b *Tracker) FlushCheckpoint(ctx context.Context) ([]DistributedMergePhaseTransition, error) {
+func (b *Tracker) FlushCheckpoint(ctx context.Context) error {
 	needsFlush, bps, mps := b.collectProgressForCheckpointFlush()
 	if !needsFlush {
 		log.Dev.VInfof(ctx, 2, "backfill has no checkpoint to flush")
-		return nil, nil
+		return nil
 	}
 	sort.Slice(bps, func(i, j int) bool {
 		if bps[i].TableID != bps[j].TableID {
@@ -275,14 +295,33 @@ func (b *Tracker) FlushCheckpoint(ctx context.Context) ([]DistributedMergePhaseT
 
 	// Write checkpoint to database.
 	if err := b.writeCheckpoint(ctx, bps, mps); err != nil {
-		return nil, err
+		return err
 	}
 
-	// After successful write, detect phase transitions.
+	// After successful write, detect phase transitions and handle cleanup.
+	transitions := b.detectPhaseTransitions(ctx, bps)
+
+	// Handle cleanup (if cleaner configured).
+	if b.cleaner != nil {
+		for _, transition := range transitions {
+			if err := b.cleaner.cleanupTransition(ctx, transition); err != nil {
+				log.Ops.Warningf(ctx, "phase transition cleanup failed: %v", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// detectPhaseTransitions detects and records phase transitions that occurred
+// after checkpoint persistence. It returns the list of detected transitions.
+func (b *Tracker) detectPhaseTransitions(
+	ctx context.Context, bps []scexec.BackfillProgress,
+) []phaseTransition {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	var transitions []DistributedMergePhaseTransition
+	var transitions []phaseTransition
 	for _, bp := range bps {
 		key := toBackfillKey(bp.Backfill)
 		p, exists := b.mu.backfillProgress[key]
@@ -297,19 +336,17 @@ func (b *Tracker) FlushCheckpoint(ctx context.Context) ([]DistributedMergePhaseT
 			log.Dev.Infof(ctx, "detected persisted distributed merge phase transition for table %d: phase %d → %d",
 				bp.Backfill.TableID, oldPhase, newPhase)
 
-			// Record the transition.
-			transitions = append(transitions, DistributedMergePhaseTransition{
+			transitions = append(transitions, phaseTransition{
 				TableID:  bp.Backfill.TableID,
 				OldPhase: oldPhase,
 				NewPhase: newPhase,
 			})
-
 			// Update last persisted phase.
 			p.lastPersistedDistributedMergePhase = newPhase
 		}
 	}
 
-	return transitions, nil
+	return transitions
 }
 
 func (b *Tracker) getTableIndexBackfillProgress(bf scexec.Backfill) (backfillProgress, bool) {

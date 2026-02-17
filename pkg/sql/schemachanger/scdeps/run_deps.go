@@ -14,9 +14,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
-	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
-	"github.com/cockroachdb/cockroach/pkg/sql/bulkutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
@@ -25,10 +23,8 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scrun"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/stats"
-	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
-	"github.com/cockroachdb/errors"
 )
 
 type ExternalStorageFactory = cloud.ExternalStorageFromURIFactory
@@ -113,79 +109,6 @@ type jobExecutionDeps struct {
 
 var _ scrun.JobRunDependencies = (*jobExecutionDeps)(nil)
 
-// trackerWithCleanup wraps a backfiller.Tracker to add SST cleanup orchestration
-// on phase transitions without coupling the tracker to cleanup logic.
-type trackerWithCleanup struct {
-	*backfiller.Tracker
-	cleaner phaseTransitionCleaner
-}
-
-// phaseTransitionCleaner orchestrates SST cleanup when phase transitions occur.
-type phaseTransitionCleaner struct {
-	jobID                  jobspb.JobID
-	externalStorageFactory cloud.ExternalStorageFromURIFactory
-	getStoragePrefixes     func(descpb.ID) []string
-}
-
-// FlushCheckpoint wraps the base tracker's FlushCheckpoint, intercepting phase
-// transitions to trigger cleanup.
-func (t *trackerWithCleanup) FlushCheckpoint(ctx context.Context) error {
-	// Call base tracker - returns transitions.
-	transitions, err := t.Tracker.FlushCheckpoint(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Orchestrate cleanup for each transition.
-	for _, transition := range transitions {
-		if err := t.cleaner.cleanupTransition(ctx, transition); err != nil {
-			log.Dev.Warningf(ctx, "phase transition cleanup failed: %v", err)
-		}
-	}
-
-	return nil
-}
-
-// cleanupTransition performs SST cleanup for a single phase transition.
-func (c *phaseTransitionCleaner) cleanupTransition(
-	ctx context.Context, transition backfiller.DistributedMergePhaseTransition,
-) error {
-	log.Dev.Infof(ctx, "triggering SST cleanup for job %d, table %d after phase %d→%d transition",
-		c.jobID, transition.TableID, transition.OldPhase, transition.NewPhase)
-
-	// Determine which subdirectory to clean up.
-	// newPhase is the iteration that just completed:
-	// - If newPhase=1, cleanup map/ (map phase was input to iteration 1)
-	// - If newPhase=2, cleanup merge/iter-1/ (iteration 1 was input to iteration 2)
-	subdirectory := bulkutil.NewDistMergePaths(c.jobID).InputSubdir(int(transition.NewPhase))
-
-	// Get storage prefixes from closure.
-	storagePrefixes := c.getStoragePrefixes(transition.TableID)
-
-	if len(storagePrefixes) == 0 {
-		log.Dev.Infof(ctx, "no storage prefixes found, skipping cleanup")
-		return nil
-	}
-
-	// Create cleaner and perform cleanup.
-	cleaner := bulkutil.NewBulkJobCleaner(
-		c.externalStorageFactory,
-		username.NodeUserName(),
-	)
-	defer func() {
-		if err := cleaner.Close(); err != nil {
-			log.Dev.Warningf(ctx, "error closing bulk job cleaner: %v", err)
-		}
-	}()
-
-	if err := cleaner.CleanupJobSubdirectory(ctx, c.jobID, storagePrefixes, subdirectory); err != nil {
-		return errors.Wrapf(err, "cleaning up subdirectory %s", subdirectory)
-	}
-
-	log.Dev.Infof(ctx, "successfully cleaned up SSTs in %s", subdirectory)
-	return nil
-}
-
 // ClusterSettings implements the scrun.JobRunDependencies interface.
 func (d *jobExecutionDeps) ClusterSettings() *cluster.Settings {
 	return d.settings
@@ -200,33 +123,26 @@ func (d *jobExecutionDeps) WithTxnInJob(ctx context.Context, fn scrun.JobTxnFunc
 	) error {
 		pl := d.job.Payload()
 
-		// Create base tracker without cleanup capability.
-		baseTracker := backfiller.NewTracker(
+		// Create tracker with cleanup capability (all in backfiller package).
+		tracker := backfiller.NewTrackerWithCleanup(
 			d.codec,
 			d.rangeCounter,
 			d.job,
 			d.db,
 			pl.GetNewSchemaChange().BackfillProgress,
 			pl.GetNewSchemaChange().MergeProgress,
-		)
-
-		// Wrap tracker with cleanup orchestration.
-		trackerWithCleanup := &trackerWithCleanup{
-			Tracker: baseTracker,
-			cleaner: phaseTransitionCleaner{
-				jobID:                  d.job.ID(),
-				externalStorageFactory: d.externalStorageFactory,
-				getStoragePrefixes: func(tableID descpb.ID) []string {
-					// Get storage prefixes from current backfill progress.
-					for _, bp := range pl.GetNewSchemaChange().BackfillProgress {
-						if bp.TableID == tableID {
-							return bp.SSTStoragePrefixes
-						}
+			d.job.ID(),
+			d.externalStorageFactory,
+			func(tableID descpb.ID) []string {
+				// Closure to get storage prefixes from job payload.
+				for _, bp := range pl.GetNewSchemaChange().BackfillProgress {
+					if bp.TableID == tableID {
+						return bp.SSTStoragePrefixes
 					}
-					return nil
-				},
+				}
+				return nil
 			},
-		}
+		)
 
 		ed := &execDeps{
 			txnDeps: txnDeps{
@@ -245,7 +161,7 @@ func (d *jobExecutionDeps) WithTxnInJob(ctx context.Context, fn scrun.JobTxnFunc
 			backfiller:              d.backfiller,
 			merger:                  d.merger,
 			spanSplitter:            d.spanSplitter,
-			backfillerTracker:       trackerWithCleanup,
+			backfillerTracker:       tracker, // Direct use, no wrapper
 			periodicProgressFlusher: backfiller.NewPeriodicProgressFlusherForIndexBackfill(d.settings),
 			statements:              d.statements,
 			user:                    pl.UsernameProto.Decode(),
