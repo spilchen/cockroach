@@ -14,7 +14,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
+	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
+	"github.com/cockroachdb/cockroach/pkg/sql/bulkutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descs"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
@@ -23,6 +25,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scrun"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondata"
 	"github.com/cockroachdb/cockroach/pkg/sql/stats"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 )
@@ -116,6 +119,17 @@ func (d *jobExecutionDeps) ClusterSettings() *cluster.Settings {
 func (d *jobExecutionDeps) WithTxnInJob(ctx context.Context, fn scrun.JobTxnFunc) error {
 	var createdJobs []jobspb.JobID
 	var tableStatsToRefresh []descpb.ID
+	// Create cleaner if external storage factory is available.
+	var cleaner *bulkutil.BulkJobCleaner
+	if d.externalStorageFactory != nil {
+		cleaner = bulkutil.NewBulkJobCleaner(d.externalStorageFactory, username.NodeUserName())
+		defer func() {
+			if err := cleaner.Close(); err != nil {
+				log.Ops.Warningf(ctx, "error closing bulk job cleaner: %v", err)
+			}
+		}()
+	}
+
 	err := d.db.DescsTxn(ctx, func(
 		ctx context.Context, txn descs.Txn,
 	) error {
@@ -129,7 +143,7 @@ func (d *jobExecutionDeps) WithTxnInJob(ctx context.Context, fn scrun.JobTxnFunc
 			d.db,
 			pl.GetNewSchemaChange().BackfillProgress,
 			pl.GetNewSchemaChange().MergeProgress,
-			d.externalStorageFactory,
+			cleaner,
 		)
 
 		ed := &execDeps{

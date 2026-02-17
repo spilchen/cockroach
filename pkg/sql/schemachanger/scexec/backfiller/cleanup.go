@@ -8,9 +8,7 @@ package backfiller
 import (
 	"context"
 
-	"github.com/cockroachdb/cockroach/pkg/cloud"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
-	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/bulkutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -28,8 +26,8 @@ type phaseTransition struct {
 
 // phaseTransitionCleaner orchestrates SST cleanup for phase transitions.
 type phaseTransitionCleaner struct {
-	jobID                  jobspb.JobID
-	externalStorageFactory cloud.ExternalStorageFromURIFactory
+	jobID   jobspb.JobID
+	cleaner *bulkutil.BulkJobCleaner
 }
 
 // cleanupTransition performs SST cleanup for a single phase transition.
@@ -49,18 +47,7 @@ func (c *phaseTransitionCleaner) cleanupTransition(
 		return nil
 	}
 
-	// Create cleaner and perform cleanup.
-	cleaner := bulkutil.NewBulkJobCleaner(
-		c.externalStorageFactory,
-		username.NodeUserName(),
-	)
-	defer func() {
-		if err := cleaner.Close(); err != nil {
-			log.Dev.Warningf(ctx, "error closing bulk job cleaner: %v", err)
-		}
-	}()
-
-	if err := cleaner.CleanupJobSubdirectory(ctx, c.jobID, transition.SSTStoragePrefixes, subdirectory); err != nil {
+	if err := c.cleaner.CleanupJobSubdirectory(ctx, c.jobID, transition.SSTStoragePrefixes, subdirectory); err != nil {
 		return errors.Wrapf(err, "cleaning up subdirectory %s", subdirectory)
 	}
 

@@ -9,11 +9,11 @@ import (
 	"context"
 	"sort"
 
-	"github.com/cockroachdb/cockroach/pkg/cloud"
 	"github.com/cockroachdb/cockroach/pkg/jobs"
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/bulkutil"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/isql"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scexec"
@@ -59,8 +59,9 @@ var _ scexec.BackfillerTracker = (*Tracker)(nil)
 
 // NewTracker constructs a new Tracker.
 //
-// If externalStorageFactory is non-nil, the tracker will perform SST cleanup
-// when phase transitions are detected. If nil, cleanup is disabled.
+// If cleaner is non-nil, the tracker will perform SST cleanup when phase
+// transitions are detected. The caller is responsible for closing the cleaner.
+// If nil, cleanup is disabled.
 func NewTracker(
 	codec keys.SQLCodec,
 	counter RangeCounter,
@@ -68,7 +69,7 @@ func NewTracker(
 	db isql.DB,
 	jobBackfillProgress []jobspb.BackfillProgress,
 	jobMergeProgress []jobspb.MergeProgress,
-	externalStorageFactory cloud.ExternalStorageFromURIFactory,
+	cleaner *bulkutil.BulkJobCleaner,
 ) *Tracker {
 	tr := newTracker(
 		codec,
@@ -77,11 +78,11 @@ func NewTracker(
 		convertFromJobMergeProgress(codec, jobMergeProgress),
 	)
 
-	// Configure cleanup if factory provided.
-	if externalStorageFactory != nil {
+	// Configure cleanup if cleaner provided.
+	if cleaner != nil {
 		tr.cleaner = &phaseTransitionCleaner{
-			jobID:                  job.ID(),
-			externalStorageFactory: externalStorageFactory,
+			jobID:   job.ID(),
+			cleaner: cleaner,
 		}
 	}
 
