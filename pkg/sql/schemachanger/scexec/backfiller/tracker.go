@@ -33,6 +33,13 @@ type RangeCounter interface {
 	) (total, inContainedBy int, _ error)
 }
 
+// PhaseTransition represents a detected phase change after checkpoint persistence.
+type PhaseTransition struct {
+	TableID  descpb.ID
+	OldPhase int32
+	NewPhase int32
+}
+
 // Tracker is used to receive backfillProgress updates on index
 // backfills and merges and periodically write them.
 //
@@ -44,7 +51,6 @@ type RangeCounter interface {
 type Tracker struct {
 	trackerConfig
 	codec keys.SQLCodec
-	jobID jobspb.JobID
 
 	mu struct {
 		syncutil.Mutex
@@ -53,8 +59,6 @@ type Tracker struct {
 		mergeProgress    map[mergeKey]*mergeProgress
 	}
 }
-
-var _ scexec.BackfillerTracker = (*Tracker)(nil)
 
 // NewTracker constructs a new Tracker.
 func NewTracker(
@@ -67,39 +71,18 @@ func NewTracker(
 ) *Tracker {
 	return newTracker(
 		codec,
-		newTrackerConfig(codec, counter, job, db, nil /* onPersistedPhaseChange */),
-		job.ID(),
-		convertFromJobBackfillProgress(codec, jobBackfillProgress),
-		convertFromJobMergeProgress(codec, jobMergeProgress),
-	)
-}
-
-// NewTrackerWithCleanup constructs a new Tracker with a phase change cleanup callback.
-func NewTrackerWithCleanup(
-	codec keys.SQLCodec,
-	counter RangeCounter,
-	job *jobs.Job,
-	db isql.DB,
-	jobBackfillProgress []jobspb.BackfillProgress,
-	jobMergeProgress []jobspb.MergeProgress,
-	onPersistedPhaseChange func(context.Context, jobspb.JobID, descpb.ID, int32, int32) error,
-) *Tracker {
-	return newTracker(
-		codec,
-		newTrackerConfig(codec, counter, job, db, onPersistedPhaseChange),
-		job.ID(),
+		newTrackerConfig(codec, counter, job, db),
 		convertFromJobBackfillProgress(codec, jobBackfillProgress),
 		convertFromJobMergeProgress(codec, jobMergeProgress),
 	)
 }
 
 func newTracker(
-	codec keys.SQLCodec, cfg trackerConfig, jobID jobspb.JobID, ibp []scexec.BackfillProgress, imp []scexec.MergeProgress,
+	codec keys.SQLCodec, cfg trackerConfig, ibp []scexec.BackfillProgress, imp []scexec.MergeProgress,
 ) *Tracker {
 	bt := &Tracker{
 		codec:         codec,
 		trackerConfig: cfg,
-		jobID:         jobID,
 	}
 	{
 		bt.mu.backfillProgress = make(map[backfillKey]*backfillProgress)
@@ -117,11 +100,7 @@ func newTracker(
 }
 
 func newTrackerConfig(
-	codec keys.SQLCodec,
-	rc RangeCounter,
-	job *jobs.Job,
-	db isql.DB,
-	onPersistedPhaseChange func(context.Context, jobspb.JobID, descpb.ID, int32, int32) error,
+	codec keys.SQLCodec, rc RangeCounter, job *jobs.Job, db isql.DB,
 ) trackerConfig {
 	return trackerConfig{
 		numRangesInSpanContainedBy: rc.NumRangesInSpanContainedBy,
@@ -153,7 +132,6 @@ func newTrackerConfig(
 				return nil
 			})
 		},
-		onPersistedPhaseChange: onPersistedPhaseChange,
 	}
 }
 
@@ -174,13 +152,6 @@ type trackerConfig struct {
 
 	// writeCheckpoint write the checkpoint the underlying store.
 	writeCheckpoint func(context.Context, []scexec.BackfillProgress, []scexec.MergeProgress) error
-
-	// onPersistedPhaseChange is an optional callback invoked when a phase transition
-	// is successfully persisted to the database. This callback is responsible for
-	// cleaning up SST files from the previous phase.
-	// Parameters: ctx, jobID, tableID, oldPhase, newPhase
-	// If nil, no cleanup is triggered (backward compatible).
-	onPersistedPhaseChange func(context.Context, jobspb.JobID, descpb.ID, int32, int32) error
 }
 
 // GetBackfillProgress is part of the scexec.BackfillerProgressReader interface.
@@ -268,11 +239,13 @@ func (b *Tracker) FlushFractionCompleted(ctx context.Context) error {
 }
 
 // FlushCheckpoint is part of the scexec.BackfillerProgressFlusher interface.
-func (b *Tracker) FlushCheckpoint(ctx context.Context) error {
+// It returns a list of detected phase transitions that occurred after persisting
+// the checkpoint to the database.
+func (b *Tracker) FlushCheckpoint(ctx context.Context) ([]PhaseTransition, error) {
 	needsFlush, bps, mps := b.collectProgressForCheckpointFlush()
 	if !needsFlush {
 		log.Dev.VInfof(ctx, 2, "backfill has no checkpoint to flush")
-		return nil
+		return nil, nil
 	}
 	sort.Slice(bps, func(i, j int) bool {
 		if bps[i].TableID != bps[j].TableID {
@@ -301,13 +274,14 @@ func (b *Tracker) FlushCheckpoint(ctx context.Context) error {
 
 	// Write checkpoint to database.
 	if err := b.writeCheckpoint(ctx, bps, mps); err != nil {
-		return err
+		return nil, err
 	}
 
-	// After successful write, detect phase transitions and trigger cleanup.
+	// After successful write, detect phase transitions.
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	var transitions []PhaseTransition
 	for _, bp := range bps {
 		key := toBackfillKey(bp.Backfill)
 		p, exists := b.mu.backfillProgress[key]
@@ -322,21 +296,19 @@ func (b *Tracker) FlushCheckpoint(ctx context.Context) error {
 			log.Dev.Infof(ctx, "detected persisted phase transition for table %d: phase %d → %d",
 				bp.Backfill.TableID, oldPhase, newPhase)
 
-			// Trigger cleanup if callback is configured.
-			if b.onPersistedPhaseChange != nil {
-				if err := b.onPersistedPhaseChange(ctx, b.jobID, bp.Backfill.TableID, oldPhase, newPhase); err != nil {
-					// Log but don't fail checkpoint on cleanup error.
-					log.Ops.Warningf(ctx, "phase transition cleanup failed (job %d, table %d, phase %d→%d): %v",
-						b.jobID, bp.Backfill.TableID, oldPhase, newPhase, err)
-				}
-			}
+			// Record the transition.
+			transitions = append(transitions, PhaseTransition{
+				TableID:  bp.Backfill.TableID,
+				OldPhase: oldPhase,
+				NewPhase: newPhase,
+			})
 
 			// Update last persisted phase.
 			p.lastPersistedDistributedMergePhase = newPhase
 		}
 	}
 
-	return nil
+	return transitions, nil
 }
 
 func (b *Tracker) getTableIndexBackfillProgress(bf scexec.Backfill) (backfillProgress, bool) {

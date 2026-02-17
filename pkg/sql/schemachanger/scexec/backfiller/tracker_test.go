@@ -108,7 +108,7 @@ func TestBackfillerTracker(t *testing.T) {
 		ctx := context.Background()
 		var bts backfillerTrackerTestState
 		bts.mu.rangeSpans = tc.rangeSpans
-		tr := newTracker(keys.SystemSQLCodec, bts.cfg(), 1 /* jobID */, tc.backfillProgress, tc.mergeProgress)
+		tr := newTracker(keys.SystemSQLCodec, bts.cfg(), tc.backfillProgress, tc.mergeProgress)
 
 		t.Run("retrieving initial state", func(t *testing.T) {
 			{
@@ -149,7 +149,8 @@ func TestBackfillerTracker(t *testing.T) {
 		})
 		t.Run("FlushCheckpoint initial does not write", func(t *testing.T) {
 			require.Nil(t, bts.getBackfillCheckpoint())
-			require.NoError(t, tr.FlushCheckpoint(ctx))
+			_, err := tr.FlushCheckpoint(ctx)
+			require.NoError(t, err)
 			require.EqualValues(t, []scexec.BackfillProgress(nil), bts.getBackfillCheckpoint())
 			require.EqualValues(t, 0, bts.getCheckpointUpdatedCalls())
 		})
@@ -189,7 +190,8 @@ func TestBackfillerTracker(t *testing.T) {
 			require.EqualValues(t, 2, bts.getFractionUpdatedCalls())
 		})
 		t.Run("Observe that FlushCheckpoint works", func(t *testing.T) {
-			require.Nil(t, tr.FlushCheckpoint(ctx))
+			_, err := tr.FlushCheckpoint(ctx)
+			require.Nil(t, err)
 			require.EqualValues(t, bts.getBackfillCheckpoint(), []scexec.BackfillProgress{
 				tc.backfillProgress[0],
 				tc.backfillProgress[1],
@@ -199,7 +201,8 @@ func TestBackfillerTracker(t *testing.T) {
 		t.Run("Observe that flush without any writes does nothing", func(t *testing.T) {
 			fractionUpdatedBefore := bts.getFractionUpdatedCalls()
 			checkpointUpdatedBefore := bts.getCheckpointUpdatedCalls()
-			require.Nil(t, tr.FlushCheckpoint(ctx))
+			_, err := tr.FlushCheckpoint(ctx)
+			require.Nil(t, err)
 			require.Nil(t, tr.FlushFractionCompleted(ctx))
 			require.Equal(t, fractionUpdatedBefore, bts.getFractionUpdatedCalls())
 			require.Equal(t, checkpointUpdatedBefore, bts.getCheckpointUpdatedCalls())
@@ -231,7 +234,7 @@ func TestBackfillerTracker(t *testing.T) {
 		ctx := context.Background()
 		var bts backfillerTrackerTestState
 		bts.mu.rangeSpans = tc.rangeSpans
-		tr := newTracker(keys.SystemSQLCodec, bts.cfg(), 1 /* jobID */, tc.backfillProgress, tc.mergeProgress)
+		tr := newTracker(keys.SystemSQLCodec, bts.cfg(), tc.backfillProgress, tc.mergeProgress)
 
 		t.Run("retrieving initial state", func(t *testing.T) {
 			{
@@ -273,7 +276,8 @@ func TestBackfillerTracker(t *testing.T) {
 		})
 		t.Run("FlushCheckpoint initial does not write", func(t *testing.T) {
 			require.Nil(t, bts.getMergeCheckpoint())
-			require.NoError(t, tr.FlushCheckpoint(ctx))
+			_, err := tr.FlushCheckpoint(ctx)
+			require.NoError(t, err)
 			require.EqualValues(t, []scexec.MergeProgress(nil), bts.getMergeCheckpoint())
 			require.EqualValues(t, 0, bts.getCheckpointUpdatedCalls())
 		})
@@ -311,7 +315,8 @@ func TestBackfillerTracker(t *testing.T) {
 			require.EqualValues(t, 2, bts.getFractionUpdatedCalls())
 		})
 		t.Run("Observe that FlushCheckpoint works", func(t *testing.T) {
-			require.Nil(t, tr.FlushCheckpoint(ctx))
+			_, err := tr.FlushCheckpoint(ctx)
+			require.Nil(t, err)
 			require.EqualValues(t, bts.getMergeCheckpoint(), []scexec.MergeProgress{
 				tc.mergeProgress[0],
 				tc.mergeProgress[1],
@@ -321,7 +326,8 @@ func TestBackfillerTracker(t *testing.T) {
 		t.Run("Observe that flush without any writes does nothing", func(t *testing.T) {
 			fractionUpdatedBefore := bts.getFractionUpdatedCalls()
 			checkpointUpdatedBefore := bts.getCheckpointUpdatedCalls()
-			require.Nil(t, tr.FlushCheckpoint(ctx))
+			_, err := tr.FlushCheckpoint(ctx)
+			require.Nil(t, err)
 			require.Nil(t, tr.FlushFractionCompleted(ctx))
 			require.Equal(t, fractionUpdatedBefore, bts.getFractionUpdatedCalls())
 			require.Equal(t, checkpointUpdatedBefore, bts.getCheckpointUpdatedCalls())
