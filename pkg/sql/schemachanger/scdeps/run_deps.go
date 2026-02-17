@@ -125,7 +125,7 @@ func (d *jobExecutionDeps) WithTxnInJob(ctx context.Context, fn scrun.JobTxnFunc
 		cleaner = bulkutil.NewBulkJobCleaner(d.externalStorageFactory, username.NodeUserName())
 		defer func() {
 			if err := cleaner.Close(); err != nil {
-				log.Ops.Warningf(ctx, "error closing bulk job cleaner: %v", err)
+				log.Dev.Warningf(ctx, "error closing bulk job cleaner: %v", err)
 			}
 		}()
 	}
@@ -134,18 +134,6 @@ func (d *jobExecutionDeps) WithTxnInJob(ctx context.Context, fn scrun.JobTxnFunc
 		ctx context.Context, txn descs.Txn,
 	) error {
 		pl := d.job.Payload()
-
-		// Create tracker with cleanup capability (all in backfiller package).
-		tracker := backfiller.NewTracker(
-			d.codec,
-			d.rangeCounter,
-			d.job,
-			d.db,
-			pl.GetNewSchemaChange().BackfillProgress,
-			pl.GetNewSchemaChange().MergeProgress,
-			cleaner,
-		)
-
 		ed := &execDeps{
 			txnDeps: txnDeps{
 				txn:                txn,
@@ -160,10 +148,18 @@ func (d *jobExecutionDeps) WithTxnInJob(ctx context.Context, fn scrun.JobTxnFunc
 				kvTrace:            d.kvTrace,
 				settings:           d.settings,
 			},
-			backfiller:              d.backfiller,
-			merger:                  d.merger,
-			spanSplitter:            d.spanSplitter,
-			backfillerTracker:       tracker, // Direct use, no wrapper
+			backfiller:   d.backfiller,
+			merger:       d.merger,
+			spanSplitter: d.spanSplitter,
+			backfillerTracker: backfiller.NewTracker(
+				d.codec,
+				d.rangeCounter,
+				d.job,
+				d.db,
+				pl.GetNewSchemaChange().BackfillProgress,
+				pl.GetNewSchemaChange().MergeProgress,
+				cleaner,
+			),
 			periodicProgressFlusher: backfiller.NewPeriodicProgressFlusherForIndexBackfill(d.settings),
 			statements:              d.statements,
 			user:                    pl.UsernameProto.Decode(),
