@@ -33,7 +33,9 @@ var remoteSSTs = settings.RegisterBoolSetting(
 	true,
 )
 
-var remoteSSTSuffixCacheSize = settings.RegisterByteSizeSetting(
+// RemoteSSTSuffixCacheSize controls the size of the suffix of remote SSTs
+// that is downloaded and cached before reading from the remote stream.
+var RemoteSSTSuffixCacheSize = settings.RegisterByteSizeSetting(
 	settings.ApplicationLevel,
 	"kv.bulk_ingest.stream_external_ssts.suffix_cache_size",
 	"size of suffix of remote SSTs to download and cache before reading from remote stream",
@@ -122,7 +124,7 @@ func ExternalSSTReader(
 	if !remoteSSTs.Get(&storeFiles[0].Store.Settings().SV) {
 		return newMemPebbleSSTReader(ctx, storeFiles, encryption, iterOpts)
 	}
-	remoteCacheSize := remoteSSTSuffixCacheSize.Get(&storeFiles[0].Store.Settings().SV)
+	remoteCacheSize := RemoteSSTSuffixCacheSize.Get(&storeFiles[0].Store.Settings().SV)
 	openedReadersByLevel := make([][]objstorage.ReadableFile, 0, len(storeFiles))
 
 	// Cleanup any files we've opened if we fail with an error.

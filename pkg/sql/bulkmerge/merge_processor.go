@@ -209,6 +209,8 @@ func (m *bulkMergeProcessor) Start(ctx context.Context) {
 		log.Dev.Infof(ctx, "final iteration %d: opening iterator for %d SSTs",
 			m.spec.Iteration, len(m.spec.SSTs))
 
+		estimated := m.estimateIterMemory()
+
 		var memBefore runtime.MemStats
 		runtime.ReadMemStats(&memBefore)
 
@@ -218,8 +220,9 @@ func (m *bulkMergeProcessor) Start(ctx context.Context) {
 		runtime.ReadMemStats(&memAfter)
 
 		allocDelta := int64(memAfter.Alloc) - int64(memBefore.Alloc)
-		log.Dev.Infof(ctx, "SPILLY: createIter memory: HeapAlloc delta=%s (%d SSTs, window=%d, "+
-			"before=%s, after=%s)",
+		log.Ops.Infof(ctx, "createIter memory: estimated=%s, measured HeapAlloc delta=%s "+
+			"(%d SSTs, window=%d, before=%s, after=%s)",
+			humanizeutil.IBytes(estimated),
 			humanizeutil.IBytes(allocDelta),
 			len(m.spec.SSTs),
 			blobs.FlowControlWindow.Get(&m.flowCtx.EvalCtx.Settings.SV),
@@ -398,6 +401,36 @@ func (m *bulkMergeProcessor) ingestFinalIteration(
 	writer := newKVStorageWriter(batcher, writeTS)
 	defer writer.Close(ctx)
 	return m.processMergedData(ctx, iter, mergeSpan, writer)
+}
+
+// estimateIterMemory returns the estimated memory footprint for opening all
+// SSTs in the merge spec. The estimate is pessimistic: it assumes every SST
+// is accessed via RPC with a flow-controlled stream, even if some are local.
+//
+// The dominant term is flow control receive buffers: each remote stream has
+// up to (window + 1) chunks of 128KB buffered client-side (window chunks
+// in the gRPC receive buffer plus one lastPayload in the stream reader).
+// Additionally, each SST caches a suffix (default 64KB) to avoid repeated
+// RPCs for metadata reads.
+func (m *bulkMergeProcessor) estimateIterMemory() int64 {
+	numSSTs := int64(len(m.spec.SSTs))
+	if numSSTs == 0 {
+		return 0
+	}
+
+	window := blobs.FlowControlWindow.Get(&m.flowCtx.EvalCtx.Settings.SV)
+
+	const chunkSize = 128 << 10 // 128 KB, mirrors blobs.chunkSize
+	// Per-stream gRPC overhead: stream state, HTTP/2 framing, metadata.
+	const grpcStreamOverhead = 8 << 10 // 8 KB
+
+	suffixCacheSize := storageccl.RemoteSSTSuffixCacheSize.Get(
+		&m.flowCtx.EvalCtx.Settings.SV,
+	)
+
+	// Pessimistic: assume all files are remote RPC streams.
+	perFile := (window + 1) * chunkSize + suffixCacheSize + grpcStreamOverhead
+	return numSSTs * perFile
 }
 
 // createIter builds an iterator over all input SSTs. Actual access to the SSTs
