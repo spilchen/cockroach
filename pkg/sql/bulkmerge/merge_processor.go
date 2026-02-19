@@ -8,8 +8,10 @@ package bulkmerge
 import (
 	"bytes"
 	"context"
+	"runtime"
 
 	"github.com/cockroachdb/cockroach/pkg/base"
+	"github.com/cockroachdb/cockroach/pkg/blobs"
 	"github.com/cockroachdb/cockroach/pkg/ccl/storageccl"
 	"github.com/cockroachdb/cockroach/pkg/cloud/nodelocal"
 	"github.com/cockroachdb/cockroach/pkg/keys"
@@ -26,6 +28,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/storage"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
+	"github.com/cockroachdb/cockroach/pkg/util/humanizeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/taskset"
@@ -205,7 +208,23 @@ func (m *bulkMergeProcessor) Start(ctx context.Context) {
 	} else {
 		log.Dev.Infof(ctx, "final iteration %d: opening iterator for %d SSTs",
 			m.spec.Iteration, len(m.spec.SSTs))
+
+		var memBefore runtime.MemStats
+		runtime.ReadMemStats(&memBefore)
+
 		m.iter, err = m.createIter(ctx)
+
+		var memAfter runtime.MemStats
+		runtime.ReadMemStats(&memAfter)
+
+		allocDelta := int64(memAfter.Alloc) - int64(memBefore.Alloc)
+		log.Ops.Infof(ctx, "createIter memory: HeapAlloc delta=%s (%d SSTs, window=%d, "+
+			"before=%s, after=%s)",
+			humanizeutil.IBytes(allocDelta),
+			len(m.spec.SSTs),
+			blobs.FlowControlWindow.Get(&m.flowCtx.EvalCtx.Settings.SV),
+			humanizeutil.IBytes(int64(memBefore.Alloc)),
+			humanizeutil.IBytes(int64(memAfter.Alloc)))
 	}
 	if err != nil {
 		m.MoveToDraining(err)
