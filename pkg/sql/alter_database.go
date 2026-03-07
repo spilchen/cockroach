@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/config/zonepb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
@@ -1745,7 +1746,25 @@ func (n *alterDatabaseDropSuperRegion) startExec(params runParams) error {
 		return err
 	}
 
-	return nil
+	// Regenerate the database zone config. If the primary region was a member
+	// of the dropped super region, the super region's zone config extension may
+	// have modified the database-level zone config (for fields in
+	// MultiRegionZoneConfigFields). Regenerating ensures those fields revert.
+	updatedRegionConfig, err := SynthesizeRegionConfig(
+		params.ctx, params.p.txn, n.desc.ID, params.p.Descriptors(),
+	)
+	if err != nil {
+		return err
+	}
+	return ApplyZoneConfigFromDatabaseRegionConfig(
+		params.ctx,
+		n.desc.ID,
+		updatedRegionConfig,
+		params.p.InternalSQLTxn(),
+		params.p.execCfg,
+		true, /* validateLocalities */
+		params.extendedEvalCtx.Tracing.KVTracingEnabled(),
+	)
 }
 
 func removeSuperRegion(
@@ -1758,6 +1777,8 @@ func removeSuperRegion(
 			break
 		}
 	}
+	// Also clean up any associated zone config extension.
+	delete(r.ZoneConfigExtensions.SuperRegion, string(superRegionName))
 
 	return dropped
 }
@@ -2276,6 +2297,16 @@ func (p *planner) AlterDatabaseSetZoneConfigExtension(
 	ctx context.Context, n *tree.AlterDatabaseSetZoneConfigExtension,
 ) (planNode, error) {
 
+	if n.LocalityLevel == tree.LocalityLevelSuperRegion {
+		if !p.ExecCfg().Settings.Version.IsActive(ctx, clusterversion.V26_2) {
+			return nil, pgerror.Newf(pgcode.FeatureNotSupported,
+				"super region zone configs are not supported until the cluster upgrade is finalized")
+		}
+		if err := p.isSuperRegionEnabled(); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := checkSchemaChangeEnabled(
 		ctx,
 		p.ExecCfg(),
@@ -2357,7 +2388,7 @@ func (n *alterDatabaseSetZoneConfigExtensionNode) startExec(params runParams) er
 			typeDesc.GetKind(), typeDesc.GetName(), typeDesc.GetID())
 	}
 
-	// Verify that the region is present in the database, if necessary.
+	// Verify that the region or super region is present in the database, if necessary.
 	if n.n.LocalityLevel == tree.LocalityLevelTable && n.n.RegionName != "" {
 		var found bool
 		_ = regionsDesc.ForEachPublicRegion(func(name catpb.RegionName) error {
@@ -2372,6 +2403,23 @@ func (n *alterDatabaseSetZoneConfigExtensionNode) startExec(params runParams) er
 				pgcode.UndefinedObject,
 				"region %q has not been added to the database",
 				n.n.RegionName,
+			)
+		}
+	}
+	if n.n.LocalityLevel == tree.LocalityLevelSuperRegion {
+		var found bool
+		_ = regionsDesc.ForEachSuperRegion(func(name string) error {
+			if name == string(n.n.SuperRegionName) {
+				found = true
+				return iterutil.StopIteration()
+			}
+			return nil
+		})
+		if !found {
+			return pgerror.Newf(
+				pgcode.UndefinedObject,
+				"super region %q has not been added to the database",
+				n.n.SuperRegionName,
 			)
 		}
 	}
@@ -2395,6 +2443,9 @@ func (n *alterDatabaseSetZoneConfigExtensionNode) startExec(params runParams) er
 			} else {
 				typeDesc.RegionConfig.ZoneConfigExtensions.Regional = nil
 			}
+		case tree.LocalityLevelSuperRegion:
+			delete(typeDesc.RegionConfig.ZoneConfigExtensions.SuperRegion,
+				string(n.n.SuperRegionName))
 		default:
 			return errors.AssertionFailedf("unexpected locality level %v", n.n.LocalityLevel)
 		}
@@ -2464,6 +2515,11 @@ func (n *alterDatabaseSetZoneConfigExtensionNode) startExec(params runParams) er
 			} else {
 				typeDesc.RegionConfig.ZoneConfigExtensions.Regional = newZone
 			}
+		case tree.LocalityLevelSuperRegion:
+			if typeDesc.RegionConfig.ZoneConfigExtensions.SuperRegion == nil {
+				typeDesc.RegionConfig.ZoneConfigExtensions.SuperRegion = make(map[string]zonepb.ZoneConfig)
+			}
+			typeDesc.RegionConfig.ZoneConfigExtensions.SuperRegion[string(n.n.SuperRegionName)] = *newZone
 		default:
 			return errors.AssertionFailedf("unexpected locality level %v", n.n.LocalityLevel)
 		}

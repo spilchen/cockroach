@@ -208,7 +208,8 @@ func (r *RegionConfig) ExtendZoneConfigWithGlobal(zc zonepb.ZoneConfig) (zonepb.
 
 // ExtendZoneConfigWithRegionalIn applies the regional table zone
 // configuration extensions for the provided region to the provided zone
-// configuration, returning the updated config.
+// configuration, returning the updated config. Extensions are applied in
+// the following order: regional → super_region → regional_in.
 func (r *RegionConfig) ExtendZoneConfigWithRegionalIn(
 	zc zonepb.ZoneConfig, region catpb.RegionName,
 ) (zonepb.ZoneConfig, error) {
@@ -217,6 +218,7 @@ func (r *RegionConfig) ExtendZoneConfigWithRegionalIn(
 		numVoters = *zc.NumVoters
 	}
 
+	// 1. Apply the regional extension.
 	if ext := r.zoneCfgExtensions.Regional; ext != nil {
 		if ext.LeasePreferences != nil {
 			return zonepb.ZoneConfig{}, errors.New("REGIONAL zone config extensions " +
@@ -224,6 +226,15 @@ func (r *RegionConfig) ExtendZoneConfigWithRegionalIn(
 		}
 		zc = extendZoneCfg(zc, *ext)
 	}
+
+	// 2. Apply the super region extension, if the region belongs to one.
+	if srName, ok := r.getSuperRegionNameForRegion(region); ok {
+		if ext, ok := r.zoneCfgExtensions.SuperRegion[srName]; ok {
+			zc = extendZoneCfg(zc, ext)
+		}
+	}
+
+	// 3. Apply the regional_in extension.
 	if ext, ok := r.zoneCfgExtensions.RegionalIn[region]; ok {
 		if err := validateZoneConfigExtension(ext, zc, region.String()); err != nil {
 			return zonepb.ZoneConfig{}, err
@@ -246,6 +257,19 @@ func (r *RegionConfig) ExtendZoneConfigWithRegionalIn(
 			numVoters, r.SurvivalGoal(), *zc.NumReplicas)
 	}
 	return zc, nil
+}
+
+// getSuperRegionNameForRegion returns the name of the super region that
+// contains the given region, if any.
+func (r *RegionConfig) getSuperRegionNameForRegion(region catpb.RegionName) (string, bool) {
+	for _, sr := range r.superRegions {
+		for _, srRegion := range sr.Regions {
+			if srRegion == region {
+				return sr.SuperRegionName, true
+			}
+		}
+	}
+	return "", false
 }
 
 // "extending" a zone config means having the extension inherit any missing
@@ -292,6 +316,13 @@ func (r *RegionConfig) RegionalInTablesInheritDatabaseConstraints(region catpb.R
 		// will be set at the database level but which should not apply to regional
 		// tables in any other region.
 		return r.primaryRegion == region
+	}
+	// If the region's super region has a zone config extension, it may override
+	// database constraints, so don't inherit.
+	if srName, ok := r.getSuperRegionNameForRegion(region); ok {
+		if _, hasExt := r.zoneCfgExtensions.SuperRegion[srName]; hasExt {
+			return false
+		}
 	}
 	return true
 }
@@ -402,7 +433,7 @@ func ValidateRegionConfig(config RegionConfig, isSystemDatabase bool) error {
 		return err
 	}
 
-	ValidateZoneConfigExtensions(config.Regions(), config.ZoneConfigExtensions(), func(validateErr error) {
+	ValidateZoneConfigExtensions(config.Regions(), config.ZoneConfigExtensions(), config.SuperRegions(), func(validateErr error) {
 		if err == nil {
 			err = validateErr
 		}
@@ -501,12 +532,14 @@ func ValidateSuperRegions(
 // ValidateZoneConfigExtensions validates that zone configuration extensions are
 // coherent with the rest of the multi-region configuration. It validates that:
 //  1. All per-region extensions map to a region on the RegionConfig.
-//  2. TODO(nvanbenschoten): add more zone config extension validation in the
+//  2. All super region extensions map to a known super region.
+//  3. TODO(nvanbenschoten): add more zone config extension validation in the
 //     future to ensure zone config extensions do not subvert other portions
 //     of the multi-region config (e.g. like breaking REGION survivability).
 func ValidateZoneConfigExtensions(
 	regionNames catpb.RegionNames,
 	zoneCfgExtensions descpb.ZoneConfigExtensions,
+	superRegions []descpb.SuperRegion,
 	errorHandler func(error),
 ) {
 	// Ensure that all per-region extensions map to a region on the RegionConfig.
@@ -521,6 +554,20 @@ func ValidateZoneConfigExtensions(
 		if !found {
 			errorHandler(errors.AssertionFailedf("region %s has REGIONAL IN "+
 				"zone config extension, but is not a region in the database", regionExt))
+		}
+	}
+	// Ensure that all super region extensions map to a known super region.
+	for srName := range zoneCfgExtensions.SuperRegion {
+		found := false
+		for _, sr := range superRegions {
+			if sr.SuperRegionName == srName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			errorHandler(errors.AssertionFailedf("super region %s has zone config "+
+				"extension, but is not a super region in the database", srName))
 		}
 	}
 }
