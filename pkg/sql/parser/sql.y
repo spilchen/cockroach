@@ -1217,6 +1217,7 @@ func (u *sqlSymUnion) filterType() tree.FilterType {
 %type <tree.Statement> alter_database_set_stmt
 %type <tree.Statement> alter_database_add_super_region
 %type <tree.Statement> alter_database_alter_super_region
+%type <tree.Statement> alter_database_alter_super_region_survival
 %type <tree.Statement> alter_database_drop_super_region
 %type <tree.Statement> alter_database_set_secondary_region_stmt
 %type <tree.Statement> alter_database_drop_secondary_region
@@ -2174,6 +2175,7 @@ alter_database_stmt:
 | alter_database_set_stmt
 | alter_database_add_super_region
 | alter_database_alter_super_region
+| alter_database_alter_super_region_survival
 | alter_database_drop_super_region
 | alter_database_set_secondary_region_stmt
 | alter_database_drop_secondary_region
@@ -2339,6 +2341,24 @@ alter_database_alter_super_region:
       DatabaseName: tree.Name($3),
       SuperRegionName: tree.Name($7),
       Regions: $9.nameList(),
+    }
+  }
+
+alter_database_alter_super_region_survival:
+  ALTER DATABASE database_name ALTER SUPER REGION region_name survival_goal_clause
+  {
+    $$.val = &tree.AlterDatabaseAlterSuperRegionSurvivalGoal{
+      DatabaseName: tree.Name($3),
+      SuperRegionName: tree.Name($7),
+      SurvivalGoal: $8.survivalGoal(),
+    }
+  }
+| ALTER DATABASE database_name ALTER SUPER REGION region_name SURVIVE DEFAULT
+  {
+    $$.val = &tree.AlterDatabaseAlterSuperRegionSurvivalGoal{
+      DatabaseName: tree.Name($3),
+      SuperRegionName: tree.Name($7),
+      SurvivalGoal: tree.SurvivalGoalDefault,
     }
   }
 
