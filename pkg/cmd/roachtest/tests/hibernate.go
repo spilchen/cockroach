@@ -40,7 +40,8 @@ var (
 		testDir:  "hibernate-core",
 		buildCmd: `cd /mnt/data1/hibernate/hibernate-core/ && ./../gradlew test -Pdb=cockroachdb ` +
 			`--tests org.hibernate.orm.test.jdbc.util.BasicFormatterTest.*`,
-		testCmd: "cd /mnt/data1/hibernate/hibernate-core/ && ./../gradlew test -Pdb=cockroachdb",
+		testCmd: `cd /mnt/data1/hibernate/hibernate-core/ && ./../gradlew test -Pdb=cockroachdb` +
+			` --tests org.hibernate.orm.test.sql.SQLTest.test_sql_hibernate_dto_query_example`,
 		listWithName: listWithName{
 			blocklistName:  "hibernateBlockList",
 			blocklist:      hibernateBlockList,
@@ -180,67 +181,16 @@ func registerHibernate(r registry.Registry, opt hibernateOptions) {
 			t.Fatal(err)
 		}
 
-		blocklistName := opt.listWithName.blocklistName
-		expectedFailures := opt.listWithName.blocklist
+		t.L().Printf("Running cockroach version %s", version)
 
-		t.L().Printf("Running cockroach version %s, using blocklist %s", version, blocklistName)
-
-		t.Status("running hibernate test suite, will take at least 3 hours")
-		// Note that this will take upwards of 3 hours.
-		// Also note that this is expected to return an error, since the test suite
-		// will fail. And it is safe to swallow it here.
-		_ = c.RunE(ctx, option.WithNodes(node), opt.testCmd)
-
-		t.Status("collecting the test results")
-		// Copy all of the test results to the cockroach logs directory to be
-		// copied to the artifacts.
-
-		// Copy the html report for the test.
-		if err := repeatRunE(
-			ctx,
-			t,
-			c,
-			node,
-			"copy html report",
-			fmt.Sprintf(`cp /mnt/data1/hibernate/%s/target/reports/tests/test ~/logs/report -a`, opt.testDir),
-		); err != nil {
-			t.Fatal(err)
+		t.Status("running hibernate test (filtered to single test)")
+		// TODO(SPILLY): Running only the failing test for faster reproduction.
+		// Skip result-comparison logic since we're not running the full suite.
+		if err := c.RunE(ctx, option.WithNodes(node), opt.testCmd); err != nil {
+			t.L().Printf("test command failed (expected): %v", err)
+		} else {
+			t.L().Printf("test command succeeded")
 		}
-
-		// Copy the individual test result files.
-		if err := repeatRunE(
-			ctx,
-			t,
-			c,
-			node,
-			"copy test result files",
-			fmt.Sprintf(`cp /mnt/data1/hibernate/%s/target/test-results/test ~/logs/report/results -a`, opt.testDir),
-		); err != nil {
-			t.Fatal(err)
-		}
-
-		// Load the list of all test results files and parse them individually.
-		// Files are here: /mnt/data1/hibernate/hibernate-core/target/test-results/test
-		result, err := repeatRunWithDetailsSingleNode(
-			ctx,
-			c,
-			t,
-			node,
-			"get list of test files",
-			fmt.Sprintf(`ls /mnt/data1/hibernate/%s/target/test-results/test/*.xml`, opt.testDir),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		output := []byte(result.Stdout + result.Stderr)
-		if len(output) == 0 {
-			t.Fatal("could not find any test result files")
-		}
-
-		parseAndSummarizeJavaORMTestsResults(
-			ctx, t, c, node, "hibernate" /* ormName */, output,
-			blocklistName, expectedFailures, opt.listWithName.ignorelist, version, supportedHibernateTag,
-		)
 	}
 
 	r.Add(registry.TestSpec{

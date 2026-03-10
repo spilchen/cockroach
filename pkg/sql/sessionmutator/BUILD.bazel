@@ -14,6 +14,7 @@ go_library(
         "//pkg/sql/sessiondatapb",
         "//pkg/util/duration",
         "//pkg/util/hlc",
+        "//pkg/util/log",
         "//pkg/util/timeutil",
         "//pkg/util/timeutil/pgdate",
         "@com_github_cockroachdb_errors//:errors",

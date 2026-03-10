@@ -715,9 +715,18 @@ func (ex *connExecutor) execStmtInOpenState(
 
 	// We exempt `SET` statements from the statement timeout, particularly so as
 	// not to block the `SET statement_timeout` command itself.
-	if ex.sessionData().StmtTimeout > 0 && ast.StatementTag() != "SET" {
+	stmtTimeout := ex.sessionData().StmtTimeout
+	// DEBUG SPILLY: Force 1ms timeout for WireTransferPayment INSERT when timeout is 1s.
+	if stmtTimeout == time.Second &&
+		strings.HasPrefix(strings.ToLower(ast.String()), "insert into wiretransferpayment (id)") {
+		stmtTimeout = time.Millisecond
+		log.Dev.Infof(ctx,
+			"DEBUG SPILLY stmt_timeout: FORCING 1ms timeout for stmt=%s, user=%s",
+			ast.String(), ex.sessionData().User().Normalized())
+	}
+	if stmtTimeout > 0 && ast.StatementTag() != "SET" {
 		timerDuration :=
-			ex.sessionData().StmtTimeout - ex.phaseTimes.GetSessionPhaseTime(sessionphase.SessionQueryReceived).Elapsed()
+			stmtTimeout - ex.phaseTimes.GetSessionPhaseTime(sessionphase.SessionQueryReceived).Elapsed()
 		// There's no need to proceed with execution if the timer has already expired.
 		if timerDuration < 0 {
 			queryTimedOut = true
@@ -885,6 +894,10 @@ func (ex *connExecutor) execStmtInOpenState(
 		// because the timeout has already expired), and therefore this check needs
 		// to happen outside the canceled query check above.
 		if queryTimedOut {
+			// DEBUG SPILLY: Log when QueryTimeoutError fires in execStmtInOpenState.
+			log.Dev.Infof(ctx,
+				"DEBUG SPILLY stmt_timeout: QueryTimeoutError in execStmtInOpenState, StmtTimeout=%v, stmt=%s, user=%s",
+				ex.sessionData().StmtTimeout, ast.String(), ex.sessionData().User().Normalized())
 			// A timed out query should never produce retryable errors/events/payloads
 			// so we intercept and overwrite them all here.
 			retEv = eventNonRetryableErr{
@@ -1675,9 +1688,18 @@ func (ex *connExecutor) execStmtInOpenStateWithPausablePortal(
 
 	// We exempt `SET` statements from the statement timeout, particularly so as
 	// not to block the `SET statement_timeout` command itself.
-	if ex.sessionData().StmtTimeout > 0 && vars.ast.StatementTag() != "SET" {
+	portalStmtTimeout := ex.sessionData().StmtTimeout
+	// DEBUG SPILLY: Force 1ms timeout for WireTransferPayment INSERT when timeout is 1s.
+	if portalStmtTimeout == time.Second &&
+		strings.HasPrefix(strings.ToLower(vars.ast.String()), "insert into wiretransferpayment (id)") {
+		portalStmtTimeout = time.Millisecond
+		log.Dev.Infof(ctx,
+			"DEBUG SPILLY stmt_timeout: FORCING 1ms timeout (portal) for stmt=%s, user=%s",
+			vars.ast.String(), ex.sessionData().User().Normalized())
+	}
+	if portalStmtTimeout > 0 && vars.ast.StatementTag() != "SET" {
 		timerDuration :=
-			ex.sessionData().StmtTimeout - ex.phaseTimes.GetSessionPhaseTime(sessionphase.SessionQueryReceived).Elapsed()
+			portalStmtTimeout - ex.phaseTimes.GetSessionPhaseTime(sessionphase.SessionQueryReceived).Elapsed()
 		// There's no need to proceed with execution if the timer has already expired.
 		if timerDuration < 0 {
 			queryTimedOut = true
@@ -1890,6 +1912,10 @@ func (ex *connExecutor) execStmtInOpenStateWithPausablePortal(
 		// because the timeout has already expired), and therefore this check needs
 		// to happen outside the canceled query check above.
 		if queryTimedOut {
+			// DEBUG SPILLY: Log when QueryTimeoutError fires in portal execution.
+			log.Dev.Infof(ctx,
+				"DEBUG SPILLY stmt_timeout: QueryTimeoutError in portal exec, StmtTimeout=%v, stmt=%s, user=%s",
+				ex.sessionData().StmtTimeout, vars.ast.String(), ex.sessionData().User().Normalized())
 			// A timed out query should never produce retryable errors/events/payloads
 			// so we intercept and overwrite them all here.
 			retEv = eventNonRetryableErr{

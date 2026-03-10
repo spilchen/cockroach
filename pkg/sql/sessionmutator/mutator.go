@@ -7,6 +7,7 @@ package sessionmutator
 
 import (
 	"context"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondatapb"
 	"github.com/cockroachdb/cockroach/pkg/util/duration"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil/pgdate"
 	"github.com/cockroachdb/errors"
@@ -505,6 +507,12 @@ func (m *SessionDataMutator) SetReadOnly(val bool) error {
 }
 
 func (m *SessionDataMutator) SetStmtTimeout(timeout time.Duration) {
+	// DEBUG SPILLY: Log all changes to StmtTimeout with stack trace.
+	if timeout != m.Data.StmtTimeout {
+		log.Dev.Infof(context.Background(),
+			"DEBUG SPILLY stmt_timeout: changed from %v to %v, user=%s\n%s",
+			m.Data.StmtTimeout, timeout, m.Data.UserProto, string(debug.Stack()))
+	}
 	m.Data.StmtTimeout = timeout
 }
 

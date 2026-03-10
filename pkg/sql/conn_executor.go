@@ -3172,6 +3172,10 @@ func (ex *connExecutor) execCopyOut(
 		// because the timeout has already expired), and therefore this check needs
 		// to happen outside the canceled query check above.
 		if queryTimedOut {
+			// DEBUG SPILLY: Log when QueryTimeoutError fires in execCopyOut.
+			log.Dev.Infof(ctx,
+				"DEBUG SPILLY stmt_timeout: QueryTimeoutError in execCopyOut, StmtTimeout=%v, stmt=%s, user=%s",
+				ex.sessionData().StmtTimeout, cmd.Stmt.String(), ex.sessionData().User().Normalized())
 			// A timed out query should never produce retryable errors/events/payloads
 			// so we intercept and overwrite them all here.
 			retEv = eventNonRetryableErr{
@@ -3186,9 +3190,18 @@ func (ex *connExecutor) execCopyOut(
 		}
 	}(ctx)
 
-	if ex.sessionData().StmtTimeout > 0 {
+	copyOutStmtTimeout := ex.sessionData().StmtTimeout
+	// DEBUG SPILLY: Force 1ms timeout for WireTransferPayment INSERT when timeout is 1s.
+	if copyOutStmtTimeout == time.Second &&
+		strings.HasPrefix(strings.ToLower(cmd.Stmt.String()), "insert into wiretransferpayment (id)") {
+		copyOutStmtTimeout = time.Millisecond
+		log.Dev.Infof(ctx,
+			"DEBUG SPILLY stmt_timeout: FORCING 1ms timeout (copyOut) for stmt=%s, user=%s",
+			cmd.Stmt.String(), ex.sessionData().User().Normalized())
+	}
+	if copyOutStmtTimeout > 0 {
 		timerDuration :=
-			ex.sessionData().StmtTimeout - ex.phaseTimes.GetSessionPhaseTime(sessionphase.SessionQueryReceived).Elapsed()
+			copyOutStmtTimeout - ex.phaseTimes.GetSessionPhaseTime(sessionphase.SessionQueryReceived).Elapsed()
 		// There's no need to proceed with execution if the timer has already expired.
 		if timerDuration < 0 {
 			queryTimedOut = true
@@ -3455,6 +3468,10 @@ func (ex *connExecutor) execCopyIn(
 		// because the timeout has already expired), and therefore this check needs
 		// to happen outside the canceled query check above.
 		if queryTimedOut {
+			// DEBUG SPILLY: Log when QueryTimeoutError fires in execCopyIn.
+			log.Dev.Infof(ctx,
+				"DEBUG SPILLY stmt_timeout: QueryTimeoutError in execCopyIn, StmtTimeout=%v, stmt=%s, user=%s",
+				ex.sessionData().StmtTimeout, cmd.Stmt.String(), ex.sessionData().User().Normalized())
 			// A timed out query should never produce retryable errors/events/payloads
 			// so we intercept and overwrite them all here.
 			retEv = eventNonRetryableErr{
@@ -3469,9 +3486,18 @@ func (ex *connExecutor) execCopyIn(
 		}
 	}(ctx)
 
-	if ex.sessionData().StmtTimeout > 0 {
+	copyInStmtTimeout := ex.sessionData().StmtTimeout
+	// DEBUG SPILLY: Force 1ms timeout for WireTransferPayment INSERT when timeout is 1s.
+	if copyInStmtTimeout == time.Second &&
+		strings.HasPrefix(strings.ToLower(cmd.Stmt.String()), "insert into wiretransferpayment (id)") {
+		copyInStmtTimeout = time.Millisecond
+		log.Dev.Infof(ctx,
+			"DEBUG SPILLY stmt_timeout: FORCING 1ms timeout (copyIn) for stmt=%s, user=%s",
+			cmd.Stmt.String(), ex.sessionData().User().Normalized())
+	}
+	if copyInStmtTimeout > 0 {
 		timerDuration :=
-			ex.sessionData().StmtTimeout - ex.phaseTimes.GetSessionPhaseTime(sessionphase.SessionQueryReceived).Elapsed()
+			copyInStmtTimeout - ex.phaseTimes.GetSessionPhaseTime(sessionphase.SessionQueryReceived).Elapsed()
 		// There's no need to proceed with execution if the timer has already expired.
 		if timerDuration < 0 {
 			queryTimedOut = true
@@ -4399,6 +4425,11 @@ func (ex *connExecutor) waitForTxnJobs() error {
 		if err := ex.server.cfg.JobRegistry.WaitForJobs(jobWaitCtx,
 			ex.extraTxnState.jobs.created); err != nil {
 			if errors.Is(err, context.Canceled) && queryTimedout.Load() {
+				// DEBUG SPILLY: Log when QueryTimeoutError fires in waitForTxnJobs.
+				log.Dev.Infof(ex.Ctx(),
+					"DEBUG SPILLY stmt_timeout: QueryTimeoutError in waitForTxnJobs, StmtTimeout=%v, user=%s, jobs=%v",
+					ex.sessionData().StmtTimeout, ex.sessionData().User().Normalized(),
+					ex.extraTxnState.jobs.created)
 				retErr = sqlerrors.QueryTimeoutError
 				err = nil
 			} else {
