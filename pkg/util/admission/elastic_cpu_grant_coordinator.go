@@ -98,10 +98,17 @@ func (e *ElasticCPUGrantCoordinator) NewPacer(unit time.Duration, wi WorkInfo) *
 	if e == nil {
 		return nil
 	}
+	yieldEnabled := YieldForElasticCPU.Get(&e.ElasticCPUWorkQueue.settings.SV)
+	elasticEnabled := e.ElasticCPUWorkQueue.enabled()
+	log.Dev.Infof(e.elasticCPUGranter.ctx,
+		"elastic CPU pacer: admission.elastic_cpu.enabled=%t "+
+			"admission.elastic_cpu.yield.enabled=%t "+
+			"bypassAdmission=%t unit=%s",
+		elasticEnabled, yieldEnabled, wi.BypassAdmission, unit)
 	return &Pacer{
 		unit:  unit,
 		wi:    wi,
 		wq:    e.ElasticCPUWorkQueue,
-		yield: YieldForElasticCPU.Get(&e.ElasticCPUWorkQueue.settings.SV),
+		yield: yieldEnabled,
 	}
 }

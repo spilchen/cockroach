@@ -385,12 +385,19 @@ func (n *controllerImpl) AdmitKVWork(
 		// for elastic AC. This is intentional: elastic AC is designed
 		// specifically to run "background" work elastically at a rate that doesn't
 		// impact the cluster.
-		if admissionInfo.Priority <= admissionpb.BulkNormalPri && ElasticAdmission.Get(&n.settings.SV) {
+		elasticAdmissionEnabled := ElasticAdmission.Get(&n.settings.SV)
+		if admissionInfo.Priority <= admissionpb.BulkNormalPri && elasticAdmissionEnabled {
 			var admitDuration time.Duration
 			if ba.IsSingleExportRequest() {
 				admitDuration = elasticCPUDurationPerExportRequest.Get(&n.settings.SV)
 			} else { // isInternalLowPriRead
 				admitDuration = elasticCPUDurationPerInternalLowPriRead.Get(&n.settings.SV)
+			}
+			if n.every.ShouldLog() {
+				log.KvDistribution.VInfof(ctx, 1,
+					"kv admission: elastic CPU path for bulk request "+
+						"(pri=%s, elasticAdmission=%t, admitDuration=%s)",
+					admissionInfo.Priority, elasticAdmissionEnabled, admitDuration)
 			}
 
 			// TODO(irfansharif): For export requests it's possible to preempt,
@@ -416,6 +423,12 @@ func (n *controllerImpl) AdmitKVWork(
 				}
 			}()
 		} else {
+			if admissionInfo.Priority <= admissionpb.BulkNormalPri && n.every.ShouldLog() {
+				log.KvDistribution.VInfof(ctx, 1,
+					"kv admission: slots-based path for bulk request "+
+						"(pri=%s, elasticAdmission=%t)",
+					admissionInfo.Priority, elasticAdmissionEnabled)
+			}
 			// Use the slots-based mechanism for everything else.
 			resp, err := cpuAdmissionQ.Admit(ctx, admissionInfo)
 			if err != nil {

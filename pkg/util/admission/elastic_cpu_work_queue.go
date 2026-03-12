@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 )
 
 const (
@@ -74,6 +75,10 @@ func (e *ElasticCPUWorkQueue) Admit(
 	ctx context.Context, duration time.Duration, info WorkInfo, yieldInHandle bool,
 ) (*ElasticCPUWorkHandle, error) {
 	if !e.enabled() {
+		log.Dev.VInfof(ctx, 2,
+			"elastic CPU work queue: admission.elastic_cpu.enabled=false, "+
+				"skipping elastic admission (bypassAdmission=%t)",
+			info.BypassAdmission)
 		return nil, nil
 	}
 	if duration < MinElasticCPUDuration {

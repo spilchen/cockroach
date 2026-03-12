@@ -415,6 +415,10 @@ func (ib *indexBackfiller) ingestIndexEntries(
 		defer close(stopProgress)
 
 		// Create a pacer for admission control for index entry processing.
+		log.Dev.Infof(ctx, "index backfill: creating pacer with elastic control setting %s=%t",
+			indexBackfillElasticCPUControlEnabled.Name(),
+			indexBackfillElasticCPUControlEnabled.Get(
+				&ib.flowCtx.Cfg.Settings.SV))
 		pacer := bulk.NewCPUPacer(ctx, ib.flowCtx.Cfg.DB.KV(), indexBackfillElasticCPUControlEnabled)
 		defer pacer.Close()
 

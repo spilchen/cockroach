@@ -36,13 +36,18 @@ func NewCPUPacer(ctx context.Context, db *kv.DB, setting *settings.BoolSetting) 
 		log.Dev.Infof(ctx, "admission control is not configured to pace this bulk work")
 		return nil
 	}
-	bypassACQueue := !setting.Get(db.SettingsValues())
+	enabled := setting.Get(db.SettingsValues())
+	bypassACQueue := !enabled
+	requestDuration := cpuPacerRequestDuration.Get(db.SettingsValues())
+	log.Dev.Infof(ctx,
+		"creating CPU pacer: setting %s=%t bypassAdmission=%t requestDuration=%s",
+		setting.Name(), enabled, bypassACQueue, requestDuration)
 	tenantID, ok := roachpb.ClientTenantFromContext(ctx)
 	if !ok {
 		tenantID = roachpb.SystemTenantID
 	}
 	return db.AdmissionPacerFactory.NewPacer(
-		cpuPacerRequestDuration.Get(db.SettingsValues()),
+		requestDuration,
 		admission.WorkInfo{
 			TenantID:        tenantID,
 			Priority:        admissionpb.BulkNormalPri,
