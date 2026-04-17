@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/server/telemetry"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
@@ -24,6 +25,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlclustersettings"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqltelemetry"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
@@ -592,6 +594,13 @@ func setFuncOptions(
 		// creation.
 		returnType := udfDesc.ReturnType.Type
 		lazilyEvalSQL := returnType != nil && returnType.Identical(types.Trigger)
+		if !lazilyEvalSQL && udfDesc.IsProcedure() {
+			lazilyEvalSQL = params.p.ExecCfg().Settings.Version.IsActive(
+				params.ctx, clusterversion.V26_3,
+			) && sqlclustersettings.RoutineLateBinding.Get(
+				&params.p.ExecCfg().Settings.SV,
+			)
+		}
 		if !lazilyEvalSQL {
 			// Replace any sequence names in the function body with IDs.
 			body, err = replaceSeqNamesWithIDsLang(params.ctx, params.p, body, true, lang)

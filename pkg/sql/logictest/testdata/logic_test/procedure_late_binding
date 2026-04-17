@@ -1,0 +1,729 @@
+# LogicTest: local
+
+# Enable late binding for routines.
+statement ok
+SET CLUSTER SETTING sql.routines.late_binding.enabled = true
+
+subtest forward_reference_sql
+
+# CREATE PROCEDURE should succeed even though t1 does not exist.
+statement ok
+CREATE PROCEDURE p_fwd() LANGUAGE SQL AS $$ SELECT * FROM t1 $$
+
+# The procedure's dependsOn list should be empty (no back-references installed).
+query T
+SELECT COALESCE(
+  d->'function'->'dependsOn',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+) WHERE d->'function'->'name' = '"p_fwd"'
+----
+[]
+
+# CALL should fail because t1 does not exist yet.
+statement error pgcode 42P01 relation "t1" does not exist
+CALL p_fwd()
+
+# Create the table and verify CALL now works.
+statement ok
+CREATE TABLE t1 (c1 INT)
+
+statement ok
+INSERT INTO t1 VALUES (1), (2)
+
+statement ok
+CALL p_fwd()
+
+# The table should NOT have a back-reference to the procedure.
+let $t1_id
+SELECT 't1'::regclass::oid::int
+
+query T
+SELECT COALESCE(
+  d->'table'->'dependedOnBy',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+  WHERE id = $t1_id
+)
+----
+[]
+
+statement ok
+DROP TABLE t1
+
+statement ok
+DROP PROCEDURE p_fwd
+
+subtest end
+
+subtest forward_reference_plpgsql
+
+# CREATE PROCEDURE with PLpgSQL should succeed even though t2 does not exist.
+statement ok
+CREATE PROCEDURE p_fwd_plpgsql() LANGUAGE PLpgSQL AS $$
+BEGIN
+  INSERT INTO t2 VALUES (42);
+END
+$$
+
+# CALL should fail because t2 does not exist yet.
+statement error pgcode 42P01 relation "t2" does not exist
+CALL p_fwd_plpgsql()
+
+# Create the table and verify CALL now works.
+statement ok
+CREATE TABLE t2 (c1 INT)
+
+statement ok
+CALL p_fwd_plpgsql()
+
+query I
+SELECT * FROM t2
+----
+42
+
+statement ok
+DROP TABLE t2
+
+statement ok
+DROP PROCEDURE p_fwd_plpgsql
+
+subtest end
+
+subtest no_dependency_protection
+
+# With late binding, DDL on referenced objects should not be blocked.
+statement ok
+CREATE TABLE t_dep (a INT PRIMARY KEY, b INT, c INT)
+
+statement ok
+CREATE PROCEDURE p_dep() LANGUAGE SQL AS $$ SELECT a, b FROM t_dep $$
+
+# The table should have no back-reference to the procedure.
+let $t_dep_id
+SELECT 't_dep'::regclass::oid::int
+
+query T
+SELECT COALESCE(
+  d->'table'->'dependedOnBy',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+  WHERE id = $t_dep_id
+)
+----
+[]
+
+# DROP TABLE should succeed (no dependency protection).
+statement ok
+DROP TABLE t_dep
+
+# CALL should fail because the table was dropped.
+statement error pgcode 42P01 relation "t_dep" does not exist
+CALL p_dep()
+
+# Re-create the table and verify CALL works again.
+statement ok
+CREATE TABLE t_dep (a INT PRIMARY KEY, b INT, c INT)
+
+statement ok
+CALL p_dep()
+
+# DROP COLUMN should succeed (no dependency protection).
+statement ok
+ALTER TABLE t_dep DROP COLUMN b
+
+# CALL should now fail because the body references the dropped column.
+statement error pgcode 42703 column "b" does not exist
+CALL p_dep()
+
+statement ok
+DROP TABLE t_dep
+
+statement ok
+DROP PROCEDURE p_dep
+
+subtest end
+
+subtest column_rename
+
+statement ok
+CREATE TABLE t4 (a INT, b INT)
+
+statement ok
+INSERT INTO t4 VALUES (1, 2)
+
+statement ok
+CREATE PROCEDURE p_col() LANGUAGE SQL AS $$ SELECT b FROM t4 $$
+
+statement ok
+CALL p_col()
+
+# Rename the column. With late binding, this succeeds (no dependency protection).
+statement ok
+ALTER TABLE t4 RENAME COLUMN b TO c
+
+# CALL should fail because the body still references the old column name.
+statement error pgcode 42703 column "b" does not exist
+CALL p_col()
+
+statement ok
+DROP TABLE t4
+
+statement ok
+DROP PROCEDURE p_col
+
+subtest end
+
+subtest early_to_late_binding_transition
+
+# Create a procedure with early binding, then CREATE OR REPLACE with late
+# binding enabled. Verify old back-references are properly cleaned up.
+statement ok
+SET CLUSTER SETTING sql.routines.late_binding.enabled = false
+
+statement ok
+CREATE TABLE t_trans (a INT PRIMARY KEY, b INT)
+
+statement ok
+CREATE PROCEDURE p_trans() LANGUAGE SQL AS $$ SELECT a, b FROM t_trans $$
+
+# With early binding, the table should have a back-reference to the procedure.
+let $t_trans_id
+SELECT 't_trans'::regclass::oid::int
+
+query B
+SELECT jsonb_array_length(
+  COALESCE(d->'table'->'dependedOnBy', '[]')
+) > 0 FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+  WHERE id = $t_trans_id
+)
+----
+true
+
+# DROP TABLE should be blocked by the back-reference.
+statement error pgcode 2BP01 cannot drop table t_trans because other objects depend on it
+DROP TABLE t_trans
+
+# Now enable late binding and CREATE OR REPLACE the procedure.
+statement ok
+SET CLUSTER SETTING sql.routines.late_binding.enabled = true
+
+statement ok
+CREATE OR REPLACE PROCEDURE p_trans() LANGUAGE SQL AS $$ SELECT a, b FROM t_trans $$
+
+# The old back-reference should be cleaned up. The table should have no
+# back-references now.
+query T
+SELECT COALESCE(
+  d->'table'->'dependedOnBy',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+  WHERE id = $t_trans_id
+)
+----
+[]
+
+# DROP TABLE should now succeed.
+statement ok
+DROP TABLE t_trans
+
+statement ok
+DROP PROCEDURE p_trans
+
+subtest end
+
+subtest drop_procedure_no_orphans
+
+# Verify that DROP PROCEDURE on a late-bound procedure doesn't leave orphaned
+# back-references.
+statement ok
+CREATE TABLE t_orphan (a INT)
+
+statement ok
+CREATE PROCEDURE p_orphan() LANGUAGE SQL AS $$ SELECT * FROM t_orphan $$
+
+# Verify no back-reference was installed.
+let $t_orphan_id
+SELECT 't_orphan'::regclass::oid::int
+
+query T
+SELECT COALESCE(
+  d->'table'->'dependedOnBy',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+  WHERE id = $t_orphan_id
+)
+----
+[]
+
+# DROP PROCEDURE should succeed cleanly.
+statement ok
+DROP PROCEDURE p_orphan
+
+# Table should still have no back-references.
+query T
+SELECT COALESCE(
+  d->'table'->'dependedOnBy',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+  WHERE id = $t_orphan_id
+)
+----
+[]
+
+statement ok
+DROP TABLE t_orphan
+
+subtest end
+
+subtest create_or_replace_basic
+
+# Verify CREATE OR REPLACE works with late binding.
+statement ok
+CREATE PROCEDURE p_replace() LANGUAGE SQL AS $$ SELECT * FROM nonexistent $$
+
+statement ok
+CREATE OR REPLACE PROCEDURE p_replace() LANGUAGE SQL AS $$ SELECT 1 $$
+
+statement ok
+CALL p_replace()
+
+statement ok
+DROP PROCEDURE p_replace
+
+subtest end
+
+subtest parameter_types_required
+
+# Parameter types must still exist at CREATE time.
+statement error pgcode 42704 type "nonexistent_type" does not exist
+CREATE PROCEDURE p_badtype(x nonexistent_type) LANGUAGE SQL AS $$ SELECT 1 $$
+
+subtest end
+
+subtest sequence_names_preserved
+
+# Sequence names should not be replaced with IDs in the body.
+statement ok
+CREATE SEQUENCE s1
+
+statement ok
+CREATE PROCEDURE p_seq() LANGUAGE SQL AS $$ SELECT nextval('s1') $$
+
+statement ok
+CALL p_seq()
+
+# Drop and re-create the sequence. With late binding, the procedure should
+# resolve the new sequence by name.
+statement ok
+DROP SEQUENCE s1
+
+statement ok
+CREATE SEQUENCE s1
+
+statement ok
+CALL p_seq()
+
+statement ok
+DROP SEQUENCE s1
+
+statement ok
+DROP PROCEDURE p_seq
+
+subtest end
+
+subtest late_binding_disabled
+
+# Turn off late binding and verify early binding behavior.
+statement ok
+SET CLUSTER SETTING sql.routines.late_binding.enabled = false
+
+statement error pgcode 42P01 relation "no_such_table" does not exist
+CREATE PROCEDURE p_early() LANGUAGE SQL AS $$ SELECT * FROM no_such_table $$
+
+# Re-enable for remaining tests.
+statement ok
+SET CLUSTER SETTING sql.routines.late_binding.enabled = true
+
+subtest end
+
+subtest plpgsql_with_variables
+
+# PLpgSQL structural validation still works even with late binding.
+statement ok
+CREATE PROCEDURE p_vars(x INT) LANGUAGE PLpgSQL AS $$
+DECLARE
+  v INT;
+BEGIN
+  v := x + 1;
+  INSERT INTO future_table VALUES (v);
+END
+$$
+
+statement error pgcode 42P01 relation "future_table" does not exist
+CALL p_vars(1)
+
+statement ok
+CREATE TABLE future_table (c1 INT)
+
+statement ok
+CALL p_vars(10)
+
+query I
+SELECT * FROM future_table
+----
+11
+
+statement ok
+DROP TABLE future_table
+
+statement ok
+DROP PROCEDURE p_vars
+
+subtest end
+
+subtest plpgsql_no_deps
+
+# PLpgSQL late-bound procedures should also have empty dependsOn.
+statement ok
+CREATE TABLE t_pldep (a INT)
+
+statement ok
+CREATE PROCEDURE p_pldep() LANGUAGE PLpgSQL AS $$
+BEGIN
+  INSERT INTO t_pldep VALUES (1);
+END
+$$
+
+# Procedure's dependsOn should be empty.
+query T
+SELECT COALESCE(
+  d->'function'->'dependsOn',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+) WHERE d->'function'->'name' = '"p_pldep"'
+----
+[]
+
+# Table should have no back-reference.
+let $t_pldep_id
+SELECT 't_pldep'::regclass::oid::int
+
+query T
+SELECT COALESCE(
+  d->'table'->'dependedOnBy',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+  WHERE id = $t_pldep_id
+)
+----
+[]
+
+# DROP TABLE should succeed.
+statement ok
+DROP TABLE t_pldep
+
+statement ok
+DROP PROCEDURE p_pldep
+
+subtest end
+
+subtest view_deps
+
+# Views referenced in procedure body should not get back-references.
+statement ok
+CREATE TABLE t_vbase (a INT PRIMARY KEY, b INT)
+
+statement ok
+CREATE VIEW v_dep AS SELECT a, b FROM t_vbase
+
+statement ok
+CREATE PROCEDURE p_view() LANGUAGE SQL AS $$ SELECT * FROM v_dep $$
+
+# Procedure descriptor should have no dependsOn.
+query T
+SELECT COALESCE(
+  d->'function'->'dependsOn',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+) WHERE d->'function'->'name' = '"p_view"'
+----
+[]
+
+# View should have no back-reference from the procedure.
+let $v_dep_id
+SELECT 'v_dep'::regclass::oid::int
+
+query B
+SELECT NOT EXISTS (
+  SELECT 1 FROM (
+    SELECT jsonb_array_elements(
+      COALESCE(d->'table'->'dependedOnBy', '[]')
+    ) AS ref
+    FROM (
+      SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+      FROM system.descriptor WHERE id = $v_dep_id
+    )
+  ) sub
+  WHERE (ref->>'id')::INT NOT IN (
+    SELECT 't_vbase'::regclass::oid::int
+  )
+)
+----
+true
+
+# DROP VIEW should succeed (no dependency from the procedure).
+statement ok
+DROP VIEW v_dep
+
+statement error pgcode 42P01 relation "v_dep" does not exist
+CALL p_view()
+
+statement ok
+DROP TABLE t_vbase
+
+statement ok
+DROP PROCEDURE p_view
+
+subtest end
+
+subtest sequence_deps
+
+# Sequences referenced in procedure body should not get back-references.
+statement ok
+CREATE SEQUENCE s_dep
+
+statement ok
+CREATE PROCEDURE p_seqdep() LANGUAGE SQL AS $$ SELECT nextval('s_dep') $$
+
+# Procedure descriptor should have no dependsOn.
+query T
+SELECT COALESCE(
+  d->'function'->'dependsOn',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+) WHERE d->'function'->'name' = '"p_seqdep"'
+----
+[]
+
+# Sequence should have no back-reference from the procedure.
+let $s_dep_id
+SELECT 's_dep'::regclass::oid::int
+
+query T
+SELECT COALESCE(
+  d->'table'->'dependedOnBy',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+  WHERE id = $s_dep_id
+)
+----
+[]
+
+# DROP SEQUENCE should succeed.
+statement ok
+DROP SEQUENCE s_dep
+
+statement error pgcode 42P01 relation "s_dep" does not exist
+CALL p_seqdep()
+
+statement ok
+DROP PROCEDURE p_seqdep
+
+subtest end
+
+subtest type_deps
+
+# UDTs used in the procedure body should not get back-references.
+statement ok
+CREATE TYPE color AS ENUM ('red', 'green', 'blue')
+
+statement ok
+CREATE TABLE t_typed (a INT, c color)
+
+statement ok
+CREATE PROCEDURE p_type() LANGUAGE SQL AS $$ INSERT INTO t_typed VALUES (1, 'red'::color) $$
+
+# Procedure descriptor should have no dependsOnTypes from the body.
+# (Parameter/return type deps are still tracked, but this procedure has
+# no UDT parameters.)
+query T
+SELECT COALESCE(
+  d->'function'->'dependsOnTypes',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+) WHERE d->'function'->'name' = '"p_type"'
+----
+[]
+
+# The type descriptor should have no back-reference from the procedure.
+# Drop cascade would succeed because there's no dep from the procedure.
+# But the table t_typed depends on color, so we test the procedure dep
+# by checking that the type's back-references only include the table.
+let $t_typed_id
+SELECT 't_typed'::regclass::oid::int
+
+let $p_type_id
+SELECT (
+  SELECT (d->'function'->'id')::INT FROM (
+    SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+    FROM system.descriptor
+  ) WHERE d->'function'->'name' = '"p_type"'
+)
+
+# Verify the type's back-references don't include the procedure ID.
+query B
+SELECT NOT EXISTS (
+  SELECT 1
+  FROM (
+    SELECT jsonb_array_elements(
+      COALESCE(d->'type'->'referencingDescriptorIds', '[]')
+    )::TEXT::INT AS ref_id
+    FROM (
+      SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+      FROM system.descriptor
+    )
+    WHERE d->'type'->'name' = '"color"'
+      AND d->'type'->>'enumMembers' IS NOT NULL
+  ) sub
+  WHERE ref_id = $p_type_id
+)
+----
+true
+
+statement ok
+DROP TABLE t_typed
+
+statement ok
+DROP PROCEDURE p_type
+
+statement ok
+DROP TYPE color
+
+subtest end
+
+subtest function_deps
+
+# Functions called from a late-bound procedure body should not get
+# back-references.
+statement ok
+CREATE FUNCTION f_helper() RETURNS INT LANGUAGE SQL AS $$ SELECT 42 $$
+
+statement ok
+CREATE PROCEDURE p_callfn() LANGUAGE SQL AS $$ SELECT f_helper() $$
+
+# Procedure descriptor should have no dependsOnFunctions.
+query T
+SELECT COALESCE(
+  d->'function'->'dependsOnFunctions',
+  '[]'
+) FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+) WHERE d->'function'->'name' = '"p_callfn"'
+----
+[]
+
+# The helper function should have no back-reference from the procedure.
+let $p_callfn_id
+SELECT (
+  SELECT (d->'function'->'id')::INT FROM (
+    SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+    FROM system.descriptor
+  ) WHERE d->'function'->'name' = '"p_callfn"'
+)
+
+query B
+SELECT NOT EXISTS (
+  SELECT 1
+  FROM (
+    SELECT jsonb_array_elements(
+      COALESCE(d->'function'->'dependedOnBy', '[]')
+    ) AS ref
+    FROM (
+      SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+      FROM system.descriptor
+    )
+    WHERE d->'function'->'name' = '"f_helper"'
+  ) sub
+  WHERE (ref->>'id')::INT = $p_callfn_id
+)
+----
+true
+
+# Verify the CALL still works.
+statement ok
+CALL p_callfn()
+
+# Drop the function. With late binding, this should succeed.
+statement ok
+DROP FUNCTION f_helper
+
+statement error pgcode 42883 unknown function: f_helper
+CALL p_callfn()
+
+statement ok
+DROP PROCEDURE p_callfn
+
+subtest end
+
+subtest udf_still_early_bound
+
+# UDFs should still use early binding even when the setting is enabled.
+statement error pgcode 42P01 relation "no_such_table" does not exist
+CREATE FUNCTION f_early() RETURNS INT LANGUAGE SQL AS $$ SELECT * FROM no_such_table $$
+
+# UDFs that reference existing tables should still install back-references.
+statement ok
+CREATE TABLE t_udf (a INT)
+
+statement ok
+CREATE FUNCTION f_udf() RETURNS INT LANGUAGE SQL AS $$ SELECT a FROM t_udf LIMIT 1 $$
+
+let $t_udf_id
+SELECT 't_udf'::regclass::oid::int
+
+query B
+SELECT jsonb_array_length(
+  COALESCE(d->'table'->'dependedOnBy', '[]')
+) > 0 FROM (
+  SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor, false) d
+  FROM system.descriptor
+  WHERE id = $t_udf_id
+)
+----
+true
+
+statement ok
+DROP FUNCTION f_udf
+
+statement ok
+DROP TABLE t_udf
+
+subtest end

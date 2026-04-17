@@ -210,7 +210,7 @@ func CreateFunction(b BuildCtx, n *tree.CreateRoutine) {
 	validateTypeReferences(b, refProvider, db.DatabaseID)
 	validateFunctionRelationReferences(b, refProvider, db.DatabaseID)
 	validateFunctionToFunctionReferences(b, refProvider, db.DatabaseID)
-	b.Add(b.WrapFunctionBody(fnID, fnBodyStr, lang, typ, refProvider))
+	b.Add(b.WrapFunctionBody(fnID, fnBodyStr, lang, typ, n.IsProcedure, refProvider))
 	if b.EvalCtx().Settings.Version.ActiveVersion(b).IsActive(clusterversion.V26_2) {
 		b.Add(&scpb.FunctionParams{
 			FunctionID: fnID,
@@ -409,7 +409,7 @@ func replaceFunction(
 	validateFunctionToFunctionReferences(b, refProvider, db.DatabaseID)
 
 	// Build the FunctionBody element with the new body and references.
-	fnBody := b.WrapFunctionBody(fnID, fnBodyStr, lang, typ, refProvider)
+	fnBody := b.WrapFunctionBody(fnID, fnBodyStr, lang, typ, n.IsProcedure, refProvider)
 	b.Replace(fnBody)
 
 	// Replace the FunctionParams element with the updated params.

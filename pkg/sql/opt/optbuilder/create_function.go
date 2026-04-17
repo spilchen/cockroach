@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/funcinfo"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/typedesc"
@@ -21,6 +22,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/cast"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/plpgsqltree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlclustersettings"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
 	"github.com/cockroachdb/cockroach/pkg/util/intsets"
@@ -370,6 +372,12 @@ func (b *Builder) buildCreateFunction(cf *tree.CreateRoutine, inScope *scope) (o
 	targetVolatility := tree.GetRoutineVolatility(cf.Options)
 	fmtCtx := tree.NewFmtCtx(tree.FmtParsable | tree.FmtAlwaysQualifyUserDefinedTypeNames)
 
+	// When late binding is enabled for procedures, we parse but do not build the
+	// body statements. References are resolved at CALL time instead.
+	lateBinding := cf.IsProcedure &&
+		b.evalCtx.Settings.Version.IsActive(b.ctx, clusterversion.V26_3) &&
+		sqlclustersettings.RoutineLateBinding.Get(&b.evalCtx.Settings.SV)
+
 	defer func(origValue bool) {
 		b.insideSQLRoutine = origValue
 	}(b.insideSQLRoutine)
@@ -384,28 +392,30 @@ func (b *Builder) buildCreateFunction(cf *tree.CreateRoutine, inScope *scope) (o
 		if err != nil {
 			panic(err)
 		}
-		for i, stmt := range stmts {
-			// Add statement ast into CreateRoutine node for logging purpose, and set
-			// the annotations for this statement so names can be resolved.
-			cf.BodyStatements = append(cf.BodyStatements, stmt.AST)
-			ann := tree.MakeAnnotations(stmt.NumAnnotations)
-			cf.BodyAnnotations = append(cf.BodyAnnotations, &ann)
+		if !lateBinding {
+			for i, stmt := range stmts {
+				// Add statement ast into CreateRoutine node for logging purpose, and set
+				// the annotations for this statement so names can be resolved.
+				cf.BodyStatements = append(cf.BodyStatements, stmt.AST)
+				ann := tree.MakeAnnotations(stmt.NumAnnotations)
+				cf.BodyAnnotations = append(cf.BodyAnnotations, &ann)
 
-			// The defer logic will reset the annotations to the old value.
-			b.semaCtx.Annotations = ann
-			b.evalCtx.Annotations = &ann
+				// The defer logic will reset the annotations to the old value.
+				b.semaCtx.Annotations = ann
+				b.evalCtx.Annotations = &ann
 
-			// We need to disable stable function folding because we want to catch the
-			// volatility of stable functions. If folded, we only get a scalar and
-			// lose the volatility.
-			b.factory.FoldingControl().TemporarilyDisallowStableFolds(func() {
-				stmtScope = b.buildStmtAtRootWithScope(stmts[i].AST, nil /* desiredTypes */, bodyScope)
-			})
-			checkStmtVolatility(targetVolatility, stmtScope, stmt.AST)
+				// We need to disable stable function folding because we want to catch the
+				// volatility of stable functions. If folded, we only get a scalar and
+				// lose the volatility.
+				b.factory.FoldingControl().TemporarilyDisallowStableFolds(func() {
+					stmtScope = b.buildStmtAtRootWithScope(stmts[i].AST, nil /* desiredTypes */, bodyScope)
+				})
+				checkStmtVolatility(targetVolatility, stmtScope, stmt.AST)
 
-			// Format the statements with qualified datasource names.
-			formatFuncBodyStmt(fmtCtx, stmt.AST, language, i > 0 /* newLine */)
-			afterBuildStmt()
+				// Format the statements with qualified datasource names.
+				formatFuncBodyStmt(fmtCtx, stmt.AST, language, i > 0 /* newLine */)
+				afterBuildStmt()
+			}
 		}
 	case tree.RoutineLangPLpgSQL:
 		// Parse the function body.
@@ -426,7 +436,7 @@ func (b *Builder) buildCreateFunction(cf *tree.CreateRoutine, inScope *scope) (o
 			}
 		}
 
-		// Special handling for trigger functions.
+		// Special handling for trigger functions and late-bound procedures.
 		var skipSQL, isTriggerFn bool
 		if funcReturnType.Identical(types.Trigger) {
 			// Trigger functions cannot have user-defined parameters. However, they do
@@ -450,6 +460,8 @@ func (b *Builder) buildCreateFunction(cf *tree.CreateRoutine, inScope *scope) (o
 			// until the function is bound to a trigger.
 			isTriggerFn = true
 			skipSQL = true
+		} else if lateBinding {
+			skipSQL = true
 		}
 
 		// We need to disable stable function folding because we want to catch the
@@ -467,44 +479,52 @@ func (b *Builder) buildCreateFunction(cf *tree.CreateRoutine, inScope *scope) (o
 			)
 			stmtScope = plBuilder.buildRootBlock(stmt.AST, bodyScope, routineParams)
 		})
-		checkStmtVolatility(targetVolatility, stmtScope, stmt)
+		if !lateBinding {
+			checkStmtVolatility(targetVolatility, stmtScope, stmt)
 
-		// Format the statements with qualified datasource names.
-		formatFuncBodyStmt(fmtCtx, stmt.AST, language, false /* newLine */)
-		afterBuildStmt()
+			// Format the statements with qualified datasource names.
+			formatFuncBodyStmt(fmtCtx, stmt.AST, language, false /* newLine */)
+			afterBuildStmt()
+		}
 	default:
 		panic(errors.AssertionFailedf("unexpected language: %v", language))
 	}
 
-	if stmtScope != nil && (language != tree.RoutineLangPLpgSQL || !isSetReturning) {
-		// Validate that the result type of the last statement matches the
-		// return type of the function. We skip this validation for PL/pgSQL SRFs
-		// because those handle their own validation, and do not return a result
-		// directly from their last body statement anyway.
-		//
-		// TODO(mgartner): stmtScope.cols does not describe the result
-		// columns of the statement. We should use physical.Presentation
-		// instead.
-		err = validateReturnType(b.ctx, b.semaCtx, funcReturnType, stmtScope.cols)
-		if err != nil {
-			panic(err)
+	if !lateBinding {
+		if stmtScope != nil && (language != tree.RoutineLangPLpgSQL || !isSetReturning) {
+			// Validate that the result type of the last statement matches the
+			// return type of the function. We skip this validation for PL/pgSQL SRFs
+			// because those handle their own validation, and do not return a result
+			// directly from their last body statement anyway.
+			//
+			// TODO(mgartner): stmtScope.cols does not describe the result
+			// columns of the statement. We should use physical.Presentation
+			// instead.
+			err = validateReturnType(b.ctx, b.semaCtx, funcReturnType, stmtScope.cols)
+			if err != nil {
+				panic(err)
+			}
+		}
+
+		if targetVolatility == tree.RoutineImmutable && len(deps) > 0 {
+			panic(
+				pgerror.Newf(
+					pgcode.InvalidParameterValue,
+					"referencing relations is not allowed in immutable function",
+				),
+			)
 		}
 	}
 
-	if targetVolatility == tree.RoutineImmutable && len(deps) > 0 {
-		panic(
-			pgerror.Newf(
-				pgcode.InvalidParameterValue,
-				"referencing relations is not allowed in immutable function",
-			),
-		)
-	}
-
-	// Override the function body so that references are fully qualified.
-	for i, option := range cf.Options {
-		if _, ok := option.(tree.RoutineBodyStr); ok {
-			cf.Options[i] = tree.RoutineBodyStr(fmtCtx.CloseAndGetString())
-			break
+	if lateBinding {
+		fmtCtx.Close()
+	} else {
+		// Override the function body so that references are fully qualified.
+		for i, option := range cf.Options {
+			if _, ok := option.(tree.RoutineBodyStr); ok {
+				cf.Options[i] = tree.RoutineBodyStr(fmtCtx.CloseAndGetString())
+				break
+			}
 		}
 	}
 

@@ -192,6 +192,20 @@ var UseInstanceInfoForSQLInstances = settings.RegisterBoolSetting(
 		"enables proper handling of SQL instances in serverless environments",
 	metamorphic.ConstantWithTestBool("sql.instance_info.use_instance_resolver.enabled", true))
 
+// RoutineLateBinding controls whether SQL procedure bodies use late binding.
+// When true, procedure bodies are not resolved at creation time; references
+// are resolved at invocation time instead, matching PostgreSQL string-based
+// syntax semantics. UDF late binding may be added in a future release.
+var RoutineLateBinding = settings.RegisterBoolSetting(
+	settings.ApplicationLevel,
+	"sql.routines.late_binding.enabled",
+	"when true, SQL procedure bodies are not resolved at creation time; "+
+		"references are resolved at invocation time instead, matching "+
+		"PostgreSQL string-based syntax semantics",
+	false,
+	settings.WithPublic,
+)
+
 // SkipUnderlyingViewPrivilegeChecks controls whether privilege checks on underlying
 // tables are skipped when selecting from a view. By default (false), the view
 // owner's privileges are checked on the underlying tables, and the owner's

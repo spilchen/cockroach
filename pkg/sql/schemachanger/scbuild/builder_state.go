@@ -38,6 +38,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/plpgsqltree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/sql/sqlclustersettings"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/syntheticprivilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
@@ -1947,15 +1948,20 @@ func (b *builderState) WrapFunctionBody(
 	bodyStr string,
 	lang catpb.Function_Language,
 	returnType tree.ResolvableTypeReference,
+	isProcedure bool,
 	refProvider scbuildstmt.ReferenceProvider,
 ) *scpb.FunctionBody {
-	// Trigger functions do not analyze SQL statements beyond parsing, so type and
-	// sequence names should not be replaced during trigger-function creation.
+	// Trigger functions and late-bound procedures do not analyze SQL statements
+	// beyond parsing, so type and sequence names should not be replaced.
 	var lazilyEvalSQL bool
 	if returnType != nil {
 		if typ, ok := returnType.(*types.T); ok && typ.Identical(types.Trigger) {
 			lazilyEvalSQL = true
 		}
+	}
+	if !lazilyEvalSQL && isProcedure &&
+		b.evalCtx.Settings.Version.IsActive(b.ctx, clusterversion.V26_3) {
+		lazilyEvalSQL = sqlclustersettings.RoutineLateBinding.Get(&b.evalCtx.Settings.SV)
 	}
 	if !lazilyEvalSQL {
 		bodyStr = b.replaceSeqNamesWithIDs(bodyStr, lang)
