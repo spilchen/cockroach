@@ -962,3 +962,67 @@ func TestBatchedTempCleanupIdempotent(t *testing.T) {
 	err = cleanupSessionTempObjects(ctx, execCfg.InternalDB, execCfg.Settings, sessionID)
 	require.NoError(t, err)
 }
+
+// TestCreateTempSequenceAfterRollback is a regression test for #168966.
+// CREATE TEMPORARY SEQUENCE used to leave stale state in session data
+// (DatabaseIDToTempSchemaID) after a transaction rollback. A subsequent
+// CREATE TEMPORARY SEQUENCE in the same session would resolve the temp schema
+// from session data without checking that the namespace entry still existed,
+// producing a phantom schema reference. With the transactional descriptor ID
+// generator in use (as in end-to-end schemachanger tests), the rollback
+// rewinds the ID counter, the next allocation collides with the stale schema
+// ID, the sequence's privilege elements get deduped against the resolved
+// schema's, and the descriptor commits with no privileges, surfacing as
+// "user root does not have privileges over sequence".
+func TestCreateTempSequenceAfterRollback(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	ctx := context.Background()
+	s, db, _ := serverutils.StartServer(t, base.TestServerArgs{
+		Knobs: base.TestingKnobs{
+			SQLExecutor: &ExecutorTestingKnobs{
+				UseTransactionalDescIDGenerator: true,
+			},
+		},
+	})
+	defer s.Stopper().Stop(ctx)
+
+	// All work runs on a single connection so session data persists across the
+	// rollback boundary.
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	_, err = conn.ExecContext(ctx, `SET use_declarative_schema_changer = 'unsafe_always'`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `SET experimental_enable_temp_tables = true`)
+	require.NoError(t, err)
+
+	// First attempt: run CREATE TEMPORARY SEQUENCE inside a transaction and
+	// then roll it back. This mirrors what crdb.Execute does when the commit
+	// hits a retryable error: the schema change has already executed (which
+	// mutates session data via planner.InsertTemporarySchema), but the txn
+	// is then rolled back.
+	tx, err := conn.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `SET LOCAL autocommit_before_ddl = false`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `CREATE TEMPORARY SEQUENCE first_seq`)
+	require.NoError(t, err)
+	require.NoError(t, tx.Rollback())
+
+	// Second attempt: same connection (so session data is intact). With the
+	// fix in place the catalog notices the stale DatabaseIDToTempSchemaID
+	// mapping (the rolled-back namespace entry no longer exists), forgets it,
+	// and lets MaybeCreateOrResolveTemporarySchema take the create branch.
+	// Before the fix this CREATE failed with
+	// "user root does not have privileges over sequence second_seq".
+	tx, err = conn.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `SET LOCAL autocommit_before_ddl = false`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `CREATE TEMPORARY SEQUENCE second_seq`)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+}

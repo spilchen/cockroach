@@ -643,7 +643,10 @@ func (tc *Collection) getNonVirtualDescriptorID(
 		if !isSchema || !isTemporarySchema(name) {
 			return continueLookups, descpb.InvalidID, nil
 		}
-		avoidFurtherLookups, td := tc.getTemporarySchemaByName(parentID, name)
+		avoidFurtherLookups, td, err := tc.getTemporarySchemaByName(ctx, txn, parentID, name)
+		if err != nil {
+			return haltLookups, descpb.InvalidID, err
+		}
 		if td != nil {
 			return haltLookups, td.GetID(), nil
 		}
