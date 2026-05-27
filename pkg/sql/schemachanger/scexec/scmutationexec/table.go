@@ -9,13 +9,59 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cockroach/pkg/config/zonepb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catenumpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/descpb"
+	"github.com/cockroachdb/cockroach/pkg/sql/catalog/tabledesc"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scop"
+	"github.com/cockroachdb/cockroach/pkg/sql/sem/catid"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/storageparam/tablestorageparam"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 )
+
+// CreateTableDescriptor materializes a freshly-created table descriptor in the
+// catalog in the ADD state. Subsequent ops on the Table ABSENT -> PUBLIC path
+// (column/index materialization, namespace, schema parent, privileges, and
+// finally MarkDescriptorAsPublic) fill in the rest and transition it to
+// PUBLIC. This mirrors CreateSequenceDescriptor.
+//
+// The PrimaryIndex field of the new descriptor is seeded with the metadata
+// that the builder will subsequently emit (ID=1, name="primary",
+// LatestIndexDescriptorVersion, PrimaryIndexEncoding, ConstraintID=1,
+// Unique=true). Without this seeding, AllocateIDsWithoutValidation (called
+// during the first column-emission op) would assign ID=1 to the zero-valued
+// placeholder, leaving a stale PrimaryIndex (Version=0) alongside the real
+// mutation (Version=4). End-of-stage MakeValidatedPrimaryIndexPublic would
+// then look up index 1, find the stale placeholder first, and copy its
+// zero-valued metadata into tbl.PrimaryIndex, producing a validation error
+// "primary index has invalid version 0". KeyColumnIDs/Names/Directions are
+// filled in by subsequent AddColumnToIndex ops.
+func (i *immediateVisitor) CreateTableDescriptor(
+	_ context.Context, op scop.CreateTableDescriptor,
+) error {
+	mut := tabledesc.NewBuilder(&descpb.TableDescriptor{
+		ParentID:      catid.InvalidDescID, // set by `SchemaParent` element
+		Name:          "",                  // set by `Namespace` element
+		ID:            op.TableID,
+		Privileges:    &catpb.PrivilegeDescriptor{Version: catpb.Version23_2}, // populated by `UserPrivileges` and `Owner` elements
+		Version:       1,
+		FormatVersion: descpb.InterleavedFormatVersion,
+		PrimaryIndex: descpb.IndexDescriptor{
+			ID:           1,
+			Name:         tabledesc.LegacyPrimaryKeyIndexName,
+			Version:      descpb.LatestIndexDescriptorVersion,
+			EncodingType: catenumpb.PrimaryIndexEncoding,
+			ConstraintID: 1,
+			Unique:       true,
+		},
+		NextIndexID:      2,
+		NextConstraintID: 2,
+	}).BuildCreatedMutable()
+	mut.(*tabledesc.Mutable).State = descpb.DescriptorState_ADD
+	i.CreateDescriptor(mut)
+	return nil
+}
 
 func (i *immediateVisitor) AddTableZoneConfig(
 	ctx context.Context, op scop.AddTableZoneConfig,

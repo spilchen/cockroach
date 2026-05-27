@@ -1115,6 +1115,16 @@ type CreateSequenceDescriptor struct {
 	Temporary  bool
 }
 
+// CreateTableDescriptor materializes a freshly-created table descriptor in the
+// catalog. The descriptor is created in the ADD state with only its ID
+// populated; downstream ops (column/index materialization, namespace, schema
+// parent, privileges, and ultimately MarkDescriptorAsPublic) fill in the rest
+// and transition it to PUBLIC.
+type CreateTableDescriptor struct {
+	immediateMutationOp
+	TableID descpb.ID
+}
+
 type SetSequenceOption struct {
 	immediateMutationOp
 	SequenceID descpb.ID
