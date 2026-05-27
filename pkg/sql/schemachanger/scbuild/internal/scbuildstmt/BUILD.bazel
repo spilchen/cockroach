@@ -162,9 +162,9 @@ go_test(
     deps = [
         "//pkg/clusterversion",
         "//pkg/settings",
-        "//pkg/sql/schemachanger/scerrors",
         "//pkg/sql/sem/tree",
         "//pkg/sql/sessiondatapb",
+        "//pkg/sql/types",
         "@com_github_stretchr_testify//require",
     ],
 )

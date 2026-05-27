@@ -9,60 +9,226 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
-	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sessiondatapb"
+	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/stretchr/testify/require"
 )
 
-// TestCreateTableAlwaysRoutesToLegacy verifies that the routing infrastructure
-// added in commit 1 always rejects CREATE TABLE, so every statement falls back
-// to the legacy schema changer. Commit 2 will replace the "every CREATE TABLE
-// is rejected" assertions with a narrower set that allows the trivial accepted
-// surface.
-func TestCreateTableAlwaysRoutesToLegacy(t *testing.T) {
-	modes := []sessiondatapb.NewSchemaChangerMode{
-		sessiondatapb.UseNewSchemaChangerOff,
-		sessiondatapb.UseNewSchemaChangerOn,
-		sessiondatapb.UseNewSchemaChangerUnsafe,
-		sessiondatapb.UseNewSchemaChangerUnsafeAlways,
+// TestCreateTableChecksAcceptsTrivialSurface asserts that createTableChecks
+// returns true for the small subset of CREATE TABLE that the declarative
+// schema changer can handle. Each accepted shape uses only the supported
+// features: plain columns, NULL/NOT NULL, IF NOT EXISTS, and at most one
+// inline single-column PRIMARY KEY.
+func TestCreateTableChecksAcceptsTrivialSurface(t *testing.T) {
+	col := func(name string, opts ...func(*tree.ColumnTableDef)) *tree.ColumnTableDef {
+		c := &tree.ColumnTableDef{Name: tree.Name(name), Type: types.Int}
+		for _, opt := range opts {
+			opt(c)
+		}
+		return c
+	}
+	notNull := func(c *tree.ColumnTableDef) {
+		c.Nullable.Nullability = tree.NotNull
+	}
+	primaryKey := func(c *tree.ColumnTableDef) {
+		c.PrimaryKey.IsPrimaryKey = true
 	}
 
 	tests := []struct {
 		name string
 		stmt *tree.CreateTable
 	}{
-		{name: "empty CREATE TABLE", stmt: &tree.CreateTable{}},
-		{name: "CREATE TABLE IF NOT EXISTS", stmt: &tree.CreateTable{IfNotExists: true}},
-		{name: "CREATE TEMPORARY TABLE", stmt: &tree.CreateTable{Persistence: tree.PersistenceTemporary}},
-		{name: "CREATE UNLOGGED TABLE", stmt: &tree.CreateTable{Persistence: tree.PersistenceUnlogged}},
-		{name: "CREATE TABLE AS", stmt: &tree.CreateTable{AsSource: &tree.Select{}}},
+		{
+			name: "single int column",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a")}},
+		},
+		{
+			name: "multiple columns with NOT NULL",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", notNull), col("b")}},
+		},
+		{
+			name: "single-column inline primary key",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", primaryKey), col("b")}},
+		},
+		{
+			name: "IF NOT EXISTS",
+			stmt: &tree.CreateTable{IfNotExists: true, Defs: tree.TableDefs{col("a")}},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, mode := range modes {
-				require.False(t,
-					IsFullySupportedWithFalsePositive(tc.stmt, clusterversion.ClusterVersion{}, mode),
-					"mode=%v: CREATE TABLE must always route to legacy in commit 1", mode)
-			}
+			require.True(t,
+				createTableChecks(tc.stmt, sessiondatapb.UseNewSchemaChangerUnsafeAlways, clusterversion.ClusterVersion{}),
+				"expected the trivial accepted surface to pass createTableChecks")
 		})
 	}
 }
 
-// TestCreateTableBodyPanicsNotImplemented documents the belt-and-suspenders
-// behavior: even if some future change accidentally lets a statement through
-// the checks function, the builder body itself still raises a
-// NotImplementedError so we fall back gracefully instead of emitting a
-// half-built descriptor.
-func TestCreateTableBodyPanicsNotImplemented(t *testing.T) {
-	defer func() {
-		r := recover()
-		require.NotNil(t, r, "CreateTable body must panic in commit 1")
-		err, ok := r.(error)
-		require.True(t, ok, "panic value must be an error, got %T", r)
-		require.True(t, scerrors.HasNotImplemented(err),
-			"panic must be a NotImplementedError, got %+v", err)
-	}()
-	CreateTable(nil /* b */, &tree.CreateTable{})
+// TestCreateTableChecksRejectsOutsideUnsafeAlways asserts that the trivial
+// accepted surface still falls back to legacy in every schema-changer mode
+// except UseNewSchemaChangerUnsafeAlways. The initial DSC CREATE TABLE
+// implementation is gated this way so that existing end-to-end tests that
+// depend on the legacy descriptor shape continue to pass.
+func TestCreateTableChecksRejectsOutsideUnsafeAlways(t *testing.T) {
+	stmt := &tree.CreateTable{
+		Defs: tree.TableDefs{&tree.ColumnTableDef{Name: tree.Name("a"), Type: types.Int}},
+	}
+	for _, mode := range []sessiondatapb.NewSchemaChangerMode{
+		sessiondatapb.UseNewSchemaChangerOff,
+		sessiondatapb.UseNewSchemaChangerOn,
+		sessiondatapb.UseNewSchemaChangerUnsafe,
+	} {
+		require.False(t,
+			createTableChecks(stmt, mode, clusterversion.ClusterVersion{}),
+			"mode=%v: createTableChecks must reject CREATE TABLE outside unsafe_always", mode)
+	}
+}
+
+// TestCreateTableChecksRejectsUnsupported covers each individual reject
+// branch in createTableChecks. Each case sets exactly one unsupported feature
+// on top of an otherwise-accepted statement.
+func TestCreateTableChecksRejectsUnsupported(t *testing.T) {
+	col := func(name string, opts ...func(*tree.ColumnTableDef)) *tree.ColumnTableDef {
+		c := &tree.ColumnTableDef{Name: tree.Name(name), Type: types.Int}
+		for _, opt := range opts {
+			opt(c)
+		}
+		return c
+	}
+	// Per-feature option functions, named after the feature each disables.
+	serial := func(c *tree.ColumnTableDef) { c.IsSerial = true }
+	generatedIdentity := func(c *tree.ColumnTableDef) { c.GeneratedIdentity.IsGeneratedAsIdentity = true }
+	hidden := func(c *tree.ColumnTableDef) { c.Hidden = true }
+	inlineUnique := func(c *tree.ColumnTableDef) { c.Unique.IsUnique = true }
+	defaultExpr := func(c *tree.ColumnTableDef) { c.DefaultExpr.Expr = tree.DNull }
+	onUpdate := func(c *tree.ColumnTableDef) { c.OnUpdateExpr.Expr = tree.DNull }
+	check := func(c *tree.ColumnTableDef) {
+		c.CheckExprs = []tree.ColumnTableDefCheckExpr{{Expr: tree.DNull}}
+	}
+	references := func(c *tree.ColumnTableDef) { c.References.Table = &tree.TableName{} }
+	computed := func(c *tree.ColumnTableDef) { c.Computed.Computed = true }
+	familyName := func(c *tree.ColumnTableDef) { c.Family.Name = "f1" }
+	familyCreate := func(c *tree.ColumnTableDef) { c.Family.Create = true }
+	primaryKey := func(c *tree.ColumnTableDef) { c.PrimaryKey.IsPrimaryKey = true }
+	shardedPrimaryKey := func(c *tree.ColumnTableDef) {
+		c.PrimaryKey.IsPrimaryKey = true
+		c.PrimaryKey.Sharded = true
+	}
+
+	baseDefs := func() tree.TableDefs {
+		return tree.TableDefs{col("a")}
+	}
+
+	tests := []struct {
+		name string
+		stmt *tree.CreateTable
+	}{
+		{
+			name: "TEMPORARY persistence",
+			stmt: &tree.CreateTable{Persistence: tree.PersistenceTemporary, Defs: baseDefs()},
+		},
+		{
+			name: "UNLOGGED persistence",
+			stmt: &tree.CreateTable{Persistence: tree.PersistenceUnlogged, Defs: baseDefs()},
+		},
+		{
+			name: "CREATE TABLE AS",
+			stmt: &tree.CreateTable{AsSource: &tree.Select{}, Defs: baseDefs()},
+		},
+		{
+			name: "PARTITION BY",
+			stmt: &tree.CreateTable{
+				PartitionByTable: &tree.PartitionByTable{},
+				Defs:             baseDefs(),
+			},
+		},
+		{
+			name: "LOCALITY",
+			stmt: &tree.CreateTable{Locality: &tree.Locality{}, Defs: baseDefs()},
+		},
+		{
+			name: "STORAGE PARAMS",
+			stmt: &tree.CreateTable{
+				StorageParams: tree.StorageParams{{Key: "fillfactor"}},
+				Defs:          baseDefs(),
+			},
+		},
+		{
+			name: "ON COMMIT clause",
+			stmt: &tree.CreateTable{
+				OnCommit: tree.CreateTableOnCommitPreserveRows,
+				Defs:     baseDefs(),
+			},
+		},
+		{
+			name: "non-column table def (FAMILY)",
+			stmt: &tree.CreateTable{
+				Defs: tree.TableDefs{col("a"), &tree.FamilyTableDef{}},
+			},
+		},
+		{
+			name: "SERIAL column",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", serial)}},
+		},
+		{
+			name: "generated identity column",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", generatedIdentity)}},
+		},
+		{
+			name: "hidden column",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", hidden)}},
+		},
+		{
+			name: "column with DEFAULT",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", defaultExpr)}},
+		},
+		{
+			name: "column with ON UPDATE",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", onUpdate)}},
+		},
+		{
+			name: "column with CHECK",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", check)}},
+		},
+		{
+			name: "column with FAMILY name",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", familyName)}},
+		},
+		{
+			name: "column with FAMILY create",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", familyCreate)}},
+		},
+		{
+			name: "column with inline UNIQUE",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", inlineUnique)}},
+		},
+		{
+			name: "column with REFERENCES",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", references)}},
+		},
+		{
+			name: "computed column",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", computed)}},
+		},
+		{
+			name: "sharded primary key",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", shardedPrimaryKey)}},
+		},
+		{
+			name: "multiple inline primary keys",
+			stmt: &tree.CreateTable{
+				Defs: tree.TableDefs{col("a", primaryKey), col("b", primaryKey)},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.False(t,
+				createTableChecks(tc.stmt, sessiondatapb.UseNewSchemaChangerUnsafeAlways, clusterversion.ClusterVersion{}),
+				"expected createTableChecks to reject %s", tc.name)
+		})
+	}
 }

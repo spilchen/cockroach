@@ -11,10 +11,6 @@ CREATE TYPE typ AS ENUM('a','b');
 ----
 
 unimplemented
-CREATE TABLE t (i INT PRIMARY KEY);
-----
-
-unimplemented
 CREATE TABLE t (i INT PRIMARY KEY, j INT NOT NULL, INDEX (i), UNIQUE INDEX (j));
 ----
 
