@@ -45,7 +45,7 @@ upsert descriptor #104
   -    - j
   +    - crdb_internal_column_2_name_placeholder
        - k
-       name: primary
+       defaultColumnId: 1
   ...
      id: 104
      modificationTime: {}
@@ -197,7 +197,7 @@ upsert descriptor #104
   -    - j
   +    - crdb_internal_column_2_name_placeholder
        - k
-       name: primary
+       defaultColumnId: 1
   ...
      id: 104
      modificationTime: {}
@@ -447,7 +447,6 @@ upsert descriptor #104
   -      constraintId: 3
   -      createdExplicitly: true
   +      constraintId: 1
-  +      createdAtNanos: "1640995200000000000"
          encodingType: 1
          foreignKey: {}
          geoConfig: {}
@@ -490,7 +489,6 @@ upsert descriptor #104
      parentId: 100
      primaryIndex:
   -    constraintId: 1
-  -    createdAtNanos: "1640995200000000000"
   +    constraintId: 2
   +    createdExplicitly: true
        encodingType: 1
@@ -548,7 +546,7 @@ upsert descriptor #104
        - i
   -    - crdb_internal_column_2_name_placeholder
        - k
-       name: primary
+       defaultColumnId: 1
   ...
      id: 104
      modificationTime: {}
@@ -567,7 +565,6 @@ upsert descriptor #104
   -  - direction: DROP
   -    index:
   -      constraintId: 1
-  -      createdAtNanos: "1640995200000000000"
   -      encodingType: 1
   -      foreignKey: {}
   -      geoConfig: {}

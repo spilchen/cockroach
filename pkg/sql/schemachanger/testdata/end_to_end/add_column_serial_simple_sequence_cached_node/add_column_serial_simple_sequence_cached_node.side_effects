@@ -114,9 +114,9 @@ upsert descriptor #106
        columnNames:
        - i
   +    - serial_id
-  +    defaultColumnId: 2
+       defaultColumnId: 1
        name: primary
-     formatVersion: 3
+  ...
      id: 106
      modificationTime: {}
   +  mutations:
@@ -344,9 +344,9 @@ upsert descriptor #106
        columnNames:
        - i
   +    - serial_id
-  +    defaultColumnId: 2
+       defaultColumnId: 1
        name: primary
-     formatVersion: 3
+  ...
      id: 106
      modificationTime: {}
   +  mutations:
@@ -686,7 +686,6 @@ upsert descriptor #106
   -      constraintId: 3
   -      createdExplicitly: true
   +      constraintId: 1
-  +      createdAtNanos: "1640995200000000000"
          encodingType: 1
          foreignKey: {}
          geoConfig: {}
@@ -732,7 +731,6 @@ upsert descriptor #106
      parentId: 104
      primaryIndex:
   -    constraintId: 1
-  -    createdAtNanos: "1640995200000000000"
   +    constraintId: 2
   +    createdExplicitly: true
        encodingType: 1
@@ -807,7 +805,6 @@ upsert descriptor #106
   -  - direction: DROP
   -    index:
   -      constraintId: 1
-  -      createdAtNanos: "1640995200000000000"
   -      encodingType: 1
   -      foreignKey: {}
   -      geoConfig: {}

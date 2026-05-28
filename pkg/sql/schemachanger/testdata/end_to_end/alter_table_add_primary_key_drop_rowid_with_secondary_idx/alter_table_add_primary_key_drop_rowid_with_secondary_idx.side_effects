@@ -1094,7 +1094,6 @@ upsert descriptor #104
   +  - direction: DROP
   +    index:
   +      constraintId: 1
-  +      createdAtNanos: "1640995200000000000"
   +      encodingType: 1
   +      foreignKey: {}
   +      geoConfig: {}
@@ -1228,7 +1227,6 @@ upsert descriptor #104
      parentId: 100
      primaryIndex:
   -    constraintId: 1
-  -    createdAtNanos: "1640995200000000000"
   +    constraintId: 8
   +    createdExplicitly: true
        encodingType: 1
@@ -1463,8 +1461,8 @@ upsert descriptor #104
        - b
   -    - rowid
   +    - crdb_internal_column_3_name_placeholder
+       defaultColumnId: 1
        name: primary
-     formatVersion: 3
   ...
        mutationId: 1
        state: WRITE_ONLY
@@ -1770,7 +1768,6 @@ upsert descriptor #104
   -  - direction: DROP
   -    index:
   -      constraintId: 1
-  -      createdAtNanos: "1640995200000000000"
   -      encodingType: 1
   +  - constraint:
   +      check:
@@ -1960,8 +1957,8 @@ upsert descriptor #104
        - a
        - b
   -    - crdb_internal_column_3_name_placeholder
+       defaultColumnId: 1
        name: primary
-     formatVersion: 3
   ...
        version: 4
      modificationTime: {}

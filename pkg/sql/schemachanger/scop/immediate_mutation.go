@@ -1125,6 +1125,25 @@ type CreateTableDescriptor struct {
 	TableID descpb.ID
 }
 
+// BumpNextMutationID ensures a freshly created table-like descriptor has
+// NextMutationID >= 1 before going public. The DSC's column-emission ops
+// enqueue mutations and then decrement NextMutationID back to its prior
+// value (because DSC-managed mutations live in declarative_schema_changer_state,
+// not the mutations slice). For a brand-new descriptor, ClusterVersion's
+// NextMutationID is 0, so the persisted descriptor lands with 0. Subsequent
+// LEGACY ALTERs on the descriptor read ClusterVersion().NextMutationID,
+// assign m.MutationID = 0 = InvalidMutationID, and the schema changer fails
+// to find the matching MutationJob. Bumping to 1 sidesteps this without
+// affecting any DSC-internal bookkeeping.
+//
+// Currently only emitted for new tables (see opgen_table.go); sequences
+// have the same latent issue but no test exercises it yet, and the fix
+// will be added in a follow-up.
+type BumpNextMutationID struct {
+	immediateMutationOp
+	DescriptorID descpb.ID
+}
+
 type SetSequenceOption struct {
 	immediateMutationOp
 	SequenceID descpb.ID

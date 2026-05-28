@@ -33,9 +33,9 @@ upsert descriptor #106
        columnNames:
        - i
   +    - j
-  +    defaultColumnId: 2
+       defaultColumnId: 1
        name: primary
-     formatVersion: 3
+  ...
      id: 106
      modificationTime: {}
   +  mutations:
@@ -115,9 +115,9 @@ upsert descriptor #106
        columnNames:
        - i
   +    - j
-  +    defaultColumnId: 2
+       defaultColumnId: 1
        name: primary
-     formatVersion: 3
+  ...
      id: 106
      modificationTime: {}
   +  mutations:

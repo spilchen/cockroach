@@ -23,6 +23,11 @@ func init() {
 				}),
 			),
 			to(scpb.Status_PUBLIC,
+				emit(func(this *scpb.Table) *scop.BumpNextMutationID {
+					return &scop.BumpNextMutationID{
+						DescriptorID: this.TableID,
+					}
+				}),
 				emit(func(this *scpb.Table) *scop.MarkDescriptorAsPublic {
 					return &scop.MarkDescriptorAsPublic{
 						DescriptorID: this.TableID,

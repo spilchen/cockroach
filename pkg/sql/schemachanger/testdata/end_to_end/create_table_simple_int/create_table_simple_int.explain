@@ -29,7 +29,7 @@ Schema change plan for CREATE TABLE ‹db›.‹public›.‹t1› (‹a› INT8
  │         │    ├── ABSENT → PUBLIC Owner:{DescID: 106 (t1+)}
  │         │    ├── ABSENT → PUBLIC UserPrivileges:{DescID: 106 (t1+), Name: "admin"}
  │         │    └── ABSENT → PUBLIC UserPrivileges:{DescID: 106 (t1+), Name: "root"}
- │         └── 30 Mutation operations
+ │         └── 31 Mutation operations
  │              ├── CreateTableDescriptor {"TableID":106}
  │              ├── SetNameInDescriptor {"DescriptorID":106,"Name":"t1"}
  │              ├── AddDescriptorName {"Namespace":{"DatabaseID":104,"DescriptorID":106,"Name":"t1","SchemaID":105}}
@@ -59,6 +59,7 @@ Schema change plan for CREATE TABLE ‹db›.‹public›.‹t1› (‹a› INT8
  │              ├── MakeMergedIndexWriteOnly {"IndexID":1,"TableID":106}
  │              ├── SetIndexName {"IndexID":1,"Name":"t1_pkey","TableID":106}
  │              ├── MakeValidatedPrimaryIndexPublic {"IndexID":1,"TableID":106}
+ │              ├── BumpNextMutationID {"DescriptorID":106}
  │              └── MarkDescriptorAsPublic {"DescriptorID":106}
  └── PreCommitPhase
       ├── Stage 1 of 2 in PreCommitPhase
@@ -107,7 +108,7 @@ Schema change plan for CREATE TABLE ‹db›.‹public›.‹t1› (‹a› INT8
            │    ├── ABSENT → PUBLIC Owner:{DescID: 106 (t1+)}
            │    ├── ABSENT → PUBLIC UserPrivileges:{DescID: 106 (t1+), Name: "admin"}
            │    └── ABSENT → PUBLIC UserPrivileges:{DescID: 106 (t1+), Name: "root"}
-           └── 31 Mutation operations
+           └── 32 Mutation operations
                 ├── CreateTableDescriptor {"TableID":106}
                 ├── SetNameInDescriptor {"DescriptorID":106,"Name":"t1"}
                 ├── AddDescriptorName {"Namespace":{"DatabaseID":104,"DescriptorID":106,"Name":"t1","SchemaID":105}}
@@ -138,4 +139,5 @@ Schema change plan for CREATE TABLE ‹db›.‹public›.‹t1› (‹a› INT8
                 ├── MakeMergedIndexWriteOnly {"IndexID":1,"TableID":106}
                 ├── SetIndexName {"IndexID":1,"Name":"t1_pkey","TableID":106}
                 ├── MakeValidatedPrimaryIndexPublic {"IndexID":1,"TableID":106}
+                ├── BumpNextMutationID {"DescriptorID":106}
                 └── MarkDescriptorAsPublic {"DescriptorID":106}

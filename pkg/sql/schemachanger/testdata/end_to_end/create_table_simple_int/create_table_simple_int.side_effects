@@ -13,7 +13,7 @@ begin transaction #1
 # begin StatementPhase
 checking for feature: CREATE TABLE
 increment telemetry for sql.schema.create_table
-## StatementPhase stage 1 of 1 with 30 MutationType ops
+## StatementPhase stage 1 of 1 with 31 MutationType ops
 add object namespace entry {104 105 t1} -> 106
 upsert descriptor #106
   -
@@ -54,6 +54,7 @@ upsert descriptor #106
   +  nextConstraintId: 2
   +  nextFamilyId: 1
   +  nextIndexId: 2
+  +  nextMutationId: 1
   +  parentId: 104
   +  primaryIndex:
   +    constraintId: 1
@@ -97,7 +98,7 @@ upsert descriptor #106
 ## PreCommitPhase stage 1 of 2 with 1 MutationType op
 undo all catalog changes within txn #1
 persist all catalog changes to storage
-## PreCommitPhase stage 2 of 2 with 31 MutationType ops
+## PreCommitPhase stage 2 of 2 with 32 MutationType ops
 add object namespace entry {104 105 t1} -> 106
 upsert descriptor #106
   -
@@ -138,6 +139,7 @@ upsert descriptor #106
   +  nextConstraintId: 2
   +  nextFamilyId: 1
   +  nextIndexId: 2
+  +  nextMutationId: 1
   +  parentId: 104
   +  primaryIndex:
   +    constraintId: 1

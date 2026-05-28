@@ -49,7 +49,7 @@ upsert descriptor #106
        - i
        - k
   +    - j
-       defaultColumnId: 2
+       defaultColumnId: 1
        name: primary
   ...
      id: 106
@@ -216,7 +216,7 @@ upsert descriptor #106
        - i
        - k
   +    - j
-       defaultColumnId: 2
+       defaultColumnId: 1
        name: primary
   ...
      id: 106
@@ -560,7 +560,6 @@ upsert descriptor #106
   -      constraintId: 4
   -      createdExplicitly: true
   +      constraintId: 1
-  +      createdAtNanos: "1640995200000000000"
          encodingType: 1
          foreignKey: {}
          geoConfig: {}
@@ -608,7 +607,6 @@ upsert descriptor #106
      parentId: 104
      primaryIndex:
   -    constraintId: 1
-  -    createdAtNanos: "1640995200000000000"
   +    constraintId: 3
   +    createdExplicitly: true
        encodingType: 1
@@ -696,7 +694,6 @@ upsert descriptor #106
   -  - direction: DROP
   -    index:
   -      constraintId: 1
-  -      createdAtNanos: "1640995200000000000"
   -      encodingType: 1
   -      foreignKey: {}
   -      geoConfig: {}

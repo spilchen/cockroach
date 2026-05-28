@@ -60,29 +60,30 @@ func TestCreateTableChecksAcceptsTrivialSurface(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			require.True(t,
-				createTableChecks(tc.stmt, sessiondatapb.UseNewSchemaChangerUnsafeAlways, clusterversion.ClusterVersion{}),
+				createTableChecks(tc.stmt, sessiondatapb.UseNewSchemaChangerOn, clusterversion.ClusterVersion{}),
 				"expected the trivial accepted surface to pass createTableChecks")
 		})
 	}
 }
 
-// TestCreateTableChecksRejectsOutsideUnsafeAlways asserts that the trivial
-// accepted surface still falls back to legacy in every schema-changer mode
-// except UseNewSchemaChangerUnsafeAlways. The initial DSC CREATE TABLE
-// implementation is gated this way so that existing end-to-end tests that
-// depend on the legacy descriptor shape continue to pass.
-func TestCreateTableChecksRejectsOutsideUnsafeAlways(t *testing.T) {
+// TestCreateTableChecksAcceptsUnderAllDSCModes locks in the gate flip: the
+// trivial accepted surface passes createTableChecks under every DSC mode the
+// dispatcher delegates to (UseNewSchemaChangerOff is short-circuited
+// upstream, so it is not exercised here).
+func TestCreateTableChecksAcceptsUnderAllDSCModes(t *testing.T) {
 	stmt := &tree.CreateTable{
 		Defs: tree.TableDefs{&tree.ColumnTableDef{Name: tree.Name("a"), Type: types.Int}},
 	}
 	for _, mode := range []sessiondatapb.NewSchemaChangerMode{
-		sessiondatapb.UseNewSchemaChangerOff,
 		sessiondatapb.UseNewSchemaChangerOn,
 		sessiondatapb.UseNewSchemaChangerUnsafe,
+		sessiondatapb.UseNewSchemaChangerUnsafeAlways,
 	} {
-		require.False(t,
-			createTableChecks(stmt, mode, clusterversion.ClusterVersion{}),
-			"mode=%v: createTableChecks must reject CREATE TABLE outside unsafe_always", mode)
+		t.Run(mode.String(), func(t *testing.T) {
+			require.True(t,
+				createTableChecks(stmt, mode, clusterversion.ClusterVersion{}),
+				"createTableChecks should accept the trivial surface under mode=%v", mode)
+		})
 	}
 }
 
@@ -115,6 +116,10 @@ func TestCreateTableChecksRejectsUnsupported(t *testing.T) {
 	shardedPrimaryKey := func(c *tree.ColumnTableDef) {
 		c.PrimaryKey.IsPrimaryKey = true
 		c.PrimaryKey.Sharded = true
+	}
+	primaryKeyWithStorageParams := func(c *tree.ColumnTableDef) {
+		c.PrimaryKey.IsPrimaryKey = true
+		c.PrimaryKey.StorageParams = tree.StorageParams{{Key: "s2_max_level"}}
 	}
 
 	baseDefs := func() tree.TableDefs {
@@ -217,6 +222,10 @@ func TestCreateTableChecksRejectsUnsupported(t *testing.T) {
 			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", shardedPrimaryKey)}},
 		},
 		{
+			name: "primary key with inline storage params",
+			stmt: &tree.CreateTable{Defs: tree.TableDefs{col("a", primaryKeyWithStorageParams)}},
+		},
+		{
 			name: "multiple inline primary keys",
 			stmt: &tree.CreateTable{
 				Defs: tree.TableDefs{col("a", primaryKey), col("b", primaryKey)},
@@ -227,7 +236,7 @@ func TestCreateTableChecksRejectsUnsupported(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			require.False(t,
-				createTableChecks(tc.stmt, sessiondatapb.UseNewSchemaChangerUnsafeAlways, clusterversion.ClusterVersion{}),
+				createTableChecks(tc.stmt, sessiondatapb.UseNewSchemaChangerOn, clusterversion.ClusterVersion{}),
 				"expected createTableChecks to reject %s", tc.name)
 		})
 	}

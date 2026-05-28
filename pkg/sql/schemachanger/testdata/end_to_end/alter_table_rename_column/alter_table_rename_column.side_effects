@@ -26,7 +26,7 @@ upsert descriptor #104
        - i
   -    - j
   +    - k
-       defaultColumnId: 2
+       defaultColumnId: 1
        name: primary
   ...
        - 2
@@ -93,7 +93,7 @@ upsert descriptor #104
        - i
   -    - j
   +    - k
-       defaultColumnId: 2
+       defaultColumnId: 1
        name: primary
   ...
        - 2

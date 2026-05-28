@@ -63,6 +63,24 @@ func (i *immediateVisitor) CreateTableDescriptor(
 	return nil
 }
 
+// BumpNextMutationID raises NextMutationID to at least 1 on a freshly
+// created table-like descriptor before it transitions to PUBLIC. See the
+// op definition in scop/immediate_mutation.go for the full rationale: this
+// preserves compatibility with subsequent LEGACY ALTERs, which derive a
+// new mutation's MutationID from ClusterVersion().NextMutationID.
+func (i *immediateVisitor) BumpNextMutationID(
+	ctx context.Context, op scop.BumpNextMutationID,
+) error {
+	tbl, err := i.checkOutTable(ctx, op.DescriptorID)
+	if err != nil {
+		return err
+	}
+	if tbl.NextMutationID < 1 {
+		tbl.NextMutationID = 1
+	}
+	return nil
+}
+
 func (i *immediateVisitor) AddTableZoneConfig(
 	ctx context.Context, op scop.AddTableZoneConfig,
 ) error {

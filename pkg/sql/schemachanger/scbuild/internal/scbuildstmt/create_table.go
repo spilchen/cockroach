@@ -29,25 +29,18 @@ import (
 // to panic NotImplementedError, which is recovered upstream and routes the
 // statement back to the legacy schema changer.
 //
-// The accepted surface for the initial implementation is intentionally
-// minimal: plain columns with NULL/NOT NULL and at most one column flagged
-// inline PRIMARY KEY. Everything else falls back. Future PRs will widen the
-// surface one feature at a time.
-//
-// The DSC path is also gated on the `unsafe_always` schema-changer mode so
-// that the default `on` setting continues to use the legacy path for now.
-// This avoids broad churn in existing end-to-end test fixtures that depend on
-// the exact descriptor shape the legacy CREATE TABLE produces (mutation IDs,
-// default-column IDs, primary-index naming, schema_locked). A follow-up PR
-// will reconcile those differences and flip the gate.
+// The `off` schema-changer mode is short-circuited upstream in the
+// dispatcher, so this function does not need to inspect mode for that case.
+// Under `on`, `unsafe`, and `unsafe_always` the dispatcher delegates to this
+// function, which accepts an intentionally minimal surface for the initial
+// implementation: plain columns with NULL/NOT NULL and at most one column
+// flagged inline PRIMARY KEY. Everything else falls back. Future PRs will
+// widen the surface one feature at a time.
 func createTableChecks(
 	n *tree.CreateTable,
 	mode sessiondatapb.NewSchemaChangerMode,
 	activeVersion clusterversion.ClusterVersion,
 ) bool {
-	if mode != sessiondatapb.UseNewSchemaChangerUnsafeAlways {
-		return false
-	}
 	if n.Persistence != tree.PersistencePermanent {
 		return false
 	}
@@ -123,6 +116,9 @@ func isSupportedColumnTableDef(col *tree.ColumnTableDef) bool {
 		return false
 	}
 	if col.PrimaryKey.Sharded {
+		return false
+	}
+	if len(col.PrimaryKey.StorageParams) > 0 {
 		return false
 	}
 	return true
